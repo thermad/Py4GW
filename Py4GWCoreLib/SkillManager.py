@@ -134,14 +134,14 @@ class SkillManager:
             if self.cache_data.data.in_aggro:
                 return False
 
-            return self.cache_data.combat_handler.HandleCombat(ooc= True)
+            return self.cache_data.combat_handler.HandleCombat(ooc= True, cached_data= self.cache_data)
 
         def _HandleCombat(self):
             if not self.cache_data.data.is_combat_enabled:  # halt operation if combat is disabled
                 return False
             if not self.cache_data.data.in_aggro:
                 return False
-            return self.cache_data.combat_handler.HandleCombat(ooc= False)
+            return self.cache_data.combat_handler.HandleCombat(ooc= False, cached_data= self.cache_data)
 
         def HandleCombat(self):
             self.cache_data.Update()

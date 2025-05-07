@@ -78,6 +78,7 @@ class GameData:
         self.is_combat_enabled = True
         self.is_skill_enabled = [True for _ in range(NUMBER_OF_SKILLS)]
         self.RAW_AGENT_ARRAY = None
+
         
         
     def reset(self):
@@ -172,7 +173,8 @@ class CacheData:
             self.reset()
             self.ui_state_data = UIStateData()
             
-            self._initialized = True 
+            self._initialized = True
+            self.behavior_lock = False
         
     def reset(self):
         self.data.reset()   

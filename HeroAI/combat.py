@@ -5,6 +5,8 @@ from .targeting import *
 from .avoidance_system import AvoidanceSystem
 from .priority_targets import PriorityTargets
 from typing import Optional
+import time
+import functools
 
 MAX_SKILLS = 8
 custom_skill_data_handler = CustomSkillClass()
@@ -990,43 +992,79 @@ class CombatClass:
         ActionQueueManager().AddAction("ACTION", Player.Interact, target_id)
         return True
                                         
-    def HandleCombat(self,ooc=False):
+    def HandleCombat(self, cached_data, ooc=False):
         """
-        tries to Execute the next skill in the skill order.
+        Evaluates each skill and returns a list of eval-func tuples containing the result for each
         """
-       
-        slot = self.skill_pointer
-        skill_id = self.skills[slot].skill_id
-        
-        is_skill_ready = self.IsSkillReady(slot) 
-        if not is_skill_ready:
-            self.AdvanceSkillPointer()
-            return False
-         
-        is_read_to_cast, target_agent_id = self.IsReadyToCast(slot)
-        if not is_read_to_cast:
-            self.AdvanceSkillPointer()
-            return False
-        
-        is_ooc_skill = self.IsOOCSkill(slot)
-        if ooc and not is_ooc_skill:
-            self.AdvanceSkillPointer()
-            return False
 
-        if target_agent_id == 0:
-            self.AdvanceSkillPointer()
-            return False
+        priorities = {
+            SkillNature.Interrupt : 1.0 ,
+            SkillNature.Enchantment_Removal : 0.98,
+            SkillNature.Healing : 0.96,
+            SkillNature.Hex_Removal : 0.94,
+            SkillNature.Condi_Cleanse : 0.92,
+            SkillNature.EnergyBuff : 0.9,
+            SkillNature.Resurrection : 0.88,
+            SkillNature.Buff : 0.86
+        }
+        default_priority = 0.8
 
-        if not Agent.IsLiving(target_agent_id):
-            return False
-            
-        self.in_casting_routine = True
-        self.aftercast = Skill.Data.GetActivation(skill_id) * 1000
-        self.aftercast += Skill.Data.GetAftercast(skill_id) * 750
-        #self.aftercast += 150 #manually setting a 50ms delay to test issues with pinghandler
-        #self.aftercast += self.ping_handler.GetCurrentPing()
+        left_right_bias = 0.99
+        return_tuple_list = []
+        for slot in range(0, 7):
+            skill_id = self.skills[slot].skill_id
 
-        self.aftercast_timer.Reset()
-        ActionQueueManager().AddAction("ACTION", SkillBar.UseSkill, self.skill_order[self.skill_pointer]+1, target_agent_id)
-        self.AdvanceSkillPointer()
-        return True
+            is_skill_ready = self.IsSkillReady(slot)
+            if not is_skill_ready:
+                self.AdvanceSkillPointer()
+                return_tuple_list.extend([(0, None)])
+                continue
+
+            is_read_to_cast, target_agent_id = self.IsReadyToCast(slot)
+            if not is_read_to_cast:
+                self.AdvanceSkillPointer()
+                return_tuple_list.extend([(0, None)])
+                continue
+
+            is_ooc_skill = self.IsOOCSkill(slot)
+            if ooc and not is_ooc_skill:
+                self.AdvanceSkillPointer()
+                return_tuple_list.extend([(0, None)])
+                continue
+
+            if target_agent_id == 0:
+                self.AdvanceSkillPointer()
+                return_tuple_list.extend([(0, None)])
+                continue
+
+            if not Agent.IsLiving(target_agent_id):
+                return_tuple_list.extend([(0, None)])
+                continue
+
+            eval = 1
+            eval *= left_right_bias ** slot
+
+            skill_nature = self.skills[slot].custom_skill_data.Nature
+            if skill_nature in priorities:
+                eval *= priorities[skill_nature]
+            else:
+                eval *= default_priority
+            return_tuple_list.extend([(eval, functools.partial(self.Casting_Sequential, slot + 1, target_agent_id, skill_id, cached_data))])
+        return return_tuple_list
+
+    def Casting_Sequential(self, slot, target_agent_id, skill_id, cached_data):
+        import HeroAI.cache_data as cache_data
+        print(f"Trying to use skill {slot} on {target_agent_id}")
+        activation = Skill.Data.GetActivation(skill_id)
+        aftercast = Skill.Data.GetAftercast(skill_id)
+        ActionQueueManager().AddAction("ACTION", SkillBar.UseSkill, slot,
+                                       target_agent_id)
+        wait = (activation + aftercast)/2
+        max_wait = (activation + aftercast) * 2
+        wait = wait if wait > .05 else .05
+        start = time.time()
+        time.sleep(wait)
+        while cached_data.data.player_is_casting and time.time() - start < max_wait:
+            time.sleep(0.025)
+        print("Clearing behavior lock")
+        cached_data.behavior_lock = False

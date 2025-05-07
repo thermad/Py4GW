@@ -13,88 +13,81 @@ from HeroAI.targeting import *
 from HeroAI.combat import *
 from HeroAI.cache_data import *
 from HeroAI.enhanced_priority_targets import EnhancedPriorityTargets
+import functools
+import time
 
 MODULE_NAME = "HeroAI"
 
 cached_data = CacheData()
 enhanced_priority_targets = EnhancedPriorityTargets()
 
-def HandleOutOfCombat(cached_data:CacheData):
-    if not cached_data.data.is_combat_enabled:  # halt operation if combat is disabled
-        return False
-    if cached_data.data.in_aggro:
-        return False
-
-    return cached_data.combat_handler.HandleCombat(ooc= True)
-
-
-
 def HandleCombat(cached_data:CacheData):
     if not cached_data.data.is_combat_enabled:  # halt operation if combat is disabled
-        return False
+        return [(0, None)]
     if not cached_data.data.in_aggro:
-        return False
+        # TODO Should we make this check a larger area (maybe 1248?) for foes in combat state too?
+        return cached_data.combat_handler.HandleCombat(ooc=True, cached_data= cached_data)
 
-    return cached_data.combat_handler.HandleCombat(ooc= False)
+    return cached_data.combat_handler.HandleCombat(ooc= False, cached_data= cached_data)
 
 
 thread_manager = MultiThreading(log_actions=True)
-in_looting_routine = False
 looting_aftercast = Timer()
 looting_aftercast.Start()
-
+in_looting_routine = False
+behavior_lockout_timer = time.time()
+behavior_lockout_max = 10
 
 def SequentialLootingRoutine():
-    global in_looting_routine, looting_aftercast
-    
-    filtered_loot = LootConfig().GetfilteredLootArray(Range.Earshot.value, multibox_loot= True) # Changed for LootManager - aC
+    global looting_aftercast
+
+    filtered_loot = LootConfig().GetfilteredLootArray(Range.Earshot.value,
+                                                      multibox_loot=True)  # Changed for LootManager - aC
     # Loot filtered items
     ActionQueueManager().ResetQueue("ACTION")
-    Routines.Sequential.Items.LootItems(filtered_loot,log = False)
+    Routines.Sequential.Items.LootItems(filtered_loot, log=False)
+    #TODO this routine should escape if enemies are in range and refresh the looting list to avoid crashes
     looting_aftercast.Reset()
-    in_looting_routine = False
+    cached_data.behavior_lock = False
 
 
-
-def Loot(cached_data:CacheData):
+def Loot(cached_data: CacheData):
     global in_looting_routine, looting_aftercast
     if not cached_data.data.is_looting_enabled:  # halt operation if looting is disabled
-        return False
-    
+        return [(0, None)]
+
     if cached_data.data.in_aggro:
-        return False
-    
+        return [(0, None)]
+
     if in_looting_routine:
-        return True
-    
+        return [(0, None)]
+
     if not looting_aftercast.HasElapsed(3000):
-        return False
-    
-    loot_array = LootConfig().GetfilteredLootArray(Range.Earshot.value, multibox_loot= True) # Changed for LootManager - aC
+        return [(0, None)]
+
+    loot_array = LootConfig().GetfilteredLootArray(Range.Earshot.value,
+                                                   multibox_loot=True)  # Changed for LootManager - aC
     if len(loot_array) == 0:
-        return False
+        return [(0, None)]
 
-    in_looting_routine = True
-    thread_manager.stop_thread("SequentialLootingRoutine")
-    thread_manager.add_thread("SequentialLootingRoutine", SequentialLootingRoutine)
+    return [(0.2, SequentialLootingRoutine)]
 
 
-
-def Follow(cached_data:CacheData):
+def Follow(cached_data: CacheData):
     global MELEE_RANGE_VALUE, RANGED_RANGE_VALUE, FOLLOW_DISTANCE_ON_COMBAT
 
     leader_id = cached_data.data.party_leader_id
     if leader_id == cached_data.data.player_agent_id:  # halt operation if player is leader
-        return False
+        return [(0, None)]
     party_number = cached_data.data.own_party_number
     if not cached_data.data.is_following_enabled:  # halt operation if following is disabled
-        return False
+        return [(0, None)]
 
     follow_x = 0.0
     follow_y = 0.0
     follow_angle = -1.0
 
-    if cached_data.HeroAI_vars.all_player_struct[party_number].IsFlagged: #my own flag
+    if cached_data.HeroAI_vars.all_player_struct[party_number].IsFlagged:  # my own flag
         follow_x = cached_data.HeroAI_vars.all_player_struct[party_number].FlagPosX
         follow_y = cached_data.HeroAI_vars.all_player_struct[party_number].FlagPosY
         follow_angle = cached_data.HeroAI_vars.all_player_struct[party_number].FollowAngle
@@ -125,21 +118,28 @@ def Follow(cached_data:CacheData):
         angle_changed_pass = True
 
     if DistanceFromWaypoint(follow_x, follow_y) <= follow_distance and not angle_changed_pass:
-        return False
-    
+        return [(0, None)]
+
     hero_grid_pos = party_number + cached_data.data.party_hero_count + cached_data.data.party_henchman_count
     angle_on_hero_grid = follow_angle + Utils.DegToRad(hero_formation[hero_grid_pos])
 
-    #if IsPointValid(follow_x, follow_y):
+    # if IsPointValid(follow_x, follow_y):
     #   return False
 
     xx = Range.Touch.value * math.cos(angle_on_hero_grid) + follow_x
     yy = Range.Touch.value * math.sin(angle_on_hero_grid) + follow_y
 
     cached_data.data.angle_changed = False
-    ActionQueueManager().ResetQueue("ACTION")
-    ActionQueueManager().AddAction("ACTION", Player.Move, xx, yy)
-    return True
+    # I chose a short timeout parameter here so that movement choices made are easily canceled, this helps when running over overlapping terrain
+    return [(follow_distance / DistanceFromWaypoint(follow_x, follow_y), functools.partial(MoveWait, xx, yy, 500, 50))]
+
+
+def MoveWait(xx, yy, timeout=1500, distance=100):
+    start_time = time.time()
+    while DistanceFromWaypoint(xx, yy) > distance and time.time() - start_time < timeout:
+        ActionQueueManager().AddAction("ACTION", Player.Move, xx, yy)
+        time.sleep(250)
+    cached_data.behavior_lock = False
     
 
 
@@ -290,92 +290,104 @@ def DrawEmbeddedWindow(cached_data:CacheData):
     ImGui.PopTransparentWindow()    
     DrawFramedContent(cached_data,content_frame_id)
 
-def UpdateStatus(cached_data:CacheData):
-    global in_looting_routine
-    
-    RegisterCandidate(cached_data) 
-    UpdateCandidates(cached_data)           
-    ProcessCandidateCommands(cached_data)   
-    RegisterPlayer(cached_data)   
-    RegisterHeroes(cached_data)
-    UpdatePlayers(cached_data)      
-    UpdateGameOptions(cached_data)
-    enhanced_priority_targets.update()
-   
-    
-    cached_data.UpdateGameOptions()
 
+def Draw(cached_data: CacheData):
     DrawEmbeddedWindow(cached_data)
     if cached_data.ui_state_data.show_classic_controls:
-        DrawMainWindow(cached_data)   
+        DrawMainWindow(cached_data)
         DrawControlPanelWindow(cached_data)
         DrawMultiboxTools(cached_data)
-   
     if not cached_data.data.is_explorable:  # halt operation if not in explorable area
         return
-    
     if cached_data.data.is_in_cinematic:  # halt operation during cinematic
         return
-
-
     DrawFlags(cached_data)
-    
     draw_Targeting_floating_buttons(cached_data)
-    
+
+
+def UpdateStatus(cached_data: CacheData):
+    global in_looting_routine
+
+    RegisterCandidate(cached_data)
+    UpdateCandidates(cached_data)
+    ProcessCandidateCommands(cached_data)
+    RegisterPlayer(cached_data)
+    RegisterHeroes(cached_data)
+    UpdatePlayers(cached_data)
+    UpdateGameOptions(cached_data)
+
+    cached_data.UpdateGameOptions()
+
+
+def CollectBehaviors(cached_data: CacheData):
+    behaviors = []
+    #extend is similar to += as an in-place method of list concatenation
+    #Every behavior call returns a list of tuples.
+    #The first element of each tuple is the evaluation, and the second is the function object
+    behaviors.extend(Loot(cached_data))
+    behaviors.extend(Follow(cached_data))
+    behaviors.extend(HandleCombat(cached_data))
+    # TODO add auto attacking back, evaluate each skill and return a plan for casting them
+    return behaviors
+
+
+def RunBehaviors(cached_data: CacheData):
+    global behavior_lockout_timer, behavior_lockout_max, thread_manager
+    if not cached_data.data.is_explorable:  # halt operation if not in explorable area
+        return
+
+    if cached_data.data.is_in_cinematic:  # halt operation during cinematic
+        return
+    if cached_data.behavior_lock:
+        if time.time() - behavior_lockout_timer > behavior_lockout_max:
+            cached_data.behavior_lock = False
+            thread_manager.stop_all_threads()
+        return
     if (
         not cached_data.data.player_is_alive or
-        DistanceFromLeader(cached_data) >= Range.SafeCompass.value #or
-        #cached_data.data.player_is_knocked_down or 
-        #cached_data.combat_handler.InCastingRoutine() or 
-        #cached_data.data.player_is_casting
+        DistanceFromLeader(cached_data) >= Range.SafeCompass.value  # or
+        # cached_data.data.player_is_knocked_down or
+        # cached_data.combat_handler.InCastingRoutine() or
+        # cached_data.data.player_is_casting
     ):
         return
-    
+
     if in_looting_routine:
         return
-     
+
     cached_data.UdpateCombat()
-    if HandleOutOfCombat(cached_data):
-        return
-    
-    if cached_data.data.player_is_moving:
-        return
-    
-    if Loot(cached_data):
-       return
-   
-    if Follow(cached_data):
-        return
+    behaviors = CollectBehaviors(cached_data)
+    behaviors.sort(key=lambda b: b[0], reverse=True)
+    print(behaviors)
+    if behaviors[0][0] > 0:
+        cached_data.behavior_lock = True
+        behavior_lockout_timer = time.time()
+        #TODO Maximum behavior lockout time should be created and checked against in the main thread to unlock accounts after errors
+        thread_manager.add_thread("HeroAIBehaviorThread", behaviors[0][1])
+        thread_manager.start_watchdog("HeroAIBehaviorThread")
 
-    if HandleCombat(cached_data):
-        return
-    
-    #if were here we are not doing anything
-    #auto attack
-    if cached_data.auto_attack_timer.HasElapsed(cached_data.auto_attack_time):
-        if cached_data.data.is_combat_enabled and not cached_data.data.player_is_attacking:
-            cached_data.combat_handler.ChooseTarget()
-        cached_data.auto_attack_timer.Reset()
-    
 
-   
 def configure():
     pass
 
 
 def main():
-    global cached_data
+    global cached_data, thread_manager
     try:
         if not Routines.Checks.Map.MapValid():
             ActionQueueManager().ResetQueue("ACTION")
             return
-        
+
         cached_data.Update()
         if cached_data.data.is_map_ready and cached_data.data.is_party_loaded:
             UpdateStatus(cached_data)
+            Draw(cached_data)
+            RunBehaviors(cached_data)
             ActionQueueManager().ProcessQueue("ACTION")
-            
-    
+            thread_manager.update_all_keepalives()
+
+
+
     except ImportError as e:
         Py4GW.Console.Log(MODULE_NAME, f"ImportError encountered: {str(e)}", Py4GW.Console.MessageType.Error)
         Py4GW.Console.Log(MODULE_NAME, f"Stack trace: {traceback.format_exc()}", Py4GW.Console.MessageType.Error)
