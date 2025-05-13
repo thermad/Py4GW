@@ -1054,7 +1054,6 @@ class CombatClass:
 
     def Casting_Sequential(self, slot, target_agent_id, skill_id, cached_data):
         import HeroAI.cache_data as cache_data
-        print(f"Trying to use skill {slot} on {target_agent_id}")
         activation = Skill.Data.GetActivation(skill_id)
         aftercast = Skill.Data.GetAftercast(skill_id)
         ActionQueueManager().AddAction("ACTION", SkillBar.UseSkill, slot,
@@ -1066,5 +1065,3 @@ class CombatClass:
         time.sleep(wait)
         while cached_data.data.player_is_casting and time.time() - start < max_wait:
             time.sleep(0.025)
-        print("Clearing behavior lock")
-        cached_data.behavior_lock = False

@@ -15,6 +15,7 @@ from HeroAI.cache_data import *
 from HeroAI.enhanced_priority_targets import EnhancedPriorityTargets
 import functools
 import time
+import threading
 
 MODULE_NAME = "HeroAI"
 
@@ -31,7 +32,6 @@ def HandleCombat(cached_data:CacheData):
     return cached_data.combat_handler.HandleCombat(ooc= False, cached_data= cached_data)
 
 
-thread_manager = MultiThreading(log_actions=True)
 looting_aftercast = Timer()
 looting_aftercast.Start()
 in_looting_routine = False
@@ -48,7 +48,6 @@ def SequentialLootingRoutine():
     Routines.Sequential.Items.LootItems(filtered_loot, log=False)
     #TODO this routine should escape if enemies are in range and refresh the looting list to avoid crashes
     looting_aftercast.Reset()
-    cached_data.behavior_lock = False
 
 
 def Loot(cached_data: CacheData):
@@ -139,7 +138,6 @@ def MoveWait(xx, yy, timeout=1500, distance=100):
     while DistanceFromWaypoint(xx, yy) > distance and time.time() - start_time < timeout:
         ActionQueueManager().AddAction("ACTION", Player.Move, xx, yy)
         time.sleep(250)
-    cached_data.behavior_lock = False
     
 
 
@@ -331,8 +329,16 @@ def CollectBehaviors(cached_data: CacheData):
     return behaviors
 
 
+def RunThread(func_obj, cached_data:CacheData):
+    t = threading.Thread(target=func_obj)
+    t.start()
+    t.join()
+    print("clearing behavior lock normally")
+    cached_data.behavior_lock = False
+
+
 def RunBehaviors(cached_data: CacheData):
-    global behavior_lockout_timer, behavior_lockout_max, thread_manager
+    global behavior_lockout_timer, behavior_lockout_max
     if not cached_data.data.is_explorable:  # halt operation if not in explorable area
         return
 
@@ -341,7 +347,6 @@ def RunBehaviors(cached_data: CacheData):
     if cached_data.behavior_lock:
         if time.time() - behavior_lockout_timer > behavior_lockout_max:
             cached_data.behavior_lock = False
-            thread_manager.stop_all_threads()
         return
     if (
         not cached_data.data.player_is_alive or
@@ -358,13 +363,13 @@ def RunBehaviors(cached_data: CacheData):
     cached_data.UdpateCombat()
     behaviors = CollectBehaviors(cached_data)
     behaviors.sort(key=lambda b: b[0], reverse=True)
-    print(behaviors)
     if behaviors[0][0] > 0:
         cached_data.behavior_lock = True
         behavior_lockout_timer = time.time()
         #TODO Maximum behavior lockout time should be created and checked against in the main thread to unlock accounts after errors
-        thread_manager.add_thread("HeroAIBehaviorThread", behaviors[0][1])
-        thread_manager.start_watchdog("HeroAIBehaviorThread")
+        # TODO add_thread("HeroAIBehaviorThread", behaviors[0][1])
+        t = threading.Thread(target = RunThread,args=(behaviors[0][1], cached_data))
+        t.run()
 
 
 def configure():
@@ -372,7 +377,7 @@ def configure():
 
 
 def main():
-    global cached_data, thread_manager
+    global cached_data
     try:
         if not Routines.Checks.Map.MapValid():
             ActionQueueManager().ResetQueue("ACTION")
@@ -384,7 +389,6 @@ def main():
             Draw(cached_data)
             RunBehaviors(cached_data)
             ActionQueueManager().ProcessQueue("ACTION")
-            thread_manager.update_all_keepalives()
 
 
 
