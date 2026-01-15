@@ -528,6 +528,13 @@ account_widget_defaults = {
         "icon": "ICON_BRAIN",
         "quickdock": "True",
     },
+    "Central Commander": {
+        "enabled": "False",
+        "category": "Bots",
+        "subcategory": "Multiboxing",
+        "icon": "ICON_BRAIN",
+        "quickdock": "True",
+    },
     "TeamInventoryViewer": {
         "enabled": "False",
         "category": "Gameplay",
