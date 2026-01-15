@@ -21,7 +21,7 @@ project_root = os.path.abspath(os.path.join(script_directory, os.pardir))
 first_run = True
 
 BASE_DIR = os.path.join(project_root, "Widgets/Config")
-INI_WIDGET_WINDOW_PATH = os.path.join(BASE_DIR, "your_ini_file_name_here.ini")
+INI_WIDGET_WINDOW_PATH = os.path.join(BASE_DIR, "central_commander.ini")
 os.makedirs(BASE_DIR, exist_ok=True)
 
 cached_data = CacheData()
@@ -32,7 +32,7 @@ save_window_timer = Timer()
 save_window_timer.Start()
 
 # String consts
-MODULE_NAME = "<new_module_name_goes_here>"  # Change this Module name
+MODULE_NAME = "Central Commander"  # Change this Module name
 COLLAPSED = "collapsed"
 X_POS = "x"
 Y_POS = "y"
