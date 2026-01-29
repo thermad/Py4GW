@@ -1,5 +1,4 @@
-import PyPlayer
-from Py4GW import Game
+import PyPointers
 from ctypes import Structure, c_uint32, c_uint8, c_wchar, POINTER, cast, c_int32
 from ..internals.helpers import read_wstr, encoded_wstr_to_str
 from ..internals.gw_array import GW_Array, GW_Array_Value_View
@@ -98,7 +97,7 @@ class CharContextStruct(Structure):
         ("h0034_array", GW_Array),          # +0x0034 Array<void*>
         ("h0044_array", GW_Array),          # +0x0044 Array<void*>
         ("h0054", c_uint32 * 4),            # +0x0054
-        ("player_uuid", c_uint32 * 4),      # +0x0064 uuid
+        ("player_uuid_ptr", c_uint32 * 4),      # +0x0064 uuid
         ("player_name_enc", c_wchar * 0x14),    # +0x0074 wchar_t[20]
         ("h009C", c_uint32 * 20),           # +0x009C
         ("h00EC_array", GW_Array),          # +0x00EC Array<void*>
@@ -126,6 +125,11 @@ class CharContextStruct(Structure):
         ("h034C", c_uint32 * 27),           # +0x034C
         ("player_email_ptr", c_wchar * 0x40),   # +0x03B8 wchar_t[64]
     ]
+    @property
+    def player_uuid(self) -> tuple[int, int, int, int]:
+        """Get the player UUID as a tuple of four integers."""
+        return tuple(self.player_uuid_ptr)
+    
     @property
     def h0000_ptrs(self) -> list[int] | None:
         """Get the list of pointers from h0000_array."""
@@ -203,9 +207,8 @@ class CharContextStruct(Structure):
 #region CharContext Facade
 class CharContext:
     _ptr: int = 0
-    _cached_ptr: int = 0
     _cached_ctx: CharContextStruct | None = None
-    _callback_name = "CharContext.UpdateCharContextPtr"
+    _callback_name = "CharContext.UpdatePtr"
 
     @staticmethod
     def get_ptr() -> int:
@@ -213,37 +216,36 @@ class CharContext:
 
     @staticmethod
     def _update_ptr():
-        CharContext._ptr = PyPlayer.PyPlayer().GetCharContextPtr()
+        ptr = PyPointers.PyPointers.GetCharContextPtr()
+        CharContext._ptr = ptr
+        if not ptr:
+            CharContext._cached_ctx = None
+            return
+        
+        CharContext._cached_ctx = cast(
+            ptr,
+            POINTER(CharContextStruct)
+        ).contents
 
     @staticmethod
     def enable():
-        Game.register_callback(
+        import PyCallback
+        PyCallback.PyCallback.Register(
             CharContext._callback_name,
-            CharContext._update_ptr
+            PyCallback.Phase.PreUpdate,
+            CharContext._update_ptr,
+            priority=2
         )
 
     @staticmethod
     def disable():
-        Game.remove_callback(CharContext._callback_name)
+        import PyCallback
+        PyCallback.PyCallback.RemoveByName(CharContext._callback_name)
         CharContext._ptr = 0
-        CharContext._cached_ptr = 0
         CharContext._cached_ctx = None
 
     @staticmethod
     def get_context() -> CharContextStruct | None:
-        ptr = CharContext._ptr
-        if not ptr:
-            CharContext._cached_ptr = 0
-            CharContext._cached_ctx = None
-            return None
-        
-        if ptr != CharContext._cached_ptr:
-            CharContext._cached_ptr = ptr
-            CharContext._cached_ctx = cast(
-                ptr,
-                POINTER(CharContextStruct)
-            ).contents
-        
         return CharContext._cached_ctx
         
 CharContext.enable()

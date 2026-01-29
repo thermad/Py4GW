@@ -1,4 +1,4 @@
-import PyPlayer
+import PyPointers
 from Py4GW import Game
 import math
 
@@ -97,6 +97,14 @@ class AttributeStruct(Structure):
         ("decrement_points", c_uint32),
         ("increment_points", c_uint32),
     ]
+    @property
+    def name(self) -> str:
+        from ...enums_src.GameData_enums import AttributeNames
+        return AttributeNames.get(self.attribute_id, "Unknown")
+    
+    #retro code compatibility
+    def GetName(self) -> str:
+        return self.name
 
 #region PartyAttribute
 class PartyAttributeStruct(Structure):
@@ -109,6 +117,7 @@ class PartyAttributeStruct(Structure):
     @property
     def attributes(self) -> list[AttributeStruct]:
         return [self.attribute_array[i] for i in range(54)]
+    
     
 #region Effect and Buff
 class EffectStruct(Structure):
@@ -840,6 +849,61 @@ class WorldContextStruct(Structure):
             return None
         return [attr for attr in attrs]
     
+    @staticmethod
+    def _is_valid_attribute(attribute: AttributeStruct) -> bool:
+        return (
+            attribute.level_base > 0 or
+            attribute.level > 0 or
+            attribute.decrement_points > 0 or
+            attribute.increment_points > 0
+        )
+    
+    def get_attributes_by_agent_id(self, agent_id: int) -> list[AttributeStruct]:
+        party_attributes = self.party_attributes
+        if not party_attributes:
+            return []
+
+        for attr in party_attributes:
+            if attr.agent_id != agent_id:
+                continue
+
+            result: list[AttributeStruct] = []
+
+            for i, attribute in enumerate(attr.attributes):
+                if i >= 45:  # soft upper bound
+                    break
+
+                if self._is_valid_attribute(attribute):
+                    result.append(attribute)
+
+            return result
+
+        return []
+    
+    def get_party_attributes(self) -> dict[int, list[AttributeStruct]]:
+        party_attributes = self.party_attributes
+        if not party_attributes:
+            return {}
+
+        result: dict[int, list[AttributeStruct]] = {}
+
+        for attr in party_attributes:
+            valid_attrs = []
+
+            for i, attribute in enumerate(attr.attributes):
+                if i >= 45: # soft upper bound
+                    break
+                if self._is_valid_attribute(attribute):
+                    valid_attrs.append(attribute)
+
+            if valid_attrs:
+                result[attr.agent_id] = valid_attrs
+
+        return result
+
+
+                    
+    
     @property
     def all_flag(self) -> Vec3f | None:
         x, y, z = self.all_flag_array
@@ -1088,8 +1152,18 @@ class WorldContextStruct(Structure):
             return None
         return [player for player in players]
     
+    def GetPlayerById(self, player_id: int) -> PlayerStruct | None:
+        players = self.players
+        if not players:
+            return None
+        for player in players:
+            if player.player_number == player_id:
+                return player
+        return None
+    
     @property
     def titles(self) -> list[TitleStruct] | None:
+        return None
         titles = GW_Array_Value_View(self.titles_array, TitleStruct).to_list()
         if not titles:
             return None
@@ -1097,6 +1171,7 @@ class WorldContextStruct(Structure):
     
     @property
     def title_tiers(self) -> list[TitleTierStruct] | None:
+        return None
         tiers = GW_Array_Value_View(self.title_tiers_array, TitleTierStruct).to_list()
         if not tiers:
             return None
@@ -1104,6 +1179,7 @@ class WorldContextStruct(Structure):
     
     @property
     def vanquished_areas(self) -> list[int] | None:
+        return None
         areas = GW_Array_Value_View(self.vanquished_areas_array, c_uint32).to_list()
         if not areas:
             return None
@@ -1113,9 +1189,8 @@ class WorldContextStruct(Structure):
 #region Facade
 class WorldContext:
     _ptr: int = 0
-    _cached_ptr: int = 0
     _cached_ctx: WorldContextStruct | None = None
-    _callback_name = "WorldContext.UpdateWorldContextPtr"
+    _callback_name = "WorldContext.UpdatePtr"
 
     @staticmethod
     def get_ptr() -> int:
@@ -1123,37 +1198,35 @@ class WorldContext:
 
     @staticmethod
     def _update_ptr():
-        WorldContext._ptr = PyPlayer.PyPlayer().GetWorldContextPtr()
+        ptr = PyPointers.PyPointers.GetWorldContextPtr()
+        WorldContext._ptr = ptr
+        if not ptr:
+            WorldContext._cached_ctx = None
+            return
+        WorldContext._cached_ctx = cast(
+            ptr,
+            POINTER(WorldContextStruct)
+        ).contents
 
     @staticmethod
     def enable():
-        Game.register_callback(
+        import PyCallback
+        PyCallback.PyCallback.Register(
             WorldContext._callback_name,
-            WorldContext._update_ptr
+            PyCallback.Phase.PreUpdate,
+            WorldContext._update_ptr,
+            priority=4
         )
 
     @staticmethod
     def disable():
-        Game.remove_callback(WorldContext._callback_name)
+        import PyCallback
+        PyCallback.PyCallback.RemoveByName(WorldContext._callback_name)
         WorldContext._ptr = 0
-        WorldContext._cached_ptr = 0
         WorldContext._cached_ctx = None
 
     @staticmethod
     def get_context() -> WorldContextStruct | None:
-        ptr = WorldContext._ptr
-        if not ptr:
-            WorldContext._cached_ptr = 0
-            WorldContext._cached_ctx = None
-            return None
-        
-        if ptr != WorldContext._cached_ptr:
-            WorldContext._cached_ptr = ptr
-            WorldContext._cached_ctx = cast(
-                ptr,
-                POINTER(WorldContextStruct)
-            ).contents
-            
         return WorldContext._cached_ctx
         
         

@@ -1,9 +1,8 @@
 import os
 
-from PyPlayer import PyPlayer
 from HeroAI.commands import HeroAICommands
 from HeroAI.types import Docked
-from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
+from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.ImGui_src.types import Alignment
 from Py4GWCoreLib.py4gwcorelib_src.Console import Console, ConsoleLog
 from Py4GWCoreLib.py4gwcorelib_src.IniHandler import IniHandler
@@ -108,7 +107,9 @@ class Settings:
         
         self.account_ini_handler : IniHandler | None = None
         self.ini_handler = IniHandler(self.ini_path)
-            
+        
+        self.PrintDebug = False
+        self.ShowDebugWindow = False
         self.Anonymous_PanelNames = False
         self.ShowCommandPanel = True
         self.ShowPartyOverlay = True
@@ -116,7 +117,6 @@ class Settings:
         self.ShowCommandPanelOnlyOnLeaderAccount = True
         
         self.ShowPanelOnlyOnLeaderAccount = True
-        self.DisableAutomationOnLeaderAccount = False
         
         self.ShowDialogOverlay = True
         self.ShowControlPanelWindow = True
@@ -182,7 +182,7 @@ class Settings:
         pass 
     
     def ensure_initialized(self) -> bool: 
-        account_email = GLOBAL_CACHE.Player.GetAccountEmail()
+        account_email = Player.GetAccountEmail()
         
         if not account_email:
             return True
@@ -196,7 +196,7 @@ class Settings:
 
     def initialize_account_config(self):
         base_path = Console.get_projects_path()        
-        account_email = GLOBAL_CACHE.Player.GetAccountEmail()
+        account_email = Player.GetAccountEmail()
         
         if account_email:
             config_dir = os.path.join(base_path, "Widgets", "Config", "Accounts", account_email)
@@ -231,6 +231,8 @@ class Settings:
         # ConsoleLog("HeroAI", "Saving HeroAI settings...")
         
         self.ini_handler.write_key("General", "ShowCommandPanel", str(self.ShowCommandPanel))
+        self.ini_handler.write_key("General", "PrintDebug", str(self.PrintDebug))
+        self.ini_handler.write_key("General", "ShowDebug", str(self.ShowDebugWindow))
         self.ini_handler.write_key("General", "ShowCommandPanelOnlyOnLeaderAccount", str(self.ShowCommandPanelOnlyOnLeaderAccount))
         self.ini_handler.write_key("General", "Anonymous_PanelNames", str(self.Anonymous_PanelNames))
         
@@ -238,7 +240,6 @@ class Settings:
         self.ini_handler.write_key("General", "ShowPartySearchOverlay", str(self.ShowPartySearchOverlay))
         
         self.ini_handler.write_key("General", "ShowPanelOnlyOnLeaderAccount", str(self.ShowPanelOnlyOnLeaderAccount))
-        self.ini_handler.write_key("General", "DisableAutomationOnLeaderAccount", str(self.DisableAutomationOnLeaderAccount))
         self.ini_handler.write_key("General", "ShowDialogOverlay", str(self.ShowDialogOverlay))
         
         self.ini_handler.write_key("General", "CombinePanels", str(self.CombinePanels))
@@ -276,6 +277,8 @@ class Settings:
     def load_settings(self):          
         ConsoleLog("HeroAI", "Loading HeroAI settings...")      
         self.ShowCommandPanel = self.ini_handler.read_bool("General", "ShowCommandPanel", True)
+        self.PrintDebug = self.ini_handler.read_bool("General", "PrintDebug", False)
+        self.ShowDebugWindow = self.ini_handler.read_bool("General", "ShowDebug", False)
         self.ShowCommandPanelOnlyOnLeaderAccount = self.ini_handler.read_bool("General", "ShowCommandPanelOnlyOnLeaderAccount", True)
         self.Anonymous_PanelNames = self.ini_handler.read_bool("General", "Anonymous_PanelNames", False)
         
@@ -283,7 +286,6 @@ class Settings:
         self.ShowPartySearchOverlay = self.ini_handler.read_bool("General", "ShowPartySearchOverlay", True)
         
         self.ShowPanelOnlyOnLeaderAccount = self.ini_handler.read_bool("General", "ShowPanelOnlyOnLeaderAccount", True)
-        self.DisableAutomationOnLeaderAccount = self.ini_handler.read_bool("General", "DisableAutomationOnLeaderAccount", False)
         self.ShowDialogOverlay = self.ini_handler.read_bool("General", "ShowDialogOverlay", True)
         
         self.CombinePanels = self.ini_handler.read_bool("General", "CombinePanels", False)
@@ -364,3 +366,12 @@ class Settings:
         
         if request_save:
             self.save_requested = True  
+
+    def get_hero_panel_info(self, account_email: str) -> 'Settings.HeroPanelInfo':
+        info = self.HeroPanelPositions.get(account_email, self.HeroPanelPositions.get(account_email.lower(), Settings.HeroPanelInfo()))
+        
+        if account_email not in self.HeroPanelPositions:
+            self.HeroPanelPositions[account_email] = info
+            self.save_requested = True
+        
+        return info

@@ -1,18 +1,30 @@
 
-from Py4GW import Game
-from ctypes import Structure, c_uint32, c_float, sizeof, cast, POINTER, c_wchar, c_uint8, c_uint16, c_void_p
+from ctypes import Structure, c_uint32, c_float, cast, POINTER, c_uint8, c_uint16, c_void_p
 from ctypes import Union
 import ctypes
-from ..context.AccAgentContext import AccAgentContext, AccAgentContextStruct
+from ..context.AccAgentContext import AccAgentContext
+from ..context.MapContext import MapContext
+from ..context.CharContext import CharContext
+from ..context.InstanceInfoContext import InstanceInfo
+from ..context.WorldContext import WorldContext
 from ..internals.types import Vec2f, Vec3f, GamePos
-from ..internals.gw_array import GW_Array, GW_Array_Value_View, GW_Array_View
+from ..internals.gw_array import GW_Array, GW_Array_Value_View
 from ..internals.gw_list import GW_TList, GW_TList_View, GW_TLink
-from typing import List, Optional, Dict
-from ..internals.helpers import read_wstr, encoded_wstr_to_str
+from typing import List, Optional
 from ..internals.native_symbol import NativeSymbol
-from ...Scanner import Scanner, ScannerSection
+from ...Scanner import ScannerSection
+from dataclasses import dataclass
 
-
+# ---------------------------------------------------------------------
+# ------------------ DyeInfo ------------------------------------------
+# ---------------------------------------------------------------------
+@dataclass(slots=True)
+class DyeInfo:
+    dye_tint: int
+    dye1: int
+    dye2: int
+    dye3: int
+    dye4: int
 
 class DyeInfoStruct(Structure):
     _pack_ = 1
@@ -23,7 +35,27 @@ class DyeInfoStruct(Structure):
         ("dye3", c_uint8, 4),         # 0x02 low nibble
         ("dye4", c_uint8, 4),         # 0x02 high nibble
     ]
+    def snapshot(self) -> DyeInfo:
+        return DyeInfo(
+            dye_tint=int(self.dye_tint),
+            dye1=int(self.dye1),
+            dye2=int(self.dye2),
+            dye3=int(self.dye3),
+            dye4=int(self.dye4),
+        )
 
+# ---------------------------------------------------------------------
+# ------------------ ItemData -----------------------------------------
+# ---------------------------------------------------------------------
+
+@dataclass(slots=True)
+class ItemData:
+    model_file_id: int
+    type: int
+    dye: DyeInfo
+    value: int
+    interaction: int
+    
 class ItemDataStruct(Structure):
     _pack_ = 1
     _fields_ = [
@@ -33,8 +65,35 @@ class ItemDataStruct(Structure):
         ("value", c_uint32),             # 0x0B / actually 0x0C aligned
         ("interaction", c_uint32),       # 0x10
     ]
+    
+    def snapshot(self) -> ItemData:
+        return ItemData(
+            model_file_id=int(self.model_file_id),
+            type=int(self.type),
+            dye=self.dye.snapshot(),   # nested snapshot
+            value=int(self.value),
+            interaction=int(self.interaction),
+        )
 
-class EquipmentItemsUnion(Union):
+# ---------------------------------------------------------------------
+# ------------------ EquipmentItemsUnion ------------------------------
+# ---------------------------------------------------------------------
+@dataclass(slots=True)
+class EquipmentItemsUnion:
+    items: tuple[ItemData, ItemData, ItemData, ItemData, ItemData,
+                 ItemData, ItemData, ItemData, ItemData]
+    weapon: ItemData
+    offhand: ItemData
+    chest: ItemData
+    legs: ItemData
+    head: ItemData
+    feet: ItemData
+    hands: ItemData
+    costume_body: ItemData
+    costume_head: ItemData
+
+
+class EquipmentItemsUnionStruct(Union):
     _pack_ = 1
     _fields_ = [
         ("items", ItemDataStruct * 9),
@@ -48,8 +107,50 @@ class EquipmentItemsUnion(Union):
         ("costume_body", ItemDataStruct),      # 0x0094
         ("costume_head", ItemDataStruct),      # 0x00A4
     ]
+    
+    def snapshot(self) -> EquipmentItemsUnion:
+        items = (
+            self.items[0].snapshot(),
+            self.items[1].snapshot(),
+            self.items[2].snapshot(),
+            self.items[3].snapshot(),
+            self.items[4].snapshot(),
+            self.items[5].snapshot(),
+            self.items[6].snapshot(),
+            self.items[7].snapshot(),
+            self.items[8].snapshot(),
+        )
 
-class EquipmentItemIDsUnion(Union):
+        return EquipmentItemsUnion(
+            items=tuple(items),
+            weapon=self.weapon.snapshot(),
+            offhand=self.offhand.snapshot(),
+            chest=self.chest.snapshot(),
+            legs=self.legs.snapshot(),
+            head=self.head.snapshot(),
+            feet=self.feet.snapshot(),
+            hands=self.hands.snapshot(),
+            costume_body=self.costume_body.snapshot(),
+            costume_head=self.costume_head.snapshot(),
+        )
+
+# ---------------------------------------------------------------------
+# ------------------ EquipmentItemIDsUnion ----------------------------
+# ---------------------------------------------------------------------
+@dataclass(slots=True)
+class EquipmentItemIDsUnion:
+    item_ids: tuple[int, int, int, int, int, int, int, int, int]
+    item_id_weapon: int
+    item_id_offhand: int
+    item_id_chest: int
+    item_id_legs: int
+    item_id_head: int
+    item_id_feet: int
+    item_id_hands: int
+    item_id_costume_body: int
+    item_id_costume_head: int
+    
+class EquipmentItemIDsUnionStruct(Union):
     _pack_ = 1
     _fields_ = [
         ("item_ids", c_uint32 * 9),
@@ -64,6 +165,55 @@ class EquipmentItemIDsUnion(Union):
         ("item_id_costume_head", c_uint32),    # 0x00D4
     ]
     
+    def snapshot(self) -> EquipmentItemIDsUnion:
+        item_ids = (
+            int(self.item_ids[0]),
+            int(self.item_ids[1]),
+            int(self.item_ids[2]),
+            int(self.item_ids[3]),
+            int(self.item_ids[4]),
+            int(self.item_ids[5]),
+            int(self.item_ids[6]),
+            int(self.item_ids[7]),
+            int(self.item_ids[8]),
+        )
+
+        return EquipmentItemIDsUnion(
+            item_ids=item_ids,
+            item_id_weapon=int(self.item_id_weapon),
+            item_id_offhand=int(self.item_id_offhand),
+            item_id_chest=int(self.item_id_chest),
+            item_id_legs=int(self.item_id_legs),
+            item_id_head=int(self.item_id_head),
+            item_id_feet=int(self.item_id_feet),
+            item_id_hands=int(self.item_id_hands),
+            item_id_costume_body=int(self.item_id_costume_body),
+            item_id_costume_head=int(self.item_id_costume_head),
+        )
+        
+# ---------------------------------------------------------------------
+# ----------------------- Equipment -----------------------------------
+# ---------------------------------------------------------------------
+
+@dataclass(slots=True)
+class Equipment:
+    vtable: int
+    h0004: int
+    h0008: int
+    h000C: int
+    h0018: int
+    left_hand_map: int
+    right_hand_map: int
+    head_map: int
+    shield_map: int
+    items_union: EquipmentItemsUnion
+    ids_union: EquipmentItemIDsUnion
+    
+    #accessors
+    left_hand: Optional[ItemData]
+    right_hand: Optional[ItemData]
+    shield:Optional[ItemData]
+
 class EquipmentStruct(Structure):
     _pack_ = 1
     _fields_ = [
@@ -81,33 +231,68 @@ class EquipmentStruct(Structure):
         ("shield_map", c_uint8),            # 0x0023
 
         # ---- 0x0024 .. 0x00B3 ----
-        ("items_union", EquipmentItemsUnion),
+        ("items_union", EquipmentItemsUnionStruct),
 
         # ---- 0x00B4 .. 0x00D7 ----
-        ("ids_union", EquipmentItemIDsUnion),
+        ("ids_union", EquipmentItemIDsUnionStruct),
     ]
-    @property 
+    
+    # ---------- SAFE ACCESSORS ----------
+    @property
     def left_hand(self) -> Optional[ItemDataStruct]:
-        """Return the left hand item data if available."""
-        if self.left_hand_ptr:
-            return self.left_hand_ptr.contents
+        # example mapping logic – adapt to your map values
+        idx = self.left_hand_map
+        if 0 <= idx < 9:
+            return self.items_union.items[idx]
         return None
+
     
     @property
     def right_hand(self) -> Optional[ItemDataStruct]:
         """Return the right hand item data if available."""
-        if self.right_hand_ptr:
-            return self.right_hand_ptr.contents
+        idx = self.right_hand_map
+        if 0 <= idx < 9:
+            return self.items_union.items[idx]
         return None
     
     @property
     def shield(self) -> Optional[ItemDataStruct]:
         """Return the shield item data if available."""
-        if self.shield_ptr:
-            return self.shield_ptr.contents
-        return None
+        idx = self.shield_map
+        if 0 <= idx < 9:
+            return self.items_union.items[idx]
+        
+    # ---------- SNAPSHOT ----------
+    def snapshot(self) -> Equipment:
+        return Equipment(
+            vtable=int(self.vtable) if self.vtable else 0,
+            h0004=int(self.h0004),
+            h0008=int(self.h0008),
+            h000C=int(self.h000C),
+            h0018=int(self.h0018),
+            left_hand_map=int(self.left_hand_map),
+            right_hand_map=int(self.right_hand_map),
+            head_map=int(self.head_map),
+            shield_map=int(self.shield_map),
 
+            items_union=self.items_union.snapshot(),
+            ids_union=self.ids_union.snapshot(),
+            
+            left_hand=self.left_hand.snapshot() if self.left_hand else None,
+            right_hand=self.right_hand.snapshot() if self.right_hand else None,
+            shield=self.shield.snapshot() if self.shield else None,
 
+        )
+
+# ---------------------------------------------------------------------
+# ----------------------- TagInfo -------------------------------------
+# ---------------------------------------------------------------------
+@dataclass(slots=True)
+class TagInfo:
+    guild_id: int
+    primary: int
+    secondary: int
+    level: int
 
 class TagInfoStruct (Structure):
     _pack_ = 1
@@ -118,15 +303,101 @@ class TagInfoStruct (Structure):
         ("level", c_uint16),       # +0x0004
         # ... (possible more fields)
     ]
+    def snapshot(self) -> TagInfo:
+        return TagInfo(
+            guild_id=int(self.guild_id),
+            primary=int(self.primary),
+            secondary=int(self.secondary),
+            level=int(self.level),
+        )
+
+# ---------------------------------------------------------------------
+# ------------------ VisibleEffect ------------------------------------
+# ---------------------------------------------------------------------
+
+@dataclass(slots=True)
+class VisibleEffect:
+    unk: int
+    id: int
+    has_ended: int
 
 
-class VisibleEffectStruct (Structure):
+class VisibleEffectStruct(Structure):
     _pack_ = 1
     _fields_ = [
-        ("unk", c_uint32), #enchantment = 1, weapon spell = 9
-        ("id", c_uint32),  # Constants::EffectID
-        ("has_ended", c_uint32), #effect no longer active, effect ending animation plays.
+        ("unk", c_uint32),        # enchantment = 1, weapon spell = 9
+        ("id", c_uint32),         # Constants::EffectID
+        ("has_ended", c_uint32),  # effect no longer active
     ]
+
+    def snapshot(self) -> VisibleEffect:
+        return VisibleEffect(
+            unk=int(self.unk),
+            id=int(self.id),
+            has_ended=int(self.has_ended),
+        )
+        
+    
+# ---------------------------------------------------------------------
+# ------------------------ Agent --------------------------------------
+# --------------------------------------------------------------------- 
+@dataclass(slots=True) 
+class AgentNative():
+    h0004: int
+    h0008: int
+    h000C: list[int]
+    timer: int  # Agent Instance Timer (in Frames)
+    timer2: int
+    agent_id: int
+    z: float  # Z coord in float
+    width1: float  # Width of the model's box
+    height1: float  # Height of the model's box
+    width2: float  # Width of the model's box (same as 1)
+    height2: float  # Height of the model's box (same as 1)
+    width3: float  # Width of the model's box (same as 1)
+    height3: float  # Height of the model's box (same as 1)
+    rotation_angle: float  # Rotation in radians from East (-pi to pi)
+    rotation_cos: float  # Cosine of rotation
+    rotation_sin: float  # Sine of rotation
+    name_properties: int  # Bitmap basically telling what the agent is
+    ground: int
+    h0060: int
+    terrain_normal: Vec3f
+    h0070: list[int]
+    pos : GamePos
+    h0080: list[int]
+    name_tag_x: float
+    name_tag_y: float
+    name_tag_z: float
+    visual_effects: int
+    h0092: int
+    h0094: list[int]
+    type: int  # Key field to determine the type of agent
+    velocity: Vec2f
+    h00A8: int
+    rotation_cos2: float
+    rotation_sin2: float
+    h00B4: list[int]
+
+    vtable: int
+      
+    is_item_type : bool 
+    is_gadget_type : bool
+    is_living_type : bool
+    
+    _item_agent: Optional["AgentItem"] = None
+    _gadget_agent: Optional["AgentGadget"] = None
+    _living_agent: Optional["AgentLiving"] = None
+    
+    def GetAsAgentItem(self) -> Optional["AgentItem"]:
+        return self._item_agent
+
+    def GetAsAgentGadget(self) -> Optional["AgentGadget"]:
+        return self._gadget_agent
+
+    def GetAsAgentLiving(self) -> Optional["AgentLiving"]:
+        return self._living_agent
+    
 
 
 class AgentStruct(Structure):
@@ -174,10 +445,16 @@ class AgentStruct(Structure):
         ("rotation_sin2", c_float),        # 0x00B0
         ("h00B4", c_uint32 * 4),           # 0x00B4
     ]
+    
     @property
     def vtable(self) -> int:
         """Return the vtable pointer of the Agent."""
+        if getattr(self, "_is_snapshot", False):
+            return 0
+        if not self.vtable_ptr:
+            return 0
         return ctypes.addressof(self.vtable_ptr.contents)
+
       
     @property 
     def is_item_type(self) -> bool:
@@ -193,7 +470,79 @@ class AgentStruct(Structure):
     def is_living_type(self) -> bool:
         """Return True if this Agent is a Living being (Player, NPC, Monster)."""
         return (self.type & 0xDB) != 0
-    
+
+    def snapshot(self) -> AgentNative:
+        item_snapshot: Optional[AgentItem] = None
+        if self.is_item_type:
+            item = self.GetAsAgentItem()
+            if item:
+                item_snapshot = item.snapshot_item()
+                
+        gadget_snapshot: Optional[AgentGadget] = None
+        if self.is_gadget_type:
+            gadget = self.GetAsAgentGadget()
+            if gadget:
+                gadget_snapshot = gadget.snapshot_gadget()
+                
+        living_snapshot: Optional[AgentLiving] = None
+        if self.is_living_type:
+            living = self.GetAsAgentLiving()
+            if living:
+                living_snapshot = living.snapshot_living()
+        
+        return AgentNative(
+            h0004=int(self.h0004),
+            h0008=int(self.h0008),
+            h000C=[int(x) for x in self.h000C],
+            timer=int(self.timer),
+            timer2=int(self.timer2),
+            agent_id=int(self.agent_id),
+            z=float(self.z),
+            width1=float(self.width1),
+            height1=float(self.height1),
+            width2=float(self.width2),
+            height2=float(self.height2),
+            width3=float(self.width3),
+            height3=float(self.height3),
+            rotation_angle=float(self.rotation_angle),
+            rotation_cos=float(self.rotation_cos),
+            rotation_sin=float(self.rotation_sin),
+            name_properties=int(self.name_properties),
+            ground=int(self.ground),
+            h0060=int(self.h0060),
+            terrain_normal=Vec3f(
+                float(self.terrain_normal.x),
+                float(self.terrain_normal.y),
+                float(self.terrain_normal.z),
+            ),
+            h0070=[int(x) for x in self.h0070],
+            pos=self.pos,
+            h0080=[int(x) for x in self.h0080],
+            name_tag_x=float(self.name_tag_x),
+            name_tag_y=float(self.name_tag_y),
+            name_tag_z=float(self.name_tag_z),
+            visual_effects=int(self.visual_effects),
+            h0092=int(self.h0092),
+            h0094=[int(x) for x in self.h0094],
+            type=int(self.type),
+            velocity=Vec2f(
+                float(self.velocity.x),
+                float(self.velocity.y),
+            ),
+            h00A8=int(self.h00A8),
+            rotation_cos2=float(self.rotation_cos2),
+            rotation_sin2=float(self.rotation_sin2),
+            h00B4=[int(x) for x in self.h00B4],
+            vtable=self.vtable,
+            is_item_type=self.is_item_type,
+            is_gadget_type=self.is_gadget_type,
+            is_living_type=self.is_living_type,
+        
+            _item_agent=item_snapshot,
+            _gadget_agent=gadget_snapshot,
+            _living_agent=living_snapshot,
+        )
+        
     # ---------------------------------------------------------
     # ---  reinterpret this Agent as its derived type       ---
     # ---  identical semantics to C++ static_cast<T*>(this) ---
@@ -214,25 +563,98 @@ class AgentStruct(Structure):
             return ctypes.cast(ctypes.pointer(self), ctypes.POINTER(AgentLivingStruct)).contents
         return None
     
-class AgentItemStruct(AgentStruct):
-    _pack_ = 1
-    _fields_ = [
-        ("owner", c_uint32),        # +0x00C4 AgentID
-        ("item_id", c_uint32),      # +0x00C8 ItemID
-        ("h00CC", c_uint32),        # +0x00CC
-        ("extra_type", c_uint32),   # +0x00D0
-    ]
+# ---------------------------------------------------------------------
+# ------------------ AgentLiving --------------------------------------
+# ---------------------------------------------------------------------
+@dataclass(slots=True)
+class AgentLiving:
+    owner : int
+    h00C8 : int
+    h00CC : int
+    h00D0 : int
+    h00D4 : list[int]
+    animation_type : float
+    h00E4 : list[int]
+    weapon_attack_speed : float  # The base attack speed in float of last attacks weapon. 1.33 = axe, sWORD, daggers etc.
+    attack_speed_modifier : float  # Attack speed modifier of the last attack. 0.67 = 33% increase (1-.33)
+    player_number : int  # player number / modelnumber
+    agent_model_type : int  # Player = 0x3000, NPC = 0x2000
+    transmog_npc_id : int  # Actually, it's 0x20000000 | npc_id, It's not defined for npc, minipet, etc...
+    h0100 : int
+    h0104 : int  # New variable added here
+    h010C : int
+    primary : int  # Primary profession 0-10 (None,W,R,Mo
+    secondary : int # Secondary profession 0-10 (None,W,R,Mo,N,Me,E,A,Rt,P,D)
+    level : int
+    team_id : int # 0=None, 1=Blue, 2=Red, 3=Yellow
+    h0112 : list[int]
+    h0114 : int
+    energy_regen : float
+    h011C : int
+    energy : float
+    max_energy : int
+    h0128 : int
+    hp_pips : float
+    h0130 : int
+    hp : float
+    max_hp : int
+    effects : int #Bitmap for effects to display when targetted. DOES include hexes
+    h0140 : int
+    hex : int # Bitmap for the hex effect when targetted (apparently obsolete!) (
+    h0145 : list[int]
+    model_state : int
+    type_map : int #Odd variable! 0x08 = dead, 0xC00 = boss, 0x40000 = spirit, 0x400000 = player
+    h0160 : list[int]
+    in_spirit_range : int #Tells if agent is within spirit range of you. Doesn't work anymore?
+    h0180 : int
+    login_number : int #Unique number in instance that only works for players
+    animation_speed : float #Speed of the current animation
+    animation_code : int #related to animations
+    animation_id : int   #Id of the current animation
+    h0194 : list[int]
+    dagger_status : int            #0x1 = used lead attack, 0x2
+    allegiance : int               #Constants::Allegiance; 0x1 = ally/non-attackable, 0x2 = neutral, 0x3 = enemy, 0x4 = spirit/pet, 0x5 = minion, 0x6 = npc/minipet
+    weapon_type : int             #1=bow, 2=axe, 3=hammer, 4=daggers, 5=scythe, 6=spear, 7=sWORD, 10=wand, 12=staff, 14=staff
+    skill : int                   #0 = not using a skill. Anything else is the Id of
+    h01BA : int
+    weapon_item_type : int
+    offhand_item_type : int
+    weapon_item_id : int
+    offhand_item_id : int
 
-class AgentGadgetStruct(AgentStruct):
-    _pack_ = 1
-    _fields_ = [
-        ("h00C4", c_uint32),        # +0x00C4
-        ("h00C8", c_uint32),        # +0x00C8
-        ("extra_type", c_uint32),   # +0x00CC
-        ("gadget_id", c_uint32),    # +0x00D0
-        ("h00D4", c_uint32 * 4),    # +0x00D4
-    ]
+    equipment: Optional[Equipment]
+    tags: Optional[TagInfo]
+    visible_effects: List[VisibleEffect]
+    is_bleeding: bool
+    is_conditioned: bool
+    is_crippled: bool
+    is_dead: bool
+    is_deep_wounded: bool
+    is_poisoned: bool
+    is_enchanted: bool
+    is_degen_hexed: bool
+    is_hexed: bool
+    is_weapon_spelled: bool
+    is_in_combat_stance: bool
+    has_quest: bool
+    is_dead_by_type_map: bool
+    is_female: bool
+    has_boss_glow: bool
+    is_hiding_cape: bool
+    can_be_viewed_in_party_window: bool
+    is_spawned: bool
+    is_being_observed: bool
     
+    is_knocked_down: bool
+    is_moving: bool
+    
+    is_attacking: bool
+    is_casting: bool
+    is_idle: bool
+    is_alive: bool
+    is_player: bool
+    is_npc: bool
+
 class AgentLivingStruct(AgentStruct):
     _pack_ = 1
     _fields_ = [
@@ -294,22 +716,28 @@ class AgentLivingStruct(AgentStruct):
         ("weapon_item_id", c_uint16),
         ("offhand_item_id", c_uint16),
     ]
+    
+    # ---- snapshot-safe properties ----
     @property
-    def equipment(self) -> Optional[EquipmentStruct]:
-        """Return the Equipment of the AgentLiving if available."""
+    def equipment(self) -> Optional["EquipmentStruct"]:
+        if getattr(self, "_is_snapshot", False):
+            return getattr(self, "_equipment_snapshot", None)
         if self.equipment_ptr_ptr and self.equipment_ptr_ptr.contents:
             return self.equipment_ptr_ptr.contents.contents
         return None
     
     @property
-    def tags(self) ->  Optional[TagInfoStruct]:
-        """Return the TagInfo of the AgentLiving if available."""
+    def tags(self) -> Optional["TagInfoStruct"]:
+        if getattr(self, "_is_snapshot", False):
+            return getattr(self, "_tags_snapshot", None)
         if self.tags_ptr:
             return self.tags_ptr.contents
         return None
-    
+
     @property
-    def visible_effects(self) -> List[VisibleEffectStruct]:
+    def visible_effects(self) -> List["VisibleEffectStruct"]:
+        if getattr(self, "_is_snapshot", False):
+            return getattr(self, "_visible_effects_snapshot", [])
         return GW_TList_View(self.visible_effects_list, VisibleEffectStruct).to_list()
 
     @property
@@ -427,6 +855,161 @@ class AgentLivingStruct(AgentStruct):
     def is_npc(self) -> bool:
         """Return True if the agent is an NPC."""
         return self.login_number == 0  
+
+    def snapshot_living(self) -> AgentLiving:
+
+        return AgentLiving(
+            owner=int(self.owner),
+            h00C8=int(self.h00C8),
+            h00CC=int(self.h00CC),
+            h00D0=int(self.h00D0),
+            h00D4=[int(self.h00D4[i]) for i in range(3)],
+            animation_type=float(self.animation_type),
+            h00E4=[int(self.h00E4[i]) for i in range(2)],
+            weapon_attack_speed=float(self.weapon_attack_speed),
+            attack_speed_modifier=float(self.attack_speed_modifier),
+            player_number=int(self.player_number),
+            agent_model_type=int(self.agent_model_type),
+            transmog_npc_id=int(self.transmog_npc_id),
+            h0100=int(self.h0100),
+            h0104=int(self.h0104),
+            h010C=int(self.h010C),
+            primary=int(self.primary),
+            secondary=int(self.secondary),
+            level=int(self.level),
+            team_id=int(self.team_id),
+            h0112=[int(self.h0112[i]) for i in range(2)],
+            h0114=int(self.h0114),
+            energy_regen=float(self.energy_regen),
+            h011C=int(self.h011C),
+            energy=float(self.energy),
+            max_energy=int(self.max_energy),
+            h0128=int(self.h0128),
+            hp_pips=float(self.hp_pips),
+            h0130=int(self.h0130),
+            hp=float(self.hp),
+            max_hp=int(self.max_hp),
+            effects=int(self.effects),
+            h0140=int(self.h0140),
+            hex=int(self.hex),
+            h0145=[int(self.h0145[i]) for i in range(19)],
+            model_state=int(self.model_state),
+            type_map=int(self.type_map),
+            h0160=[int(self.h0160[i]) for i in range(4)],
+            in_spirit_range=int(self.in_spirit_range),
+            h0180=int(self.h0180),
+            login_number=int(self.login_number),
+            animation_speed=float(self.animation_speed),
+            animation_code=int(self.animation_code),
+            animation_id=int(self.animation_id),
+            h0194=[int(self.h0194[i]) for i in range(32)],
+            dagger_status=int(self.dagger_status),
+            allegiance=int(self.allegiance),
+            weapon_type=int(self.weapon_type),
+            skill=int(self.skill),
+            h01BA=int(self.h01BA),
+            weapon_item_type=int(self.weapon_item_type),
+            offhand_item_type=int(self.offhand_item_type),
+            weapon_item_id=int(self.weapon_item_id),
+            offhand_item_id=int(self.offhand_item_id),
+            equipment= self.equipment.snapshot() if self.equipment else None,   
+            tags= self.tags.snapshot() if self.tags else None,
+            visible_effects= [ve.snapshot() for ve in self.visible_effects] if self.visible_effects else [],
+            is_bleeding=self.is_bleeding,
+            is_conditioned=self.is_conditioned,
+            is_crippled=self.is_crippled,
+            is_dead=self.is_dead,
+            is_deep_wounded=self.is_deep_wounded,
+            is_poisoned=self.is_poisoned,
+            is_enchanted=self.is_enchanted,
+            is_degen_hexed=self.is_degen_hexed,
+            is_hexed=self.is_hexed,
+            is_weapon_spelled=self.is_weapon_spelled,
+            is_in_combat_stance=self.is_in_combat_stance,
+            has_quest=self.has_quest,
+            is_dead_by_type_map=self.is_dead_by_type_map,
+            is_female=self.is_female,
+            has_boss_glow=self.has_boss_glow,
+            is_hiding_cape=self.is_hiding_cape,
+            can_be_viewed_in_party_window=self.can_be_viewed_in_party_window,
+            is_spawned=self.is_spawned,
+            is_being_observed=self.is_being_observed,
+            is_knocked_down=self.is_knocked_down,
+            is_moving=self.is_moving,
+            is_attacking=self.is_attacking,
+            is_casting=self.is_casting,
+            is_idle=self.is_idle,
+            is_alive=self.is_alive,
+            is_player=self.is_player,
+            is_npc=self.is_npc,
+        )
+
+# ---------------------------------------------------------------------
+# ------------------ AgentItem ----------------------------------------
+# ---------------------------------------------------------------------
+
+@dataclass(slots=True)
+class AgentItem:
+    owner: int
+    item_id: int
+    h00CC: int
+    extra_type: int
+
+class AgentItemStruct(AgentStruct):
+    _pack_ = 1
+    _fields_ = [
+        ("owner", c_uint32),        # +0x00C4 AgentID
+        ("item_id", c_uint32),      # +0x00C8 ItemID
+        ("h00CC", c_uint32),        # +0x00CC
+        ("extra_type", c_uint32),   # +0x00D0
+    ]
+
+    def snapshot_item(self) -> AgentItem:
+        return AgentItem(
+            owner=int(self.owner),
+            item_id=int(self.item_id),
+            h00CC=int(self.h00CC),
+            extra_type=int(self.extra_type),
+        )
+
+# ---------------------------------------------------------------------
+# ------------------ AgentGadget --------------------------------------
+# ---------------------------------------------------------------------
+
+@dataclass(slots=True)
+class AgentGadget:
+    h00C4: int
+    h00C8: int
+    extra_type: int
+    gadget_id: int
+    h00D4: tuple[int, int, int, int]
+
+
+class AgentGadgetStruct(AgentStruct):
+    _pack_ = 1
+    _fields_ = [
+        ("h00C4", c_uint32),        # +0x00C4
+        ("h00C8", c_uint32),        # +0x00C8
+        ("extra_type", c_uint32),   # +0x00CC
+        ("gadget_id", c_uint32),    # +0x00D0
+        ("h00D4", c_uint32 * 4),    # +0x00D4
+    ]
+
+    def snapshot_gadget(self) -> AgentGadget:
+        return AgentGadget(
+            h00C4=int(self.h00C4),
+            h00C8=int(self.h00C8),
+            extra_type=int(self.extra_type),
+            gadget_id=int(self.gadget_id),
+            h00D4=(
+                int(self.h00D4[0]),
+                int(self.h00D4[1]),
+                int(self.h00D4[2]),
+                int(self.h00D4[3]),
+            ),
+        )
+        
+
  
    
 class AgentArrayStruct(Structure):
@@ -437,10 +1020,15 @@ class AgentArrayStruct(Structure):
     def _ensure_fields(self):
         if not hasattr(self, "_allegiance_cache"):
             self._allegiance_cache = None
+        if not hasattr(self, "_agent_by_id"):
+            self._agent_by_id = {}
         if not hasattr(self, "_last_instance_timer"):
             self._last_instance_timer = 0
-        if not hasattr(self, "raw_agent_list"):
-            self.raw_agent_list = []
+        if not hasattr(self, "frame_counter"):
+            self.frame_counter = 0
+        if not hasattr(self, "frame_throttle"):
+            self.frame_throttle = 2
+
         
     @property
     def raw_agents(self) -> list[AgentStruct | None]:
@@ -473,6 +1061,11 @@ class AgentArrayStruct(Structure):
 
         return out
     
+    def _drop_cache(self) -> None:
+        self._allegiance_cache = None
+        self._agent_by_id = {}
+        self._last_instance_timer = 0
+    
     def _ensure_cache_up_to_date(self):
         """
         Uses instance_timer to detect map changes, same logic as GWCA.
@@ -480,16 +1073,33 @@ class AgentArrayStruct(Structure):
         """
         self._ensure_fields()
         
+        # ---- validity checks ----
+        map_ctx = MapContext.get_context()
+        char_ctx = CharContext.get_context()
+        instance_info_ctx = InstanceInfo.get_context()
+        world_ctx = WorldContext.get_context()
         acc_agent_ctx = AccAgentContext.get_context()
-        if not acc_agent_ctx:
-            return
-        instance_timer = acc_agent_ctx.instance_timer
 
-        if self._last_instance_timer == instance_timer:
-            # cache still valid
-            return
 
-        self._last_instance_timer = instance_timer
+        if not (map_ctx and char_ctx and instance_info_ctx and world_ctx and acc_agent_ctx):
+            self._drop_cache()
+            return
+        
+        instance_type = instance_info_ctx.instance_type
+        if instance_type not in (0, 1):  # explorable, story, pvp
+            self._drop_cache()
+            return
+        
+        if (char_ctx.player_number is None):
+            self._drop_cache()
+            return
+        
+        #per frame cache, not throttling
+        #self.frame_counter += 3
+        #if self.frame_counter < self.frame_throttle:
+        #    return
+        #self.frame_counter = 0
+        
         self._build_allegiance_cache()
         
     def _iter_valid_agents(self):
@@ -498,67 +1108,56 @@ class AgentArrayStruct(Structure):
                 continue
             if agent.agent_id != 0:
                 yield agent
+                
+    
 
     def _build_allegiance_cache(self):
         """Populate ALL allegiance/type lists in a single traversal."""
-        import PyAgent
-
-        self._allegiance_cache = {
-            "ally": [],#-
-            "ally_raw": [],
-            "neutral": [], #-
-            "neutral_raw": [],
-            "enemy": [], #-
-            "enemy_raw": [],
-            "spirit_pet": [],#-
-            "spirit_pet_raw": [],
-            "minion": [], #-
-            "minion_raw": [],
-            "npc_minipet": [], #-
-            "npc_minipet_raw": [],
-            "living": [],#-
-            "living_raw": [],
-            "item": [], #-
-            "item_raw": [],
-            "owned_item": [], # -
-            "owned_item_raw": [],
-            "gadget": [], #-
-            "gadget_raw": [],
-            "dead_ally": [],
-            "dead_ally_raw": [],
-            "dead_enemy": [],
-            "dead_enemy_raw": [],
-            "all": [], #-
-            "all_raw": [],
-        }
+        self._ensure_fields()
         
-        self.raw_agent_list = []
-
         acc_agent_ctx = AccAgentContext.get_context()
         if not acc_agent_ctx:
-            self._allegiance_cache = {}
+            self._drop_cache()
             return
-        
+
         valid_agents_ids = acc_agent_ctx.valid_agents_ids
         if not valid_agents_ids:
-            self._allegiance_cache = {}
-            return 
+            self._drop_cache()
+            return
 
+        cache = {
+            "ally": [],
+            "neutral": [],
+            "enemy": [],
+            "spirit_pet": [],
+            "minion": [],
+            "npc_minipet": [],
+            "living": [],
+            "item": [],
+            "owned_item": [],
+            "gadget": [],
+            "dead_ally": [],
+            "dead_enemy": [],
+            "all": [],
+        }
+        
+        agent_by_id: dict[int, "AgentStruct"] = {}
+        
         # Single iteration — uses movement-valid agents only
         for agent in self._iter_valid_agents():
             if agent.agent_id not in valid_agents_ids:
                 continue
             
-            #PyAgent.PyAgent.GetNameByID(agent.agent_id)  # Warm up name cache
-            self.raw_agent_list.append(agent)
-            
+            # ---- CRITICAL: snapshot NOW (Python-owned) ----
             aid = agent.agent_id
-            self._allegiance_cache["all"].append(aid)
-            self._allegiance_cache["all_raw"].append(agent)
+            if aid == 0:
+                continue
+            
+            cache["all"].append(aid)
+            agent_by_id[aid] = agent
             
             if agent.is_gadget_type:
-                self._allegiance_cache["gadget"].append(aid)
-                self._allegiance_cache["gadget_raw"].append(agent)
+                cache["gadget"].append(aid)
                 continue
             
             if agent.is_item_type:
@@ -567,11 +1166,9 @@ class AgentArrayStruct(Structure):
                     continue
 
                 if item and item.owner!= 0:
-                    self._allegiance_cache["owned_item"].append(aid)
-                    self._allegiance_cache["owned_item_raw"].append(agent)
+                    cache["owned_item"].append(aid)
                 
-                self._allegiance_cache["item"].append(aid)
-                self._allegiance_cache["item_raw"].append(agent)
+                cache["item"].append(aid)
                 continue
             
             # ---------- LIVING types ----------
@@ -582,8 +1179,7 @@ class AgentArrayStruct(Structure):
             if not living:
                 continue
             
-            self._allegiance_cache["living"].append(aid)
-            self._allegiance_cache["living_raw"].append(agent)
+            cache["living"].append(aid)
 
             """ 1: "ally",
                 2: "neutral",
@@ -591,129 +1187,101 @@ class AgentArrayStruct(Structure):
                 4: "spirit_pet",
                 5: "minion",
                 6: "npc_minipet","""
-
                    
             match living.allegiance:
                 case 1:
-                    self._allegiance_cache["ally"].append(aid)
-                    self._allegiance_cache["ally_raw"].append(agent)
+                    cache["ally"].append(aid)
                     if living.is_dead:
-                        self._allegiance_cache["dead_ally"].append(aid)
-                        self._allegiance_cache["dead_ally_raw"].append(agent)
+                        cache["dead_ally"].append(aid)
                 case 2:
-                    self._allegiance_cache["neutral"].append(aid)
-                    self._allegiance_cache["neutral_raw"].append(agent)
+                    cache["neutral"].append(aid)
                 case 3:
-                    self._allegiance_cache["enemy"].append(aid)
-                    self._allegiance_cache["enemy_raw"].append(agent)
+                    cache["enemy"].append(aid)
                     if living.is_dead:
-                        self._allegiance_cache["dead_enemy"].append(aid)
-                        self._allegiance_cache["dead_enemy_raw"].append(agent)
+                        cache["dead_enemy"].append(aid)
                 case 4:
-                    self._allegiance_cache["spirit_pet"].append(aid)
-                    self._allegiance_cache["spirit_pet_raw"].append(agent)
+                    cache["spirit_pet"].append(aid)
                 case 5:
-                    self._allegiance_cache["minion"].append(aid)
-                    self._allegiance_cache["minion_raw"].append(agent)
+                    cache["minion"].append(aid)
                 case 6:
-                    self._allegiance_cache["npc_minipet"].append(aid)
-                    self._allegiance_cache["npc_minipet_raw"].append(agent)
+                    cache["npc_minipet"].append(aid)
+            
+        self._allegiance_cache = cache
+        self._agent_by_id = agent_by_id
+
 
     
-    def GetAgentByID(self, agent_id: int) -> Optional[AgentStruct]:
-        """Retrieve an Agent by its AgentID."""
-        self._ensure_cache_up_to_date()
-        for agent in self.raw_agent_list:
-            if agent.agent_id == agent_id:
-                return agent
-        return None
+    # ------------------------------------------------------------
+    # O(1) lookup (uses the snapshot dictionary built per frame)
+    # ------------------------------------------------------------
+    def GetAgentByID(self, agent_id: int) -> Optional["AgentStruct"]:
+        self._ensure_fields()
+        
+        map_ctx = MapContext.get_context()
+        char_ctx = CharContext.get_context()
+        instance_info_ctx = InstanceInfo.get_context()
+        world_ctx = WorldContext.get_context()
+        acc_agent_ctx = AccAgentContext.get_context()
+
+        if not (map_ctx and char_ctx and instance_info_ctx and world_ctx and acc_agent_ctx):
+            self._drop_cache()
+            return None
+        
+        instance_type = instance_info_ctx.instance_type
+        if instance_type not in (0, 1):  # explorable, story, pvp
+            self._drop_cache()
+            return None
+        
+        agent =  self._agent_by_id.get(agent_id)
+        return agent
+
+
     
     #AgentArray
     def GetAgentArray(self) -> list[int]:
         """Retrieve the raw agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("all", [])
     
-    def GetAgentArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the raw agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("all_raw", [])
-    
     #AllyArray
     def GetAllyArray(self) -> list[int]:
         """Retrieve the ally agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("ally", [])
     
-    def GetAllyArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the ally agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("ally_raw", [])
-    
     #neutral
     def GetNeutralArray(self) -> list[int]:
         """Retrieve the neutral agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("neutral", [])
     
-    def GetNeutralArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the neutral agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("neutral_raw", [])
-    
     #enemy
     def GetEnemyArray(self) -> list[int]:
         """Retrieve the enemy agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("enemy", [])
     
-    def GetEnemyArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the enemy agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("enemy_raw", [])
-    
     #spirit_pet
     def GetSpiritPetArray(self) -> list[int]:
         """Retrieve the spirit/pet agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("spirit_pet", [])
     
-    def GetSpiritPetArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the spirit/pet agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("spirit_pet_raw", [])
-    
     #minion
-    def GetMinionArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the minion agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("minion_raw", [])
     
     def GetMinionArray(self) -> list[int]:
         """Retrieve the minion agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("minion", [])
@@ -721,92 +1289,54 @@ class AgentArrayStruct(Structure):
     #npc-minipet
     def GetNPCMinipetArray(self) -> list[int]:
         """Retrieve the NPC/minipet agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("npc_minipet", [])
     
-    def GetNPCMinipetArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the NPC/minipet agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("npc_minipet_raw", [])
     
     #item
     def GetItemAgentArray(self) -> list[int]:
         """Retrieve the item agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("item", [])
     
-    def GetItemAgentArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the item agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("item_raw", [])
-    
     #owned item
     def GetOwnedItemAgentArray(self) -> list[int]:
         """Retrieve the owned item agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("owned_item", [])
     
-    def GetOwnedItemAgentArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the owned item agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("owned_item_raw", [])
-    
     #gadget
     def GetGadgetAgentArray(self) -> list[int]:
         """Retrieve the gadget agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("gadget", [])
     
-    def GetGadgetAgentArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the gadget agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("gadget_raw", [])
-    
+
     #dead ally/enemy
     def GetDeadAllyArray(self) -> list[int]:
         """Retrieve the dead ally agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("dead_ally", [])
     
-    def GetDeadEnemyArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the dead enemy agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("dead_enemy_raw", [])
-    
+
     def GetDeadEnemyArray(self) -> list[int]:
         """Retrieve the dead enemy agent array as a list of AgentIDs."""
-        self._ensure_cache_up_to_date()
+        #self._ensure_cache_up_to_date()
         if not self._allegiance_cache:
             return []
         return self._allegiance_cache.get("dead_enemy", [])
     
-    def GetDeadAllyArrayRaw(self) -> list[AgentStruct]:
-        """Retrieve the dead ally agent array as a list of AgentStructs."""
-        self._ensure_cache_up_to_date()
-        if not self._allegiance_cache:
-            return []
-        return self._allegiance_cache.get("dead_ally_raw", [])
-    
+
     
     
     
@@ -823,49 +1353,61 @@ class AgentArray:
     _ptr: int = 0
     _cached_ptr: int = 0
     _cached_ctx: AgentArrayStruct | None = None
-    _callback_name = "AgentArray.UpdateAgentArrayPtr"
+    _callback_name_ptr = "AgentArray.UpdatePtr"
+    _callback_name_cache = "AgentArray.UpdateCache"
 
     @staticmethod
     def get_ptr() -> int:
         return AgentArray._ptr    
     @staticmethod
     def _update_ptr():
-        AgentArray._ptr = AgentArray_GetPtr.read_ptr()
+        ptr = AgentArray_GetPtr.read_ptr()
+        AgentArray._ptr = ptr
+        if not ptr:
+            AgentArray._cached_ctx = None
+            return
+        AgentArray._cached_ctx = cast(
+            ptr,
+            POINTER(AgentArrayStruct)
+        ).contents
+
+    @staticmethod
+    def _update_cache():
+        ctx = AgentArray.get_context()
+        if not ctx:
+            return
+        ctx._ensure_cache_up_to_date()
 
     @staticmethod
     def enable():
-        Game.register_callback(
-            AgentArray._callback_name,
-            AgentArray._update_ptr
+        import PyCallback
+        PyCallback.PyCallback.Register(
+            AgentArray._callback_name_ptr,
+            PyCallback.Phase.PreUpdate,
+            AgentArray._update_ptr,
+            priority=6
         )
+
+        PyCallback.PyCallback.Register(
+            AgentArray._callback_name_cache,
+            PyCallback.Phase.Data,
+            AgentArray._update_cache,
+            priority=0
+        )  
+
 
     @staticmethod
     def disable():
-        Game.remove_callback(AgentArray._callback_name)
+        import PyCallback
+        PyCallback.PyCallback.RemoveByName(AgentArray._callback_name_ptr)
+        PyCallback.PyCallback.RemoveByName(AgentArray._callback_name_cache)
         AgentArray._ptr = 0
-        AgentArray._cached_ptr = 0
         AgentArray._cached_ctx = None
 
     @staticmethod
     def get_context() -> AgentArrayStruct | None:
-        ptr = AgentArray._ptr
-        if not ptr:
-            # context lost → drop cache
-            AgentArray._cached_ctx = None
-            AgentArray._cached_ptr = 0
-            return None
-
-        # pointer changed? (map load, zone change, etc.)
-        if ptr != AgentArray._cached_ptr:
-            AgentArray._cached_ptr = ptr
-            AgentArray._cached_ctx = cast(
-                ptr,
-                POINTER(AgentArrayStruct)
-            ).contents
-
         return AgentArray._cached_ctx
     
-    
-        
-        
+          
 AgentArray.enable()
+
