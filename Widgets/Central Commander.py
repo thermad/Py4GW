@@ -1,5 +1,6 @@
 # region Imports
 import os
+import random
 import traceback
 from collections import deque
 
@@ -268,7 +269,7 @@ class RPCRegistry:
 
 def RelativeMove(x, y):
     _x, _y = GW.Player.GetXY()
-    GW.GLOBAL_CACHE.Player.Move(_x + x, _y + y)
+    GW.Player.Move(_x + x, _y + y)
 
 
 class RPC(Enum):
@@ -283,10 +284,10 @@ class RPC(Enum):
 
 
 registry = RPCRegistry()
-registry.register(RPC.MOVE.value, GW.GLOBAL_CACHE.Player.Move)
+registry.register(RPC.MOVE.value, GW.Player.Move)
 registry.register(RPC.GETSKILLBAR.value, GW.GLOBAL_CACHE.SkillBar.GetSkillbar)
 registry.register(RPC.GETEFFECTS.value, Jsonizer.get_effects)
-registry.register(RPC.GET_PLAYER_ID.value, GW.GLOBAL_CACHE.Player.GetAgentID)
+registry.register(RPC.GET_PLAYER_ID.value, GW.Player.GetAgentID)
 registry.register(RPC.GET_PLAYER_DATA.value, Jsonizer.player_data)
 registry.register(RPC.USE_SKILL.value, GW.GLOBAL_CACHE.SkillBar.UseSkill)
 registry.register(RPC.DROP_BOND.value, GW.GLOBAL_CACHE.Effects.DropBuff)
@@ -385,7 +386,17 @@ class Client:
                     self.return_queue.append(data)
                     while len(self.command_queue) < 1:
                         time.sleep(0.1)
-                    TCPUtils.send_message(sock, self.command_queue.popleft())
+                    get_data = deque()
+                    other_calls = deque()
+                    for x in self.command_queue:
+                        if isinstance(x, Mapping):
+                            (get_data if x.get("method", 0) == RPC.GET_PLAYER_DATA.value else other_calls).append(x)
+                    if len(other_calls) > 0:
+                        TCPUtils.send_message(sock, other_calls.popleft())
+                    elif len(get_data) > 0:
+                        TCPUtils.send_message(sock, get_data.popleft())
+                    self.command_queue = other_calls
+
         finally:
             print("Client disconnected")
             self.containing_list.remove(self)
@@ -423,6 +434,7 @@ class Behavior:
 
     def use_skill_by_id(self, client: Client, skill_id, target=0):
         slot = self.get_skill_slot_by_id(client, skill_id)
+        print(f"using skill by id. ID: {skill_id}, slot {slot}")
         client.send_command(RPC.USE_SKILL, [slot, target])
 
     def update_client_info(self):
@@ -446,6 +458,7 @@ class Behavior:
                             if self.client_data.get(c, 0) == 0:
                                 self.client_data[c] = data["returned"]
                             else:
+                                self.client_data[c].clear()
                                 self.client_data[c].update(data["returned"])
 
     def cast_skill_wait_for_effect(self, client: Client, skill_id, my_name):
@@ -471,13 +484,18 @@ class Behavior:
                 thread_name, 0) != 0:
             time.sleep(0.01)
 
-    def move_to_wait(self, client: Client, pos: Vec2, my_name, tolerance=50):
+    def move_to_wait(self, client: Client, pos: Vec2, my_name, tolerance=100):
         try:
             if not client:
                 return
             p: Vec2 = Vec2.from_tuple(GW.Agent.GetXY(self.get_id(client)))
+            counter = 0
             while self.cache_thread_globals.is_threads_running and (p - pos).magnitude() > tolerance:
-                client.send_command(RPC.MOVE, pos.as_list())
+                if counter % 15 == 0:
+                    client.send_command(RPC.RELATIVE_MOVE, [20, 20])
+                counter += 1
+                x, y = pos.as_tuple()
+                client.send_command(RPC.MOVE, [x + random.randrange(-20, 20), y + random.randrange(-20, 20)])
                 time.sleep(0.1)
                 p = Vec2.from_tuple(GW.Agent.GetXY(self.get_id(client)))
         finally:
@@ -512,6 +530,7 @@ class BehaviorPermaseedPrinter(Behavior):
     def __init__(self, thread_globals: CacheThreadGlobals):
         super().__init__(thread_globals)
         self.target_minion_count = 20
+        self.state = 0
 
     def run_(self):
         weapon_of_quickening = 1268
@@ -608,22 +627,11 @@ class BehaviorPermaseedPrinter(Behavior):
         self.wait_for_thread(mona_thread)
         self.wait_for_thread(monb_thread)
         time.sleep(0.75)
-        while self.cache_thread_globals.is_threads_running and self.client_data.get(mona).get("hp", 100) != 0:
-            if self.client_data.get(mona).get("skilldata", dict()).get(str(agony), dict()).get("get_recharge", 10000) == 0:
-                mona.send_command(RPC.USE_SKILL, [8, 0])
-            time.sleep(0.1)
+        self.cache_thread_globals.thread_manager.add_thread(mona_thread, self.sac_wait, mona, agony,
+                                                            mona_thread)
+        self.wait_for_thread(mona_thread)
         time.sleep(0.1)
-        # mona is dead, monb has UA up
-        buff_id = 0
-        timout = 10
-        while buff_id == 0 and self.cache_thread_globals.is_threads_running and timout > 0:
-            buff_id = self.client_data.get(monb, dict()).get("buffs", dict()).get(str(ua), dict()).get("buff_id", 0)
-            time.sleep(0.1)
-            timout -= 1
-        if timout <= 0:
-            print("Somehow buff wasn't found")
-            return False
-        monb.send_command(RPC.DROP_BOND, [buff_id])
+        self.ua_res(monb, self.get_id(mona), ua)
         return False
 
     def ua_res(self, client: Client, res_target_id, ua):
@@ -636,28 +644,71 @@ class BehaviorPermaseedPrinter(Behavior):
             time.sleep(0.2)
 
     def use_ua_minion_res_drop(self, client: Client, res_target_id, ua, minion):
-        thread_name = f"uathread{res_target_id}"
-        self.cache_thread_globals.thread_manager.add_thread(thread_name, self.cast_skill_wait_for_effect, client, ua, thread_name)
-        self.wait_for_thread(thread_name)
+        while self.cache_thread_globals.is_threads_running:
+            buff_id = self.client_data.get(client, dict()).get("buffs", dict()).get(str(ua), dict()).get("buff_id", 0)
+            if buff_id == 0:
+                self.use_skill_by_id(client, ua, 0)
+            else:
+                break
+            time.sleep(0.2)
         while self.cache_thread_globals.is_threads_running and GW.Agent.GetCastingSkillID(self.get_id(client)) != minion:
             self.use_skill_by_id(client, minion, 0)
             time.sleep(0.5)
-        while self.cache_thread_globals.is_threads_running and GW.Agent.IsCasting(self.get_id(client)):
+        print("casting minion skill detected")
+        while self.cache_thread_globals.is_threads_running and self.client_data.get(client, dict()).get("skilldata", dict()).get(str(minion), dict()).get("get_recharge", 0) == 0:
             time.sleep(0.1)
+        print("cooldown on skill detected, resing")
         self.ua_res(client, res_target_id, ua)
 
     def sac_wait(self, client: Client, sac_skill, my_name):
         try:
             if not client:
                 return
-            while self.cache_thread_globals.is_threads_running and GW.Agent.IsAlive(self.get_id(client)):
+            counter = 1
+            while self.cache_thread_globals.is_threads_running and GW.Agent.IsAlive(self.get_id(client)) and self.client_data[client].get("hp", 1) > 0:
                 self.use_skill_by_id(client, sac_skill)
                 time.sleep(0.3)
+                if counter % 15 == 0:
+                    client.send_command(RPC.RELATIVE_MOVE, [20, 20])
         finally:
             print(f"Popped sacc thread {my_name}")
             self.cache_thread_globals.thread_manager.threads.pop(my_name)
+    
+    def tank_minions_without_seed(self, woq, soa, sh, ha, khc, balth_spirit):
+        try:
+            while self.cache_thread_globals.is_threads_running:
+                time.sleep(0.05)
+                id = GW.Player.GetAgentID()
+                if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(id, balth_spirit) < 2000:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(balth_spirit), id)
+                    time.sleep(2.75)
+                    continue
+                if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(id, woq) < 4000:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq), id)
+                    time.sleep(2.75)
+                    continue
+                if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(id, sh) < 3000:
+                    if GW.GLOBAL_CACHE.SkillBar.GetSkillData(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(sh)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(sh), id)
+                        time.sleep(1)
+                        continue
+                    elif GW.GLOBAL_CACHE.SkillBar.GetSkillData(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(soa)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(soa), id)
+                        time.sleep(1.75)
+                        continue
+                if GW.Agent.GetEnergy(id) > 0.9:
+                    if GW.GLOBAL_CACHE.SkillBar.GetSkillData(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha), id)
+                        time.sleep(1.75)
+                        continue
+                    elif GW.GLOBAL_CACHE.SkillBar.GetSkillData(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc), id)
+                        time.sleep(1.75)
+                        continue
+        finally:
+            pass
 
-    def minion_print_loop(self, dark_aura, agony, balth_spirit, minion, ua):
+    def minion_print_loop(self, dark_aura, agony, balth_spirit, minion, ua, weapon_of_quickening, soa, sh, ha, khc):
         mona: Client = next((x for x in self.client_list if (self.client_data.get(x, dict()).get("max_hp", 100) == 1)), None)
         monb: Client = next((x for x in self.client_list if x is not mona and (self.client_data.get(x, dict()).get("max_hp", 100) == 1)), None)
         if not (mona and monb):
@@ -665,11 +716,15 @@ class BehaviorPermaseedPrinter(Behavior):
             return False
         mona_thread = "mona_casting_thread"
         monb_thread = "monb_casting_thread"
+        rit_thread = "rit_thread"
         rit_x, rit_y = GW.Player.GetXY()
+        if len(GW.Routines.Agents.GetFilteredEnemyArray(rit_x, rit_y, 200)) >= self.target_minion_count:
+            return
         mona_x, mona_y = GW.Agent.GetXY(self.get_id(mona))
         vec_from_rit: Vec2 = Vec2(mona_x - rit_x, mona_y - rit_y)
         vec_from_rit = vec_from_rit.normalized()
         #First time setup, sac close to rit to get minions aggroed on rit.
+        self.cache_thread_globals.thread_manager.add_thread(rit_thread, self.tank_minions_without_seed, weapon_of_quickening, soa, sh, ha, khc, balth_spirit)
         self.cache_thread_globals.thread_manager.add_thread(mona_thread, self.move_to_wait, mona, (Vec2.from_tuple(GW.Player.GetXY()) + (vec_from_rit * 300)), mona_thread)
         self.cache_thread_globals.thread_manager.add_thread(monb_thread, self.move_to_wait, monb, (Vec2.from_tuple(GW.Player.GetXY()) + (vec_from_rit * 300)), monb_thread)
         self.wait_for_thread(monb_thread)
@@ -678,7 +733,6 @@ class BehaviorPermaseedPrinter(Behavior):
         self.cache_thread_globals.thread_manager.add_thread(mona_thread, self.cast_skill_wait_for_effect, mona, ua, mona_thread)
         self.wait_for_thread(monb_thread)
         self.wait_for_thread(mona_thread)
-        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(balth_spirit), GW.Player.GetAgentID(), 0.75)
         self.cache_thread_globals.thread_manager.add_thread(monb_thread, self.sac_wait, monb, agony,
                                                             monb_thread)
         self.wait_for_thread(mona)
@@ -686,11 +740,11 @@ class BehaviorPermaseedPrinter(Behavior):
         print("Entering main printing loop")
         while self.cache_thread_globals.is_threads_running and len(GW.Routines.Agents.GetFilteredEnemyArray(rit_x, rit_y, 200)) < self.target_minion_count:
             monb.send_command(RPC.MOVE, (Vec2.from_tuple(GW.Player.GetXY()) + vec_from_rit * 1500).as_list())
-            self.cache_thread_globals.thread_manager.add_thread(
-                mona_thread, self.cast_skill_wait_for_effect, mona, dark_aura, mona_thread)
+            # self.cache_thread_globals.thread_manager.add_thread(
+            #     mona_thread, self.cast_skill_wait_for_effect, mona, dark_aura, mona_thread)
             self.cache_thread_globals.thread_manager.add_thread(monb_thread, self.move_to_wait, monb, (
                         Vec2.from_tuple(GW.Player.GetXY()) + (vec_from_rit * 1500)), monb_thread)
-            self.wait_for_thread(mona_thread)
+            # self.wait_for_thread(mona_thread)
             self.wait_for_thread(monb_thread)
             self.cache_thread_globals.thread_manager.add_thread(mona_thread, self.sac_wait, mona, agony,
                                                                 mona_thread)
@@ -712,8 +766,90 @@ class BehaviorPermaseedPrinter(Behavior):
                 Vec2.from_tuple(GW.Player.GetXY()) + (vec_from_rit * 1000)), mona_thread)
         self.wait_for_thread(mona_thread)
         self.wait_for_thread(monb_thread)
+        self.cache_thread_globals.thread_manager.stop_thread(rit_thread)
 
-    def permaseed(self, weapon_of_quickening, seed, heal_area, khc, blessed_aura):
+    def rit_tank_with_seed(self, woq, ha, khc, sh, mona: Client, monb: Client):
+        try:
+            last_heal = time.time()
+            last_mona_woq = 0
+            last_monb_woq = 0
+            step = 1
+            while self.cache_thread_globals.is_threads_running:
+                time.sleep(0.05)
+                id = GW.Player.GetAgentID()
+                mona_woq = self.get_effect(mona, woq)
+                monb_woq = self.get_effect(monb, woq)
+                if GW.Agent.GetEnergy(id) > 0.9:
+                    if GW.GLOBAL_CACHE.SkillBar.GetSkillData(
+                            GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha), id)
+                    elif GW.GLOBAL_CACHE.SkillBar.GetSkillData(
+                            GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc), id)
+                    time.sleep(2)
+                    if GW.GLOBAL_CACHE.SkillBar.GetSkillData(
+                            GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq)).get_recharge != 0:
+                        continue
+                    match step:
+                        case 1:
+                            GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq), id)
+                            time.sleep(1.75)
+                        case 3:
+                            GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq),
+                                                              self.get_id(monb))
+                            time.sleep(1.75)
+                        case 5:
+                            GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq),
+                                                              self.get_id(mona))
+                            time.sleep(1.75)
+                    step = (step + 1) % 6
+        finally:
+            pass
+
+    def rit_tank_with_seed_(self, woq, ha, khc, sh, mona: Client, monb: Client):
+        try:
+            last_heal = time.time()
+            last_mona_woq = 0
+            last_monb_woq = 0
+            while self.cache_thread_globals.is_threads_running:
+                time.sleep(0.05)
+                id = GW.Player.GetAgentID()
+                mona_woq = self.get_effect(mona, woq)
+                monb_woq = self.get_effect(monb, woq)
+                if GW.Agent.GetEnergy(id) > 0.9 or time.time() - last_heal > 7:
+                    if GW.GLOBAL_CACHE.SkillBar.GetSkillData(
+                            GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(ha), id)
+                        time.sleep(1.75)
+                        last_heal = time.time()
+                        continue
+                    elif GW.GLOBAL_CACHE.SkillBar.GetSkillData(
+                            GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc)).get_recharge == 0:
+                        GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(khc), id)
+                        time.sleep(1.75)
+                        last_heal = time.time()
+                        continue
+                if mona_woq < 8000:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq), self.get_id(mona))
+                    time.sleep(2.75)
+                    continue
+                if monb_woq < 8000:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq), self.get_id(monb))
+                    time.sleep(2.75)
+                    continue
+                if mona_woq == last_mona_woq:
+                    print(f"woq on mona {self.get_effect(mona, woq)} full data: {self.client_data[mona]}")
+                else:
+                    last_mona_woq = mona_woq
+                    last_monb_woq = monb_woq
+                if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(id, woq) < 5000:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(woq), id)
+                    time.sleep(2.75)
+                    continue
+        finally:
+            pass
+
+    def permaseed(self, weapon_of_quickening, seed, heal_area, khc, blessed_aura, sh):
         mona: Client = next((x for x in self.client_list if (self.client_data.get(x, dict()).get("max_hp", 100) == 1)),
                             None)
         monb: Client = next((x for x in self.client_list if
@@ -723,26 +859,23 @@ class BehaviorPermaseedPrinter(Behavior):
             return False
         mona_thread = "mona_casting_thread"
         monb_thread = "monb_casting_thread"
+        rit_thread = "rit_thread"
+        self.cache_thread_globals.thread_manager.add_thread(rit_thread, self.rit_tank_with_seed, weapon_of_quickening, heal_area, khc, sh, mona, monb)
         self.cache_thread_globals.thread_manager.add_thread(monb_thread, self.cast_skill_wait_for_effect, monb,
                                                             blessed_aura, monb_thread)
         self.cache_thread_globals.thread_manager.add_thread(mona_thread, self.cast_skill_wait_for_effect, mona, blessed_aura,
                                                             mona_thread)
         self.wait_for_thread(monb_thread)
         self.wait_for_thread(mona_thread)
-
-        heal_one, heal_two = heal_area, khc
         while self.cache_thread_globals.is_threads_running:
             mona_quickening = self.get_effect(mona, weapon_of_quickening)
-            while self.cache_thread_globals.is_threads_running and mona_quickening < 5000:
-                GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening), self.get_id(mona), 0.75)
-                time.sleep(2.75)
-                mona_quickening = self.get_effect(mona, weapon_of_quickening)
-            if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(GW.Player.GetAgentID(), seed) < 1000 and mona_quickening > 300:
-                mona.send_command(RPC.USE_SKILL, [seed, GW.Player.GetAgentID()])
-            GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(heal_one), 0,
-                                              0.75)
-            time.sleep(1.75)
-            heal_one, heal_two = heal_two, heal_one
+            if GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(GW.Player.GetAgentID(), seed) < 1000:
+                if mona_quickening > 500:
+                    self.use_skill_by_id(mona, seed, GW.Player.GetAgentID())
+                    # mona.send_command(RPC.USE_SKILL, [seed, GW.Player.GetAgentID()])
+                else:
+                    GW.GLOBAL_CACHE.SkillBar.UseSkill(GW.GLOBAL_CACHE.SkillBar.GetSlotBySkillID(sh), GW.Player.GetAgentID())
+            time.sleep(0.25)
             mona, monb = monb, mona
 
     def run(self):
@@ -772,12 +905,14 @@ class BehaviorPermaseedPrinter(Behavior):
         while self.cache_thread_globals.is_threads_running and not self.first_death_sequence(dark_aura, ua, agony):
             time.sleep(0.1)
             print("First Death sequence")
+        #self.state = 1
         #print minions
         time.sleep(0.5)
         print("Entering minon print")
-        self.minion_print_loop(dark_aura, agony, balth_spirit, animate_minions, ua)
+        self.minion_print_loop(dark_aura, agony, balth_spirit, animate_minions, ua, weapon_of_quickening, shield_of_absorption, shielding_hands, heal_area, kareis_healing_circle)
+        #self.state = 2
         print("Finished printing minions")
-        self.permaseed(weapon_of_quickening, seed, heal_area, kareis_healing_circle, blessed_aura)
+        self.permaseed(weapon_of_quickening, seed, heal_area, kareis_healing_circle, blessed_aura, shielding_hands)
 
 
 
@@ -937,12 +1072,12 @@ class CentralCommander:
                 while self.cache_thread_globals.is_threads_running and tcp_socket:
                     try:
                         data = TCPUtils.recv_message(tcp_socket)  # tcp_socket.recv(self.PACKET_SIZE)
-                        print(f"Data was {data}")
+                        # print(f"Data was {data}")
                         method = data["method"]
                         data = {"returned": registry.call(data["method"], data["args"],
                                                           data["kwargs"] if data.keys().__contains__("kwargs") else {}),
                                 "method": method}
-                        print(f"Data return {data}")
+                        # print(f"Data return {data}")
                         if data:  # echo data back to server
                             TCPUtils.send_message(tcp_socket, data)
 

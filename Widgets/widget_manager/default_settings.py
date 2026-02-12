@@ -264,6 +264,13 @@ global_widget_defaults = {
         "icon": "ICON_CROSSHAIRS",
         "quickdock": "True",
     },
+    "Central Commander": {
+        "enabled": "False",
+        "category": "Bots",
+        "subcategory": "Multiboxing",
+        "icon": "ICON_BRAIN",
+        "quickdock": "True",
+    },
     # TODO: Register your Widget here
 }
 
