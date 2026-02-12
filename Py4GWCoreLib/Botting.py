@@ -22,6 +22,7 @@ from .botting_src.subclases_src.MULTIBOX_src import _MULTIBOX
 from .botting_src.subclases_src.MERCHANT_src import _MERCHANTS
 from .botting_src.subclases_src.PLAYER_src import _PLAYER
 from .botting_src.subclases_src.TEMPLATES_src import _TEMPLATES
+from .botting_src.subclases_src.QUEST_src import _QUEST
 
 class BottingClass:
     def __init__(self, bot_name="DefaultBot",
@@ -97,6 +98,8 @@ class BottingClass:
                  #S
                  upkeep_slice_of_pumpkin_pie_active: bool = False,
                  upkeep_slice_of_pumpkin_pie_restock: int = 0,
+                 #S
+                 upkeep_summoning_stone_active: bool = False,
                  #W
                  upkeep_war_supplies_active: bool = False,
                  upkeep_war_supplies_restock: int = 0,
@@ -181,6 +184,7 @@ class BottingClass:
                                 #S
                                 slice_of_pumpkin_pie_active=upkeep_slice_of_pumpkin_pie_active,
                                 slice_of_pumpkin_pie_restock=upkeep_slice_of_pumpkin_pie_restock,
+                                summoning_stone_active=upkeep_summoning_stone_active,
                                 #W
                                 war_supplies_active=upkeep_war_supplies_active,
                                 war_supplies_restock=upkeep_war_supplies_restock,
@@ -210,6 +214,7 @@ class BottingClass:
         self.SkillBar = _SKILLBAR(self)
         self.Multibox = _MULTIBOX(self)
         self.Templates = _TEMPLATES(self)
+        self.Quest = _QUEST(self)
 
     #region internal Helpers
     def _start_coroutines(self):
@@ -235,6 +240,7 @@ class BottingClass:
         self.config.FSM.AddManagedCoroutine("keep_pahnai_salad",   H.upkeep_pahnai_salad())
         self.config.FSM.AddManagedCoroutine("keep_war_supplies",   H.upkeep_war_supplies())
         self.config.FSM.AddManagedCoroutine("keep_imp",            H.upkeep_imp())
+        self.config.FSM.AddManagedCoroutine("keep_summoning_stone", H.upkeep_summoning_stone())
         self.config.FSM.AddManagedCoroutine("keep_auto_combat",    H.upkeep_auto_combat())
         self.config.FSM.AddManagedCoroutine("keep_hero_ai",        H.upkeep_hero_ai())
         self.config.FSM.AddManagedCoroutine("keep_auto_inventory_management", H.upkeep_auto_inventory_management())

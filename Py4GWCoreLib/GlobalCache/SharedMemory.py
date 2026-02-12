@@ -960,8 +960,8 @@ class Py4GWSharedMemoryManager:
         if index == -1:
             existing_index = self.FindExistingAccountSlot(account_email)
             index = existing_index if existing_index is not None else self.FindEmptySlot()
-            ConsoleLog(SMM_MODULE_NAME, f"No active slot found for account email '{account_email}'." +
-                       (f"Reusing previously used slot {index}." if existing_index is not None else f"Using empty slot {index}."), Py4GW.Console.MessageType.Info)
+            #ConsoleLog(SMM_MODULE_NAME, f"No active slot found for account email '{account_email}'." +
+            #           (f"Reusing previously used slot {index}." if existing_index is not None else f"Using empty slot {index}."), Py4GW.Console.MessageType.Info)
             player = self.GetStruct().AccountData[index]
             player.IsSlotActive = True
             player.AccountEmail = account_email
@@ -1731,7 +1731,7 @@ class Py4GWSharedMemoryManager:
             pet.PlayerFacingAngle = agent_instance.rotation_angle
             pet.PlayerTargetID = pet_info.locked_target_id
             
-            effects_instance = Effects.get_instance(Player.GetAgentID())
+            effects_instance = Effects.get_instance(agent_id)
             buffs = effects_instance.GetEffects() + effects_instance.GetBuffs()
             for j in range(SHMEM_MAX_NUMBER_OF_BUFFS):
                 buff = buffs[j] if j < len(buffs) else None
@@ -1808,6 +1808,28 @@ class Py4GWSharedMemoryManager:
                 count += 1
         return count
         
+    def GetAllActiveSlotsData(self) -> list[AccountData]:
+        """Get all active slot data, ordered by PartyID, PartyPosition, PlayerLoginNumber, CharacterName."""
+        accs : list[AccountData] = []
+        for i in range(self.max_num_players):
+            acc = self.GetStruct().AccountData[i]
+            if self._is_slot_active(i):
+                accs.append(acc)
+
+        # Sort by PartyID, then PartyPosition, then PlayerLoginNumber, then CharacterName
+        accs.sort(key=lambda p: (
+            p.MapID,
+            p.MapRegion,
+            p.MapDistrict,
+            p.MapLanguage,
+            p.PartyID,
+            p.PartyPosition,
+            p.PlayerLoginNumber,
+            p.CharacterName
+        ))
+
+        return accs
+    
     def GetAllAccountData(self) -> list[AccountData]:
         """Get all player data, ordered by PartyID, PartyPosition, PlayerLoginNumber, CharacterName."""
         players : list[AccountData] = []
@@ -1838,7 +1860,7 @@ class Py4GWSharedMemoryManager:
         if index != -1:
             return self.GetStruct().AccountData[index]
         else:
-            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error, log = log)
+            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error, log = False)
             return None
      
     def GetAccountDataFromPartyNumber(self, party_number: int, log : bool = False) -> AccountData | None:
@@ -1848,7 +1870,7 @@ class Py4GWSharedMemoryManager:
             if self._is_slot_active(i) and player.PartyPosition == party_number:
                 return player
         
-        ConsoleLog(SMM_MODULE_NAME, f"Party number {party_number} not found.", Py4GW.Console.MessageType.Error, log = log)
+        ConsoleLog(SMM_MODULE_NAME, f"Party number {party_number} not found.", Py4GW.Console.MessageType.Error, log = False)
         return None
     
     def HasEffect(self, account_email: str, effect_id: int) -> bool:
@@ -1880,7 +1902,7 @@ class Py4GWSharedMemoryManager:
         if index != -1:
             return self.GetStruct().HeroAIOptions[index]
         else:
-            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error)
+            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error, log = False)
             return None
         
     def GetGerHeroAIOptionsByPartyNumber(self, party_number: int) -> HeroAIOptionStruct | None:
@@ -1900,7 +1922,7 @@ class Py4GWSharedMemoryManager:
         if index != -1:
             self.GetStruct().HeroAIOptions[index] = options
         else:
-            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error)
+            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error, log = False)
     
     def SetHeroAIProperty(self, account_email: str, property_name: str, value):
         """Set a specific HeroAI property for the account with the given email."""
@@ -1923,7 +1945,7 @@ class Py4GWSharedMemoryManager:
             else:
                 ConsoleLog(SMM_MODULE_NAME, f"Property {property_name} does not exist in HeroAIOptions.", Py4GW.Console.MessageType.Error)
         else:
-            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error)
+            ConsoleLog(SMM_MODULE_NAME, f"Account {account_email} not found.", Py4GW.Console.MessageType.Error, log = False)
     
     def GetMapsFromPlayers(self):
         """Get a list of unique maps from all active players."""

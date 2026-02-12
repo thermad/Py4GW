@@ -7,7 +7,7 @@ from HeroAI.constants import (FOLLOW_DISTANCE_OUT_OF_COMBAT, MAX_NUM_PLAYERS, ME
                               PARTY_WINDOW_FRAME_OUTPOST_OFFSETS, PARTY_WINDOW_HASH, RANGED_RANGE_VALUE)
 from Py4GWCoreLib.ImGui_src.WindowModule import WindowModule
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData, HeroAIOptionStruct, SharedMessage
-from Py4GW_widget_manager import WidgetHandler
+from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 
 from .constants import MAX_NUM_PLAYERS, NUMBER_OF_SKILLS
 from .types import SkillType, SkillNature, Skilltarget
@@ -43,7 +43,7 @@ class HeroAI_FloatingWindows():
     ACCOUNT_THROTTLE = ThrottledTimer(500)
     hero_windows : dict[str, WindowModule] = {}
     messages : list[tuple[int, SharedMessage]] = []
-    widget_handler = WidgetHandler()
+    widget_handler = get_widget_handler()
     init_success:bool  = False
     module_info = None
     
@@ -261,7 +261,7 @@ class HeroAI_FloatingWindows():
                     open = HeroAI_FloatingWindows.hero_windows[combined_identifier].begin(True, PyImGui.WindowFlags.AlwaysAutoResize)
                 
                 for account in accounts:
-                    if not account.AccountEmail:
+                    if not account.AccountEmail or not account.IsAccount:
                         continue
                 
                     if account.AccountEmail == Player.GetAccountEmail() and not HeroAI_FloatingWindows.settings.ShowLeaderPanel:
@@ -299,7 +299,8 @@ class HeroAI_FloatingWindows():
         
     @staticmethod
     def show_ui(cached_data: CacheData):
-        show_ui = not UIManager.IsWorldMapShowing() and not Map.IsMapLoading() and not Map.IsInCinematic() and not Map.Pregame.InCharacterSelectScreen()
+        from Py4GWCoreLib.Party import Party
+        show_ui = not UIManager.IsWorldMapShowing() and not Map.IsMapLoading() and not Map.IsInCinematic() and not Map.Pregame.InCharacterSelectScreen() and Party.IsPartyLoaded()
         if show_ui:  
             own_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
             if not own_data:
@@ -1342,7 +1343,6 @@ class HeroAI_Windows():
         from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
         btn_size = 23
         table_width = btn_size * 6 + 30
-        skill_size = table_width / NUMBER_OF_SKILLS - 4
 
         ImGui.push_font("Regular",10)
         if PyImGui.begin_child("ControlPanelChild", (215, 0), False, PyImGui.WindowFlags.AlwaysAutoResize):
@@ -1480,10 +1480,15 @@ class HeroAI_Windows():
                 ImGui.show_tooltip("Pick up Loot")
                 ImGui.push_font("Regular",10)
                 PyImGui.same_line(0,-1)
-                    
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_CANDY_CANE}##consumables",btn_size, btn_size):
-                    from HeroAI import ui
-                    ui.show_configure_consumables_window()
+                  
+                from HeroAI import ui  
+                v = ui.is_base_configure_consumables_window_open()
+                new_v = ImGui.toggle_button(label=f"{IconsFontAwesome5.ICON_CANDY_CANE}##consumables",
+                                       v= v,
+                                       width=btn_size, 
+                                       height=btn_size)
+                if new_v != v:
+                    ui.show_base_configure_consumables_window()
                 
                 ImGui.pop_font()
                 ImGui.show_tooltip("Consumables")
@@ -1510,8 +1515,7 @@ class HeroAI_Windows():
             PyImGui.dummy(0,dummy_spacing)
 
         
-        cached_data.HeroAI_windows.control_window.initialize()
-        if cached_data.HeroAI_windows.control_window.begin(True, PyImGui.WindowFlags.AlwaysAutoResize):
+        if ImGui.Begin(ini_key=cached_data.ini_key, name="HeroAI Control Panel", p_open=True, flags=PyImGui.WindowFlags.AlwaysAutoResize):
             if PyImGui.begin_child("ControlPanelChild", (200, 110), False, PyImGui.WindowFlags.AlwaysAutoResize):
                 style = ImGui.get_style()
                 style.ItemSpacing.push_style_var(2, 2)
@@ -1549,7 +1553,5 @@ class HeroAI_Windows():
                 style.CellPadding.pop_style_var()
                 style.ItemSpacing.pop_style_var()
                 
-            cached_data.HeroAI_windows.control_window.process_window()
-            
-        cached_data.HeroAI_windows.control_window.end()
-    
+        ImGui.End(cached_data.ini_key)
+        
