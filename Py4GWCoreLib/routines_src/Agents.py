@@ -1,5 +1,7 @@
 import importlib
 
+from Py4GWCoreLib.enums_src.GameData_enums import Range
+
 class _RProxy:
     def __getattr__(self, name: str):
         root_pkg = importlib.import_module("Py4GWCoreLib")
@@ -82,7 +84,26 @@ class Agents:
                     best_id = agent_id
 
         return best_id
-    
+
+    @staticmethod
+    def GetNearestAliveAgentByModelID(model_id: int, max_distance: float = 4500.0) -> int:
+        """
+        Purpose: Get the closest alive agent with the given model ID within max_distance of the player.
+        Scans all agent arrays (ally, NPC, enemy, etc.).
+        Returns 0 if none found.
+        """
+        from ..AgentArray import AgentArray
+        from ..Agent import Agent
+        player_pos = Player.GetXY()
+        agent_array = AgentArray.GetAgentArray()
+        agent_array = AgentArray.Filter.ByDistance(agent_array, player_pos, max_distance)
+        agent_array = AgentArray.Filter.ByCondition(agent_array, lambda agent_id: Agent.IsAlive(agent_id))
+        agent_array = AgentArray.Filter.ByCondition(agent_array, lambda agent_id: Agent.GetModelID(agent_id) == model_id)
+        agent_array = AgentArray.Sort.ByDistance(agent_array, player_pos)
+        if len(agent_array) > 0:
+            return agent_array[0]
+        return 0
+
     @staticmethod
     def GetClosestKeyByBitMask() -> int:
         """
@@ -155,13 +176,17 @@ class Agents:
         return enemy_array
                     
     @staticmethod
-    def GetNearestEnemy(max_distance=4500.0, aggressive_only = False):
+    def GetNearestEnemy(max_distance=4500.0, aggressive_only=False):
         from ..AgentArray import AgentArray
         from ..Py4GWcorelib import Utils
         from ..GlobalCache import GLOBAL_CACHE
+        from ..EnemyBlacklist import EnemyBlacklist
 
+        bl = EnemyBlacklist()
         player_pos = Player.GetXY()
         enemy_array = Agents.GetFilteredEnemyArray(player_pos[0], player_pos[1], max_distance, aggressive_only)
+        if not bl.is_empty():
+            enemy_array = AgentArray.Filter.ByCondition(enemy_array, lambda agent_id: not bl.is_blacklisted(agent_id))
         enemy_array = AgentArray.Sort.ByDistance(enemy_array, player_pos)
         return Utils.GetFirstFromArray(enemy_array)
     
@@ -216,7 +241,7 @@ class Agents:
         enemy_array = AgentArray.Filter.ByCondition(enemy_array, lambda agent_id: Agent.IsRanged(agent_id))
         enemy_array = AgentArray.Sort.ByDistance(enemy_array, player_pos)
         return Utils.GetFirstFromArray(enemy_array)
-        
+
     @staticmethod
     def GetFilteredAllyArray(x, y, max_distance=4500.0, other_ally=False):
         from ..AgentArray import AgentArray
@@ -262,13 +287,40 @@ class Agents:
         from ..GlobalCache import GLOBAL_CACHE
         from ..Agent import Agent
 
-        distance = max_distance
-        ally_array = AgentArray.GetAllyArray()
-        ally_array = AgentArray.Filter.ByDistance(ally_array, Player.GetXY(), distance)
-        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Agent.IsDead(agent_id))
-        ally_array = AgentArray.Sort.ByDistance(ally_array, Player.GetXY())
-        return Utils.GetFirstFromArray(ally_array)
+        dead_ally_array = AgentArray.GetDeadAllyArray()
+        dead_ally_array = AgentArray.Filter.ByDistance(dead_ally_array, Player.GetXY(), max_distance)
+        spirit_pet_array = AgentArray.GetSpiritPetArray()
+        spirit_pet_array = AgentArray.Filter.ByDistance(spirit_pet_array, Player.GetXY(), max_distance)
+        dead_ally_array = AgentArray.Manipulation.Subtract(dead_ally_array, spirit_pet_array)
+        dead_ally_array = AgentArray.Sort.ByDistance(dead_ally_array, Player.GetXY())
     
+        return Utils.GetFirstFromArray(dead_ally_array)
+
+    @staticmethod
+    def GetCorpses(max_distance=4500.0):
+        from ..AgentArray import AgentArray
+        from ..Py4GWcorelib import Utils
+        from ..GlobalCache import GLOBAL_CACHE
+        from ..Agent import Agent
+
+        def _AllowedAlliegance(agent_id):
+            _, alliegance = Agent.GetAllegiance(agent_id)
+
+            if (alliegance == "Ally" or
+                    alliegance == "Neutral" or
+                    alliegance == "Enemy" or
+                    alliegance == "NPC/Minipet"
+            ):
+                return True
+            return False
+
+        distance = max_distance
+        corpse_array = AgentArray.GetAgentArray()
+        corpse_array = AgentArray.Filter.ByDistance(corpse_array, Player.GetXY(), distance)
+        corpse_array = AgentArray.Filter.ByCondition(corpse_array, lambda agent_id: Agent.IsDead(agent_id))
+        corpse_array = AgentArray.Filter.ByCondition(corpse_array, lambda agent_id: _AllowedAlliegance(agent_id))
+        return corpse_array
+
     @staticmethod
     def GetNearestCorpse(max_distance=4500.0):
         from ..AgentArray import AgentArray

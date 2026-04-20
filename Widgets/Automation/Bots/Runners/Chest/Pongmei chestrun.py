@@ -1,7 +1,7 @@
 import Py4GW
 from Py4GWCoreLib import (Routines, Item, Botting, ActionQueueManager, Agent, ConsoleLog, GLOBAL_CACHE, ItemArray, Bags, Player)
-from Py4GWCoreLib.Builds import SF_Assassin_Hells_Precipice
-from Py4GWCoreLib.Builds.BuildHelpers import BuildDangerHelper, DangerTable
+from Py4GWCoreLib.Builds.CombatAutomatorExcluded.SF_Assassin_HP import SF_Assassin_Hells_Precipice
+from Py4GWCoreLib.Builds.CombatAutomatorExcluded.BuildHelpers import BuildDangerHelper, DangerTable
 from Sources.Sasemoi.bot_helpers import BotStuckHelper
 
 
@@ -38,6 +38,8 @@ def filter_valuable_loot(item_id: int) -> bool:
 # Globals
 HP_RUNNER = "Pongmei Chestrun"
 MAATU_KEEP_OUTPOST = 283
+MODULE_NAME = "Pongmei Valley (Chestrun)"
+MODULE_ICON = "Textures\\Module_Icons\\Chestrun - Pongmei Valley.png"
 
 
 # Danger Tables

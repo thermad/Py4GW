@@ -13,8 +13,10 @@ from Py4GWCoreLib import Color, ImGui
 import Py4GWCoreLib as GW
 from Py4GWCoreLib.native_src.context.WorldContext import AttributeStruct
 import time
-from typing import List
+from typing import List, Deque
+from collections import deque
 import Py4GWCoreLib.dNodes.dNodes as dNodes
+from Widgets.Coding.Examples.Skills.SkillInfo import SkillData as SkillDataOG
 
 # import node_editor as ed
 
@@ -38,6 +40,7 @@ save_window_timer.Start()
 
 # String consts
 MODULE_NAME = "EZ Cast"  # Change this Module name
+MODULE_ICON = "Textures/Module_Icons/EZ Cast.png"  # Change this to your widget icon (optional)
 COLLAPSED = "collapsed"
 X_POS = "x"
 Y_POS = "y"
@@ -236,7 +239,7 @@ class NodeLogicGreaterThan(dNodes.Node):
         super().__init__(x, y)
         self.type = "Greater Than"
         self.height = 45
-        self.width = 80
+        self.width = 90
         self.output_pin = PinBool(False, self.id)
         self.input_pins = PinFloat(True, self.id), PinFloat(True, self.id)
         self.side_padding = self.input_pins[0].radius * 2
@@ -248,7 +251,12 @@ class NodeLogicGreaterThan(dNodes.Node):
     def execute(self):
         self.output_pin.value = self.input_pins[0].value > self.input_pins[1].value
         global cache
-        cache.node_space.propagate_pin(self.output_pin)
+        if self.output_pin.value:
+            cache.node_space.propagate_pin(self.output_pin)
+
+    def draw_body(self):
+        PyImGui.text(f"{self.input_pins[0].value : .2f}")
+        PyImGui.text(f"{self.input_pins[1].value : .2f}")
 
     def pre_execute(self):
         self.inputs_updated = [False, False]
@@ -261,21 +269,162 @@ class NodeLogicGreaterThan(dNodes.Node):
         if self.inputs_updated[0] and self.inputs_updated[1]:
             self.execute()
 
+class SkillData(SkillDataOG):
+    def draw_skill_icon_small(self):
+        # Texture column
+        PyImGui.begin_group()
+        texture_path = GW.GLOBAL_CACHE.Skill.ExtraData.GetTexturePath(self.skill_id)
+        pos = PyImGui.get_cursor_pos()
+        ImGui.DrawTexture(texture_path, 24, 24)
+        PyImGui.set_cursor_pos(pos[0], pos[1])
+        PyImGui.dummy(24, 24)
+
 
 class NodeEffect(dNodes.Node):
     def __init__(self, x=100, y=100):
         super().__init__(x, y)
         self.type = "Effect"
         self.height = 45
-        self.width = 80
+        self.width = 160
         self.output_pin = PinFloat(False, self.id)
         self.input_pin = PinBool(True, self.id)
         self.pins.append(self.output_pin)
         self.pins.append(self.input_pin)
         self.header_color = GAME_COLOR.to_tuple_normalized()
+        self.skill_id = -1
+        self.scroll_mod = 0
+        self.search = ""
+        self.skills: Deque[int] = deque(range(1, 10))
+        self.limit = 0
+
+    def populate_skills(self, fill_count):
+        skill_id = 1
+        direction = 0
+        if fill_count > 0 and len(self.skills) > 0:
+            skill_id = self.skills[-1]
+            direction = 1
+        elif len(self.skills) > 0:
+            skill_id = self.skills[0]
+            direction = -1
+        else:
+            skill_id = 1
+            direction = 1
+        terms = self.search.lower().split(",")
+        while len(self.skills) < 10:
+            skill_id += direction
+            self.limit = 0
+            if skill_id > 3500:
+                self.limit = 1
+                break
+            if skill_id < 0:
+                self.limit = -1
+                break
+            name = GW.Skill.GetName(skill_id)
+            if len(name) < 3:
+                continue
+            if not all(term in name.lower() for term in terms):
+                continue
+            self.skills.append(skill_id) if direction == 1 else self.skills.appendleft(skill_id)
 
     def draw_body(self):
-        pass
+        self.output_pin.value = GW.GLOBAL_CACHE.Effects.GetEffectTimeRemaining(GW.Player.GetAgentID(), self.skill_id) / 1000
+        if PyImGui.begin_popup(f"{self.id}selector"):
+            old = self.search
+            self.search = PyImGui.input_text("Search", self.search)
+            changed = old != self.search
+            terms = self.search.lower().split(",")
+            PyImGui.begin_child(f"{self.id}selectorlistchild", (260, 300), False, PyImGui.WindowFlags.NoScrollbar)
+            scroll = PyImGui.get_io().mouse_wheel
+            scroll *= -1
+            scroll_save = scroll
+            # PyImGui.text(f"scroll {scroll} changed {changed}")
+            while scroll > 0 and self.limit <= 0:
+                scroll -= 1
+                self.skills.popleft()
+            while scroll < 0 and self.limit >= 0:
+                scroll += 1
+                self.skills.pop()
+            if scroll_save != 0:
+                self.populate_skills(scroll_save)
+            if changed:
+                self.skills.clear()
+                self.populate_skills(10)
+            for id in self.skills:
+                name = GW.Skill.GetName(id)
+                sd = SkillData(id)
+                sd.draw_skill_icon_small()
+                PyImGui.same_line(0, 0)
+                if PyImGui.button(name):
+                    PyImGui.close_current_popup()
+                    self.skill_id = id
+                    self.search = ""
+            PyImGui.end_child()
+            PyImGui.end_popup()
+        else:
+            if self.skill_id == -1:
+                if PyImGui.button("Select Skill"):
+                    PyImGui.open_popup(f"{self.id}selector")
+                    self.skills.clear()
+                    self.populate_skills(1)
+            else:
+                sd = SkillData(self.skill_id)
+                sd.draw_skill_icon_small()
+                PyImGui.same_line(0, 0)
+                if PyImGui.button(f"{GW.Skill.GetName(self.skill_id)}"):
+                    PyImGui.open_popup(f"{self.id}selector")
+                    self.skills.clear()
+                    self.populate_skills(1)
+                PyImGui.text(f"{self.output_pin.value: .2f}")
+
+    def draw_body__(self):
+        PyImGui.set_next_window_size(260, 300)
+        if PyImGui.begin_popup(f"{self.id}selector"):
+            old = self.search
+            self.search = PyImGui.input_text("Search", self.search)
+            changed = old == self.search
+            terms = self.search.lower().split(",")
+            PyImGui.begin_child(f"{self.id}selectorlistchild")
+            PyImGui.text("Skill list")
+            sy = PyImGui.get_scroll_y()
+            sy = round(sy / 24)
+            if self.scroll_mod > 12:
+                PyImGui.set_scroll_y(24*12)
+            self.scroll_mod += sy - 12
+            if self.scroll_mod < 0:
+                self.scroll_mod = 0
+            i = self.scroll_mod
+            limit = 24
+            while i < limit + self.scroll_mod:
+                i += 1
+                if i > 3500:
+                    self.skills.append(-1)
+                    break
+                name = GW.Skill.GetName(i)
+                if len(name) < 3:
+                    limit += 1
+                    continue
+                if not all(term in name.lower() for term in terms):
+                    limit += 1
+                    continue
+                sd = SkillData(i)
+                sd.draw_skill_icon_small()
+                PyImGui.same_line(0, 0)
+                if PyImGui.button(name):
+                    PyImGui.close_current_popup()
+                    self.skill_id = i
+                    self.search = ""
+            PyImGui.end_child()
+            PyImGui.end_popup()
+        else:
+            if self.skill_id == -1:
+                if PyImGui.button("Select Skill"):
+                    PyImGui.open_popup(f"{self.id}selector")
+            else:
+                sd = SkillData(self.skill_id)
+                sd.draw_skill_icon_small()
+                PyImGui.same_line(0, 0)
+                if PyImGui.button(f"{GW.Skill.GetName(self.skill_id)}"):
+                    PyImGui.open_popup(f"{self.id}selector")
 
     def execute(self):
         global cache
@@ -316,12 +465,13 @@ class NodeFrameDelta(dNodes.Node):
     def __init__(self, x=100, y=100):
         super().__init__(x, y)
         self.type = "Time Delta"
-        self.height = 25
+        self.height = 40
         self.width = 80
         self.output_pin = PinFloat(False, self.id)
-        self.input_pin = PinBool(True, self.id)
+        self.input_pins = [PinBool(True, self.id), PinBool(True, self.id)]
         self.pins.append(self.output_pin)
-        self.pins.append(self.input_pin)
+        for pin in self.input_pins:
+            self.pins.append(pin)
         self.header_color = GAME_COLOR.to_tuple_normalized()
         self.timer = time.time()
         self.tooltip = "Returns the time since this node was last called."
@@ -329,15 +479,18 @@ class NodeFrameDelta(dNodes.Node):
     def draw_body(self):
         self.output_pin.value = time.time() - self.timer
         PyImGui.text(f"{self.output_pin.value: .2f}")
+        PyImGui.text("<-Reset")
 
     def execute(self):
         global cache
-        self.timer = time.time()
         cache.node_space.propagate_pin(self.output_pin)
 
     def inform_update(self, pin: dNodes.Pin):
-        if pin.value:
+        if pin is self.input_pins[0]:
             self.execute()
+        elif pin is self.input_pins[1]:
+            self.timer = time.time()
+
 
 
 class NodeUseSkill(dNodes.Node):
@@ -345,7 +498,7 @@ class NodeUseSkill(dNodes.Node):
         super().__init__(x, y)
         self.type = "Use Skill"
         self.height = 25
-        self.width = 50
+        self.width = 60
         self.input_pin = PinBool(True, self.id)
         self.pins.append(self.input_pin)
         self.header_color = OUTPUT_COLOR.to_tuple_normalized()
@@ -730,11 +883,8 @@ def DrawRefrainMaintainer():
         PyImGui.set_tooltip("Disable" if cache.refrainer_use_checkbox else "Enable")
 
     if section_header:
-        # PyImGui.set_next_item_width(PyImGui.get_content_region_avail()[0])
-        cache.node_editor.begin()
-        cache.node_editor.end()
         PyImGui.text_wrapped("""This function will use "Help Me!" to maintain refrains intelligently. It will alternatively use "Dont Trip!" and "I am Unstoppable!" if both are present. If only "Don't Trip!" is available, it will require a recharge reduction such as an Essence of Celerity to work.""")
-        PyImGui.slider_float("Grace buffer", cache.refrain_buffer, 0, 10)
+        cache.refrain_buffer = PyImGui.slider_float("Grace buffer", cache.refrain_buffer, 0, 2)
         if PyImGui.is_item_hovered():
             PyImGui.set_tooltip("The time in seconds that a refrain should have remaining when the shout ends.\nValues lower than ping will result in dropped refrains.")
 
@@ -908,13 +1058,13 @@ def UseGenericSkills(energy, player_id, now):
     return False
 
 
-def MaintainRefrains(player_id, now):
+def MaintainRefrains_(player_id, now):
     effects = GW.Effects.GetEffects(player_id)
     effect : GW.PyEffects.EffectType
     rit_lord = next((effect for effect in effects if effect.skill_id == GW.Skill.GetID("Ritual_Lord")), None)
 
     global cache
-    help_me_skill = GW.PySkill.Skill(GW.Skill.GetID("Help_Me"))
+    help_me_id = GW.PySkill.Skill(GW.Skill.GetID("Help_Me")).id.id
     heroic: GW.PyEffects.EffectType = None
     bladeturn: GW.PyEffects.EffectType = None
     aggressive: GW.PyEffects.EffectType = None
@@ -943,7 +1093,7 @@ def MaintainRefrains(player_id, now):
         if effect.skill_id == GW.Skill.GetID("Mending_Refrain"):
             mending = effect
             continue
-        if effect.skill_id == help_me_skill.id.id:
+        if effect.skill_id == help_me_id:
             help_me = effect
             continue
         if effect.skill_id == GW.Skill.GetID("Dont_Trip"):
@@ -952,11 +1102,15 @@ def MaintainRefrains(player_id, now):
         if effect.skill_id == GW.Skill.GetID("I_Am_Unstoppable"):
             iau = effect
             continue
+    if help_me is not None:
+        return
     refrains = [heroic, bladeturn, aggressive, burning, hasty, mending]
     refrains = [x for x in refrains if x is not None]
-    help_me_slot = GW.SkillBar.GetSlotBySkillID(help_me_skill.id.id)
+    help_me_slot = GW.SkillBar.GetSlotBySkillID(help_me_id)
     attributes: List[AttributeStruct] = GW.Agent.GetAttributes(player_id)
-    command = next((attr for attr in attributes if attr.attribute_id == GW.PyAgent.SafeAttribute.Command), None)
+    command = next((attr for attr in attributes if attr.name == "Command"), None)
+    # command = GW.Agent.GetAttributes(GW.Player.GetAgentID())
+    help_me_skill = GW.PySkill.Skill(help_me_id)
     if command is None:
         help_me_duration = help_me_skill.duration_0pts
     else:
@@ -965,31 +1119,31 @@ def MaintainRefrains(player_id, now):
     dont_trip_slot = GW.SkillBar.GetSlotBySkillID(GW.Skill.GetID("Dont_Trip"))
     iau_slot = GW.SkillBar.GetSlotBySkillID(GW.Skill.GetID("I_Am_Unstoppable"))
     deld = GW.Player.GetTitle(GW.TitleID.Deldrimor)
-    if deld is None: return False
-    dont_trip_dur = 0
-    match deld.current_title_tier_index:
-        case 0: dont_trip_dur = 3
-        case 1: dont_trip_dur = 3
-        case 2: dont_trip_dur = 4
-        case 3: dont_trip_dur = 4
-        case _: dont_trip_dur = 5
+    dont_trip_dur = 5
+    if deld is not None:
+        match deld.current_title_tier_index:
+            case 0: dont_trip_dur = 3
+            case 1: dont_trip_dur = 3
+            case 2: dont_trip_dur = 4
+            case 3: dont_trip_dur = 4
+            case _: dont_trip_dur = 5
     norn = GW.Player.GetTitle(GW.TitleID.Norn)
-    if norn is None: return False
-    iau_dur = 0
-    match norn.current_title_tier_index:
-        case 0: iau_dur = 16
-        case 1: iau_dur = 17
-        case 2: iau_dur = 18
-        case 3: iau_dur = 18
-        case 4: iau_dur = 19
-        case _: iau_dur = 20
+    iau_dur = 20
+    if norn is not None:
+        match norn.current_title_tier_index:
+            case 0: iau_dur = 16
+            case 1: iau_dur = 17
+            case 2: iau_dur = 18
+            case 3: iau_dur = 18
+            case 4: iau_dur = 19
+            case _: iau_dur = 20
     if len(refrains) < 1: return False
-    lowest_dur :GW.PyEffects.EffectType = sorted(refrains, key= lambda effect: effect.time_remaining)[0]
-    lowest_dur = lowest_dur.time_remaining / 1000
+    lowest_dura : GW.PyEffects.EffectType = sorted(refrains, key= lambda effect: effect.time_remaining)[0]
+    lowest_dur = lowest_dura.time_remaining / 1000
     base_durations = [effect.duration for effect in refrains]
     base_durations = sorted(base_durations)
     if help_me_slot != 0:
-        if help_me is None and GW.Routines.Checks.Skills.IsSkillSlotReady(help_me_slot):
+        if GW.Routines.Checks.Skills.IsSkillSlotReady(help_me_slot):
             if lowest_dur > help_me_duration > lowest_dur - cache.refrain_buffer:
                 cache.busy_timer = cache.ezcast_cast_minimum_timer
                 GW.SkillBar.UseSkill(help_me_slot, 0)
@@ -1007,6 +1161,91 @@ def MaintainRefrains(player_id, now):
                     GW.SkillBar.UseSkill(iau_slot, 0)
                     return True
     return False
+
+def MaintainRefrains(player_id, now):
+    # 1. Create a map of Skill ID -> Effect Object
+    # This replaces the linear search loop and all the 'next()' calls
+    effects = GW.Effects.GetEffects(player_id)
+    effect_map = {eff.skill_id: eff for eff in effects}
+
+    # 2. Define the IDs we care about (Best practice: cache these constants elsewhere)
+    HELP_ME_ID = GW.Skill.GetID("Help_Me")
+    R_HEROIC = GW.Skill.GetID("Heroic_Refrain")
+    R_BLADETURN = GW.Skill.GetID("Bladeturn_Refrain")
+    R_AGGRESSIVE = GW.Skill.GetID("Aggressive_Refrain")
+    R_BURNING = GW.Skill.GetID("Burning_Refrain")
+    R_HASTY = GW.Skill.GetID("Hasty_Refrain")
+    R_MENDING = GW.Skill.GetID("Mending_Refrain")
+
+    DT_ID = GW.Skill.GetID("Dont_Trip")
+    IAU_ID = GW.Skill.GetID("I_Am_Unstoppable")
+
+    # Check if "Help Me!" is already active to prevent over-casting
+    if HELP_ME_ID in effect_map:
+        return False
+
+    # 3. Collect active refrains using the map
+    refrain_ids = [R_HEROIC, R_BLADETURN, R_AGGRESSIVE, R_BURNING, R_HASTY, R_MENDING]
+    active_refrains = [effect_map[rid] for rid in refrain_ids if rid in effect_map]
+
+    if not active_refrains:
+        return False
+
+    # 4. Calculate the most urgent refrain (lowest time remaining)
+    lowest_dura = min(active_refrains, key=lambda eff: eff.time_remaining)
+    lowest_dur_sec = lowest_dura.time_remaining / 1000.0
+
+    # 5. Logic for "Help Me!" (The primary maintainer)
+    help_me_slot = GW.SkillBar.GetSlotBySkillID(HELP_ME_ID)
+    if help_me_slot != 0 and GW.Routines.Checks.Skills.IsSkillSlotReady(help_me_slot):
+        # Dynamic duration calculation based on Command attribute
+        help_me_skill = GW.PySkill.Skill(HELP_ME_ID)
+        attributes = GW.Agent.GetAttributes(player_id)
+        command_attr = next((attr for attr in attributes if attr.name == "Command"), None)
+
+        if command_attr:
+            # Scaled duration: base + (growth * level)
+            h_dur = help_me_skill.duration_0pts + ((help_me_skill.duration_15pts - help_me_skill.duration_0pts) / 15) * command_attr.level
+        else:
+            h_dur = help_me_skill.duration_0pts
+
+        if lowest_dur_sec > h_dur > (lowest_dur_sec - cache.refrain_buffer):
+            cache.busy_timer = cache.ezcast_cast_minimum_timer
+            GW.SkillBar.UseSkill(help_me_slot, 0)
+            return True
+
+    # 6. Logic for "Don't Trip!" and "I Am Unstoppable!"
+    dt_slot = GW.SkillBar.GetSlotBySkillID(DT_ID)
+    iau_slot = GW.SkillBar.GetSlotBySkillID(IAU_ID)
+
+    # Determine Don't Trip duration based on Deldrimor title
+    deld = GW.Player.GetTitle(GW.TitleID.Deldrimor)
+    dt_dur = {0:3, 1:3, 2:4, 3:4}.get(deld.current_title_tier_index if deld else -1, 5)
+
+    # Determine IAU duration based on Norn title
+    norn = GW.Player.GetTitle(GW.TitleID.Norn)
+    iau_dur = {0:16, 1:17, 2:18, 3:18, 4:19}.get(norn.current_title_tier_index if norn else -1, 20)
+
+    if dt_slot != 0 and DT_ID not in effect_map and GW.Routines.Checks.Skills.IsSkillSlotReady(dt_slot):
+        if lowest_dur_sec > dt_dur > (lowest_dur_sec - cache.refrain_buffer):
+            cache.busy_timer = cache.ezcast_cast_minimum_timer
+            GW.SkillBar.UseSkill(dt_slot, 0)
+            return True
+
+    if iau_slot != 0 and IAU_ID not in effect_map and GW.Routines.Checks.Skills.IsSkillSlotReady(iau_slot):
+        # IAU logic depends on Don't Trip being active
+        dt_effect = effect_map.get(DT_ID)
+        if dt_effect:
+            # Base duration of shortest refrain + remaining time of Don't Trip
+            # Note: Original code uses base_durations[0]. We use lowest_dura.duration
+            combined_dur = lowest_dura.duration + (dt_effect.time_remaining / 1000.0)
+            if combined_dur > iau_dur > (combined_dur - cache.refrain_buffer):
+                cache.busy_timer = cache.ezcast_cast_minimum_timer
+                GW.SkillBar.UseSkill(iau_slot, 0)
+                return True
+
+    return False
+
 
 def AuraOfTheAssassin(energy, player_id, now):
     player_x, player_y = GW.Agent.GetXY(player_id)

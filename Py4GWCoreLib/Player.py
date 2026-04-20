@@ -1,4 +1,5 @@
 import PyPlayer
+import Py4GW
 
 from .enums import *
 from .native_src.internals.helpers import encoded_wstr_to_str
@@ -7,9 +8,45 @@ from functools import wraps
 from .native_src.context.AgentContext import AgentStruct
 from .native_src.context.WorldContext import TitleStruct
 from .py4gwcorelib_src.ActionQueue import ActionQueueManager
+from .py4gwcorelib_src.FrameCache import frame_cache
 
 # Player
 class Player:
+    _ACCOUNT_EMAIL_MAX_LEN = 64
+
+    @staticmethod
+    def _hwnd_account_fallback() -> str:
+        """Deterministic ASCII-safe account identifier for unsupported/missing email cases."""
+        try:
+            hwnd = int(Py4GW.Console.get_gw_window_handle() or 0)
+        except Exception:
+            hwnd = 0
+        value = f"{hwnd}@Py4GW"
+        return value[:Player._ACCOUNT_EMAIL_MAX_LEN]
+
+    @staticmethod
+    def _sanitize_account_email_or_fallback(account_email: str | None) -> str:
+        """
+        Normalize account email for shared-memory usage.
+        Falls back to HWND identity for unsupported encodings/non-ASCII accounts.
+        """
+        if not account_email:
+            return Player._hwnd_account_fallback()
+        try:
+            account_email = str(account_email).strip()
+            if not account_email:
+                return Player._hwnd_account_fallback()
+
+            # Some account strings (e.g. unsupported locale/corrupt decode cases) are not safe
+            # for downstream paths; collapse them to HWND identity.
+            account_email.encode("ascii")
+
+            if len(account_email) > Player._ACCOUNT_EMAIL_MAX_LEN:
+                account_email = account_email[:Player._ACCOUNT_EMAIL_MAX_LEN]
+            return account_email
+        except Exception:
+            return Player._hwnd_account_fallback()
+
     @staticmethod
     def _format_uuid_as_email(player_uuid) -> str:
         if not player_uuid:
@@ -32,6 +69,7 @@ class Player:
         return PyPlayer.PyPlayer()
         
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetPlayerNumber")
     def GetPlayerNumber() -> int | None:
         """
         Purpose: Retrieve the player's number.
@@ -43,6 +81,33 @@ class Player:
         return char_ctx.player_number
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetLoginNumber")
+    def GetLoginNumber() -> int:
+        from .Party import Party
+        players = Party.GetPlayers()
+        agent_id = Player.GetAgentID() if Player.IsPlayerLoaded() else 0
+        if len(players) > 0:
+            for player in players:
+                Pagent_id = Party.Players.GetAgentIDByLoginNumber(player.login_number)
+                if agent_id == Pagent_id:
+                    return player.login_number
+        return 0   
+    
+    @staticmethod
+    @frame_cache(category="Player", source_lib="GetPartyNumber")
+    def GetPartyNumber() -> int:
+        from .Party import Party
+        login_number = Player.GetLoginNumber()
+        players = Party.GetPlayers()
+
+        for index, player in enumerate(players):
+            if player.login_number == login_number:
+                return index
+
+        return -1
+    
+    @staticmethod
+    @frame_cache(category="Player", source_lib="IsPlayerLoaded")
     def IsPlayerLoaded() -> bool:
         """
         Purpose: Check if the player is loaded.
@@ -77,7 +142,7 @@ class Player:
         if not Agent.GetInstanceUptime(agent_id) > 750:
             return False
             
-        return False
+        return True
     
     @staticmethod
     def _require_player_loaded(default=None):
@@ -96,6 +161,7 @@ class Player:
 
     #region Data
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetAgentID")
     def GetAgentID() -> int:
         """
         Purpose: Retrieve the agent ID of the player.
@@ -112,6 +178,7 @@ class Player:
         
 
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetName")
     def GetName() -> str:
         """
         Purpose: Retrieve the player's name.
@@ -122,6 +189,7 @@ class Player:
         return Agent.GetNameByID(Player.GetAgentID())
 
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetXY")
     def GetXY() -> tuple[float, float]:
         """
         Purpose: Retrieve the player's current X and Y coordinates.
@@ -133,6 +201,7 @@ class Player:
 
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetTargetID")
     def GetTargetID() -> int:
         """
         Purpose: Retrieve the ID of the player's target.
@@ -156,6 +225,7 @@ class Player:
         return Agent.GetAgentByID(Player.GetAgentID())
 
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetObservingID")
     def GetObservingID() -> int:
         """
         Purpose: Retrieve the ID of the agent the player is observing.
@@ -165,6 +235,7 @@ class Player:
         return Player.player_instance().observing_id
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetAccountName")
     def GetAccountName() -> str:
         """
         Purpose: Retrieve the player's account name.
@@ -180,6 +251,7 @@ class Player:
         return account_name
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetAccountEmail")
     def GetAccountEmail() -> str:
         """
         Purpose: Retrieve the player's account email.
@@ -199,16 +271,16 @@ class Player:
             
             if (char_ctx := GWContext.Char.GetContext()) is None:
                 return ""
-            account_email = char_ctx.player_email_str
+            try:
+                account_email = char_ctx.player_email_str
+            except Exception:
+                return Player._hwnd_account_fallback()
+            account_email = Player._sanitize_account_email_or_fallback(account_email)
             if account_email:
                 return account_email
-            player_uuid = Player.GetPlayerUUID()
-            if all(part == 0 for part in player_uuid):
-                return ""
-            #return Player._format_uuid_as_email(player_uuid)
-            return "steam_account"  # Placeholder for Steam accounts
+            return Player._hwnd_account_fallback()
         except Exception:
-            return ""
+            return Player._hwnd_account_fallback()
     
     @staticmethod
     def GetPlayerUUID() -> tuple[int, int, int, int]:
@@ -266,6 +338,7 @@ class Player:
         return account_info.tournament_reward_points
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetMorale")
     def GetMorale() -> int:
         """
         Purpose: Retrieve the player's current morale.
@@ -288,6 +361,7 @@ class Player:
         return max(world_ctx.experience, world_ctx.experience_dupe)
     
     @staticmethod
+    @frame_cache(category="Player", source_lib="GetLevel")
     def GetLevel() -> int:
         """
         Purpose: Retrieve the player's current level.
@@ -308,6 +382,40 @@ class Player:
         if (world_ctx := GWContext.World.GetContext()) is None:
             return 0, 0
         return world_ctx.current_skill_points, world_ctx.total_earned_skill_points
+
+    @staticmethod
+    @frame_cache(category="Player", source_lib="GetAccountFlags")
+    def GetAccountFlags() -> int:
+        """
+        Purpose: Retrieve the raw GW::Player.reforged_or_dhuums_flags bitfield.
+        Args: None
+        Returns: int
+        Bits: 0x1=Dhuum's Covenant, 0x2=Melandru's Accord, 0x4=Reforged.
+        """
+        if (world_ctx := GWContext.World.GetContext()) is None:
+            return 0
+        player_number = Player.GetPlayerNumber()
+        if not player_number:
+            return 0
+        local = world_ctx.GetPlayerById(player_number)
+        if local is None:
+            return 0
+        return local.reforged_or_dhuums_flags
+
+    @staticmethod
+    def IsDhuumsCovenant() -> bool:
+        """True if the character is under Dhuum's Covenant."""
+        return (Player.GetAccountFlags() & 0x1) != 0
+
+    @staticmethod
+    def IsMelandrusAccord() -> bool:
+        """True if the character is under Melandru's Accord."""
+        return (Player.GetAccountFlags() & 0x2) != 0
+
+    @staticmethod
+    def IsReforged() -> bool:
+        """True if the character is in Reforged mode."""
+        return (Player.GetAccountFlags() & 0x4) != 0
     
     @staticmethod
     def GetMissionsCompleted() -> list[int]:
@@ -411,7 +519,7 @@ class Player:
         Returns: int
         """
         if (world_ctx := GWContext.World.GetContext()) is None:
-            return []
+            return [0,0,0]
         current_kurzick = max(world_ctx.current_kurzick, world_ctx.current_kurzick_dupe)
         total_earned_kurzick = max(world_ctx.total_earned_kurzick, world_ctx.total_earned_kurzick_dupe)
         max_kurzick = world_ctx.max_kurzick
@@ -425,7 +533,7 @@ class Player:
         Returns: int
         """
         if (world_ctx := GWContext.World.GetContext()) is None:
-            return []
+            return [0,0,0]
         current_luxon = max(world_ctx.current_luxon, world_ctx.current_luxon_dupe)
         total_earned_luxon = max(world_ctx.total_earned_luxon, world_ctx.total_earned_luxon_dupe)
         max_luxon = world_ctx.max_luxon
@@ -439,7 +547,7 @@ class Player:
         Returns: int
         """
         if (world_ctx := GWContext.World.GetContext()) is None:
-            return []
+            return [0,0,0]
         current_imperial = max(world_ctx.current_imperial, world_ctx.current_imperial_dupe)
         total_earned_imperial = max(world_ctx.total_earned_imperial, world_ctx.total_earned_imperial_dupe)
         max_imperial = world_ctx.max_imperial
@@ -453,7 +561,7 @@ class Player:
         Returns: int
         """
         if (world_ctx := GWContext.World.GetContext()) is None:
-            return []
+            return [0,0,0]
         current_balthazar = max(world_ctx.current_balth, world_ctx.current_balth_dupe)
         total_earned_balthazar = max(world_ctx.total_earned_balth, world_ctx.total_earned_balth_dupe)
         max_balthazar = world_ctx.max_balth
@@ -489,10 +597,6 @@ class Player:
         Returns: list
         """
         if (world_ctx := GWContext.World.GetContext()) is None:
-            return []
-        if (player_number := Player.GetPlayerNumber()) is None:
-            return []
-        if (player := world_ctx.GetPlayerById(player_number)) is None:
             return []
         if (titles := world_ctx.titles) is None:
             return []
@@ -616,17 +720,26 @@ class Player:
     def SendRawDialog(dialog_id: int):
         """Send dialog using kSendAgentDialog. Works for NPC dialogs, skill trainers, etc."""
         from .native_src.methods.PlayerMethods import PlayerMethods
-        
+
         ActionQueueManager().AddAction("ACTION",
-        PlayerMethods.SendRawDialog(dialog_id))
+        PlayerMethods.SendRawDialog, dialog_id)
 
     @staticmethod
     def BuySkill(skill_id: int):
         """Buy/Learn a skill from a Skill Trainer."""
         from .native_src.methods.PlayerMethods import PlayerMethods
-        
+
         ActionQueueManager().AddAction("ACTION",
-        PlayerMethods.SendSkillTrainerDialog(skill_id))
+        PlayerMethods.SendSkillTrainerDialog, skill_id)
+
+    @staticmethod
+    def UnlockBalthazarSkill(skill_id: int, use_pvp_remap: bool = True):
+        """Unlock a skill from the Priest of Balthazar vendor."""
+        from .native_src.methods.PlayerMethods import PlayerMethods
+
+        ActionQueueManager().AddAction(
+        "ACTION",
+        PlayerMethods.SendBalthazarSkillUnlockDialog, skill_id, use_pvp_remap)
         
     
     #region Not Worked
@@ -647,7 +760,55 @@ class Player:
             
         ActionQueueManager().AddAction("ACTION",
         Player.player_instance().SendDialog,dialog)
-        
+
+    @staticmethod
+    def SendAutomaticDialog(button_number: int):
+        """
+        Purpose: Send the currently visible dialog choice by its 0-based button position.
+        Args:
+            button_number (int): Visible button index starting at 0.
+        Returns: None
+        """
+        import PyDialog
+
+        if button_number < 0:
+            Py4GW.Console.Log(
+                "Player.SendAutomaticDialog",
+                f"Invalid button number: {button_number}. Button numbers start at 0.",
+                Py4GW.Console.MessageType.Warning,
+            )
+            return
+
+        try:
+            buttons = list(PyDialog.PyDialog.get_active_dialog_buttons())
+        except Exception as e:
+            Py4GW.Console.Log(
+                "Player.SendAutomaticDialog",
+                f"Failed to read active dialog buttons: {e}",
+                Py4GW.Console.MessageType.Error,
+            )
+            return
+
+        available_buttons = [button for button in buttons if getattr(button, "dialog_id", 0) != 0]
+        if not available_buttons:
+            Py4GW.Console.Log(
+                "Player.SendAutomaticDialog",
+                "No active dialog buttons are currently available.",
+                Py4GW.Console.MessageType.Warning,
+            )
+            return
+
+        if button_number >= len(available_buttons):
+            Py4GW.Console.Log(
+                "Player.SendAutomaticDialog",
+                f"Requested button {button_number}, but only indices 0..{len(available_buttons) - 1} are available.",
+                Py4GW.Console.MessageType.Warning,
+            )
+            return
+
+        selected_button = available_buttons[button_number]
+        Player.SendDialog(selected_button.dialog_id)
+         
     @staticmethod
     def RequestChatHistory():
         """

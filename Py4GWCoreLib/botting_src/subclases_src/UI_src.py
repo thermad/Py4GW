@@ -338,6 +338,23 @@ class _UI:
         from ...GlobalCache import GLOBAL_CACHE
         
         current_header_step, header_for_current , current_step, total_steps, step_name, finished = self._find_current_header_step()
+        modular_recipe_title = str(getattr(self._config, "modular_recipe_title", "") or "")
+        modular_step_title = str(getattr(self._config, "modular_step_title", "") or "")
+        modular_step_index = int(getattr(self._config, "modular_step_index", 0) or 0)
+        modular_step_total = int(getattr(self._config, "modular_step_total", 0) or 0)
+        modular_phase_index = int(getattr(self._config, "modular_phase_index", 0) or 0)
+        modular_phase_total = int(getattr(self._config, "modular_phase_total", 0) or 0)
+        use_modular_step_display = modular_step_total > 0 and (bool(modular_recipe_title) or bool(modular_step_title))
+        if use_modular_step_display:
+            if modular_recipe_title:
+                header_for_current = modular_recipe_title
+            if modular_step_title:
+                step_name = modular_step_title
+            else:
+                step_name = "(Waiting)"
+            current_step = min(max(modular_step_index, 0), modular_step_total)
+            total_steps = max(modular_step_total + 1, 1)
+            finished = bool(modular_step_total > 0 and modular_step_index >= modular_step_total)
         if PyImGui.begin_table("bot_header_table", 2, PyImGui.TableFlags.RowBg | PyImGui.TableFlags.BordersOuterH):
             PyImGui.table_setup_column("Icon", PyImGui.TableColumnFlags.WidthFixed, iconwidth)
             PyImGui.table_setup_column("titles", PyImGui.TableColumnFlags.WidthFixed, main_child_dimensions[0] - iconwidth)
@@ -401,16 +418,28 @@ class _UI:
             fraction = 1.0
         fraction = max(0.0, min(1.0, fraction))
 
+        overall_fraction = fraction
+        if modular_phase_total > 0:
+            overall_fraction = min(max(modular_phase_index / float(modular_phase_total), 0.0), 1.0)
+
+        detail_label = "Step Progress"
+        detail_fraction = self._config.state_percentage
+        if modular_step_total > 0:
+            detail_fraction = min(max(modular_step_index / float(modular_step_total), 0.0), 1.0)
+        elif modular_phase_total > 0:
+            detail_label = "FSM Progress"
+            detail_fraction = fraction
+
             
         PyImGui.text("Overall Progress")
         PyImGui.push_item_width(main_child_dimensions[0] - 10)
-        PyImGui.progress_bar(fraction, (main_child_dimensions[0] - 10), 0, f"{fraction * 100:.2f}%")
+        PyImGui.progress_bar(overall_fraction, (main_child_dimensions[0] - 10), 0, f"{overall_fraction * 100:.2f}%")
         PyImGui.pop_item_width()
         
         PyImGui.separator()
-        PyImGui.text("Step Progress")
+        PyImGui.text(detail_label)
         PyImGui.push_item_width(main_child_dimensions[0] - 10)
-        PyImGui.progress_bar(self._config.state_percentage, (main_child_dimensions[0] - 10), 0, f"{self._config.state_percentage * 100:.2f}%")
+        PyImGui.progress_bar(detail_fraction, (main_child_dimensions[0] - 10), 0, f"{detail_fraction * 100:.2f}%")
         PyImGui.pop_item_width()
 
     def _draw_settings_child(self):
@@ -462,6 +491,7 @@ class _UI:
 
             debug_text("log_actions", "active")
             debug_text("halt_on_death", "active")
+            debug_text("stop_on_party_wipe", "active")
             debug_text("pause_on_danger", "active")
             PyImGui.text("InDanger(PauseOnDangerFn eval):")
             PyImGui.same_line(0,-1)
@@ -586,20 +616,25 @@ class _UI:
         main_child_dimensions: Tuple[int, int] = (350, 275),
         icon_path: str = "",
         iconwidth: int = 96,
-        additional_ui: Optional[Callable[[], None]] = None
-    ):
+        additional_ui: Optional[Callable[[], None]] = None,
+        extra_tabs: Optional[list[tuple[str, Callable[[], None]]]] = None
+    ) -> bool:
         from ...IniManager import IniManager
         from ...Routines import Routines
         from ...ImGui import ImGui
         
         if not self._config.ini_key_initialized:
-            self._config.ini_key = IniManager().ensure_key(f"BottingClass/bot_{self._config.bot_name}", f"bot_{self._config.bot_name}.ini")
-            IniManager().load_once(self._config.ini_key)
-            self._config.ini_key_initialized = True
+            ini_key = IniManager().ensure_key(f"BottingClass/bot_{self._config.bot_name}", f"bot_{self._config.bot_name}.ini")
+            if ini_key:
+                self._config.ini_key = ini_key
+                IniManager().load_once(self._config.ini_key)
+                self._config.ini_key_initialized = True
         
         if not self._config.ini_key:
-            return
-        
+            # Account-scoped INI keys may be unavailable for a few frames during startup.
+            # Skip drawing until a real key exists, then retry on the next frame.
+            return False
+
         if ImGui.Begin(ini_key=self._config.ini_key, name=self._config.bot_name, p_open=True, flags= PyImGui.WindowFlags.AlwaysAutoResize):
             if PyImGui.begin_tab_bar(self._config.bot_name + "_tabs"):
                 if PyImGui.begin_tab_item("Main"):
@@ -630,6 +665,13 @@ class _UI:
                     
                     self.draw_debug_window()
                     PyImGui.end_tab_item()
+
+                if extra_tabs:
+                    for tab_label, tab_draw_fn in extra_tabs:
+                        if PyImGui.begin_tab_item(tab_label):
+                            if callable(tab_draw_fn):
+                                tab_draw_fn()
+                            PyImGui.end_tab_item()
                     
                 PyImGui.end_tab_bar()
 
@@ -641,6 +683,7 @@ class _UI:
                 self._config.config_properties.use_occlusion.is_active(), 
                 self._config.config_properties.snap_to_ground_segments.get("value"), 
                 self._config.config_properties.floor_offset.get("value"))
+        return True
 
     #region Keybinds
     class _Keybinds:

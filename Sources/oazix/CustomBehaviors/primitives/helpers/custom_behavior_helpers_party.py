@@ -1,5 +1,5 @@
 from typing import cast
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 from Py4GWCoreLib import GLOBAL_CACHE, Map, Player
 from Sources.oazix.CustomBehaviors.primitives.parties.memory_cache_manager import MemoryCacheManager
 
@@ -13,22 +13,22 @@ class CustomBehaviorHelperParty:
         return party_target_id
     
     @staticmethod
-    def is_account_in_same_map_as_current_account(account : AccountData):
+    def is_account_in_same_map_as_current_account(account : AccountStruct):
         current_map_id = Map.GetMapID()
         current_region = Map.GetRegion()[0]
         current_district = Map.GetDistrict()
         current_language = Map.GetLanguage()[0]
         current_party_id = GLOBAL_CACHE.Party.GetPartyID()
 
-        if current_map_id != account.MapID: return False
+        if current_map_id != account.AgentData.Map.MapID: return False
 
         if not Map.IsExplorable():
             # weird but in explorable, region can be different but still same map
-            if current_region != account.MapRegion: return False
+            if current_region != account.AgentData.Map.Region: return False
         
-        if current_district != account.MapDistrict: return False
-        if current_language != account.MapLanguage: return False
-        if current_party_id != account.PartyID: return False
+        if current_district != account.AgentData.Map.District: return False
+        if current_language != account.AgentData.Map.Language: return False
+        if current_party_id != account.AgentPartyData.PartyID: return False
 
         return True
 
@@ -42,14 +42,14 @@ class CustomBehaviorHelperParty:
         party_leader_email = CustomBehaviorWidgetMemoryManager().GetCustomBehaviorWidgetData().party_leader_email
         
         # bad perf...
-        def get_account_from_agent_id(agent_id: int) -> AccountData | None:
+        def get_account_from_agent_id(agent_id: int) -> AccountStruct | None:
             for account in GLOBAL_CACHE.ShMem.GetAllAccountData():
-                if int(account.PlayerID) == agent_id:
+                if int(account.AgentData.AgentID) == agent_id:
                     return account
             return None
         
         if party_leader_email is None: 
-            account : AccountData | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
+            account : AccountStruct | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
             if account is None: return None
             result = account.AccountEmail
             MemoryCacheManager().set("party_leader_email", result)
@@ -59,7 +59,7 @@ class CustomBehaviorHelperParty:
 
             if leader_account is None: 
                 # if custom_leader_email is None, simple use default one
-                account : AccountData | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
+                account : AccountStruct | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
                 if account is None: return None
                 result = account.AccountEmail
                 MemoryCacheManager().set("party_leader_email", result)
@@ -67,7 +67,7 @@ class CustomBehaviorHelperParty:
 
             if not CustomBehaviorHelperParty.is_account_in_same_map_as_current_account(leader_account):
                 # if custom_leader_email is not in my party, simple use default one
-                account : AccountData | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
+                account : AccountStruct | None = get_account_from_agent_id(GLOBAL_CACHE.Party.GetPartyLeaderID())
                 if account is None: return None
                 result = account.AccountEmail
                 MemoryCacheManager().set("party_leader_email", result)
@@ -88,7 +88,7 @@ class CustomBehaviorHelperParty:
         if leader_email is not None: 
             account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(leader_email)
             if account is not None:
-                return int(account.PlayerID)
+                return int(account.AgentData.AgentID)
 
         return GLOBAL_CACHE.Party.GetPartyLeaderID()
 

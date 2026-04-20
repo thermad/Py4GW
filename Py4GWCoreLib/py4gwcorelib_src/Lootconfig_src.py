@@ -413,6 +413,7 @@ LootGroups: Dict[str, Dict[str, List[ModelID]]] = {
             ModelID.Shadowy_Husk,
             ModelID.Shadowy_Remnants,
             ModelID.Shiverpeak_Mane,
+            ModelID.Shimmering_Scale,
             ModelID.Shriveled_Eye,
             ModelID.Silver_Bullion_Coin,
             ModelID.Silver_Crimson_Skull_Coin,
@@ -508,11 +509,6 @@ LootGroups: Dict[str, Dict[str, List[ModelID]]] = {
             ModelID.Map_Piece_Bottom_Right,
             ModelID.Map_Piece_Top_Left,
             ModelID.Map_Piece_Top_Right,
-        ],
-        "Keys": [
-            ModelID.Dungeon_Key,
-            ModelID.Boss_Key,
-            ModelID.Prison_Key,
         ],
         "Keys": [
             ModelID.Dungeon_Key,

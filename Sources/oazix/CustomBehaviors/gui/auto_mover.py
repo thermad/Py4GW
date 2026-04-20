@@ -1,23 +1,19 @@
-from collections import deque
-from typing import Any, Callable, Dict, Generator
+from typing import Dict
 from Py4GWCoreLib import IconsFontAwesome5, Map, PyImGui, Player
-from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-from Py4GWCoreLib.Pathing import AutoPathing
 from Py4GWCoreLib.py4gwcorelib_src.Utils import Utils
-from Sources.oazix.CustomBehaviors.primitives import constants
 from Sources.oazix.CustomBehaviors.primitives.auto_mover.auto_follow_agent import AutoFollowAgent
 from Sources.oazix.CustomBehaviors.primitives.auto_mover.auto_follow_path import AutoFollowPath
 from Sources.oazix.CustomBehaviors.primitives.auto_mover.waypoint_builder import WaypointBuilder
 from Sources.oazix.CustomBehaviors.primitives.custom_behavior_loader import CustomBehaviorLoader
 from Sources.oazix.CustomBehaviors.primitives.helpers import custom_behavior_helpers
-from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_shared_memory import CustomBehaviorWidgetMemoryManager
 from Sources.oazix.CustomBehaviors.primitives.skillbars.custom_behavior_base_utility import CustomBehaviorBaseUtility
+from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_shared_memory import CustomBehaviorWidgetMemoryManager
 
-shared_data = CustomBehaviorWidgetMemoryManager().GetCustomBehaviorWidgetData()
 edit_flags: Dict[int, bool] = {}
 
 @staticmethod
 def render():
+    shared_data = CustomBehaviorWidgetMemoryManager().GetCustomBehaviorWidgetData()
 
     PyImGui.text(f"auto-moving from map coords [U] require [MissionMap+ - Widget]")
     PyImGui.text(f"such feature will inject additionnal utility skills,")

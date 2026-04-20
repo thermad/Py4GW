@@ -592,9 +592,24 @@ class PlayerStruct(Structure):
         ("h0040_array", GW_Array),                             # +h0040 Array<void*>
     ]
  
-    @property 
+    @property
     def is_pvp(self) -> bool:
         return (self.flags & 0x800) != 0
+
+    # reforged_or_dhuums_flags (offset 0x34) bit decoding.
+    # Bit 0x1 = Dhuum's Covenant, 0x2 = Melandru's Accord, 0x4 = Reforged.
+    @property
+    def is_dhuums_covenant(self) -> bool:
+        return (self.reforged_or_dhuums_flags & 0x1) != 0
+
+    @property
+    def is_melandrus_accord(self) -> bool:
+        return (self.reforged_or_dhuums_flags & 0x2) != 0
+
+    @property
+    def is_reforged(self) -> bool:
+        return (self.reforged_or_dhuums_flags & 0x4) != 0
+
     @property
     def name_enc_encoded_str(self) -> str | None:
         return read_wstr(self.name_enc_ptr)
@@ -1163,15 +1178,13 @@ class WorldContextStruct(Structure):
     
     @property
     def titles(self) -> list[TitleStruct] | None:
-        return None
         titles = GW_Array_Value_View(self.titles_array, TitleStruct).to_list()
         if not titles:
             return None
         return [title for title in titles]
-    
+
     @property
     def title_tiers(self) -> list[TitleTierStruct] | None:
-        return None
         tiers = GW_Array_Value_View(self.title_tiers_array, TitleTierStruct).to_list()
         if not tiers:
             return None
@@ -1198,7 +1211,10 @@ class WorldContext:
 
     @staticmethod
     def _update_ptr():
-        ptr = PyPointers.PyPointers.GetWorldContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.WorldContext
+        #ptr = PyPointers.PyPointers.GetWorldContextPtr()
         WorldContext._ptr = ptr
         if not ptr:
             WorldContext._cached_ctx = None

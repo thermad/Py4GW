@@ -43,3 +43,13 @@ class _Player:
     def reroll_character(self,target_character_name: str, timeout_ms: int = 15000, log: bool = True) -> Generator[Any, Any, None]:
         from ...Routines import Routines
         yield from Routines.Yield.RerollCharacter.Reroll(target_character_name, timeout_ms, log)
+
+    @_yield_step(label="BuySkill", counter_key="BUY_SKILL")
+    def buy_skill(self, skill_id: int, log: bool = False) -> Generator[Any, Any, None]:
+        from ...Routines import Routines
+        yield from Routines.Yield.Player.BuySkill(skill_id, log)
+
+    @_yield_step(label="UnlockBalthazarSkill", counter_key="UNLOCK_BALTHAZAR_SKILL")
+    def unlock_balthazar_skill(self, skill_id: int, use_pvp_remap: bool = True, log: bool = False) -> Generator[Any, Any, None]:
+        from ...Routines import Routines
+        yield from Routines.Yield.Player.UnlockBalthazarSkill(skill_id, use_pvp_remap, log)

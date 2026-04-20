@@ -4,8 +4,12 @@ from Py4GWCoreLib import Map
 from Py4GWCoreLib import Player
 from Py4GWCoreLib import TitleID
 from Py4GWCoreLib import ImGui, Color
+from Py4GWCoreLib import Quest
 import PyImGui
 
+
+MODULE_NAME = "Set title on map load"
+MODULE_ICON = "Textures/Module_Icons/Set title on map load.png"
 
 module_name = "Set title on map load"
 
@@ -97,7 +101,7 @@ lightbringer_map_names = {
     "Depths of Madness", "Domain of Anguish", "Domain of Fear", "Domain of Pain",
     "Domain of Secrets", "The Ebony Citadel of Mallyx", "Dzagonur Bastion",
     "Forum Highlands", "Gate of Desolation", "Gate of Fear", "Gate of Madness",
-    "Gate of Pain", "Gate of Secrets", "Gate of Torment", "Gate of the Nightfallen Lands",
+    "Gate of Anguish", "Gate of Pain", "Gate of Secrets", "Gate of Torment", "Gate of the Nightfallen Lands",
     "Grand Court of Sebelkeh", "Heart of Abaddon", "Jennur's Horde", "Joko's Domain",
     "Lair of the Forgotten", "Nightfallen Coast", "Nightfallen Garden",
     "Nightfallen Jahai", "Nundu Bay", "Poisoned Outcrops", "Remains of Sahlahja",
@@ -106,6 +110,17 @@ lightbringer_map_names = {
     "The Sulfurous Wastes", "Throne of Secrets", "Vehtendi Valley", "Yatendi Canyons"
 }
 
+
+# Quest ID → Title override
+# If any of these quest IDs are present in the quest log, the mapped title is applied
+# (quest-based overrides take priority over map-name matching)
+# Quest IDs can be verified by checking the GW wiki or logging Quest.GetQuestLogIds()
+quest_title_overrides = {
+    # EotN — Dwarven intro quest chain (Deldrimor title)
+    897: TitleID.Deldrimor,   # O Brave New World
+    # EotN — Norn quest (Norn title)
+    873: TitleID.Norn,        # Service: In Defense of the Eye
+}
 
 game_throttle_timer = ThrottledTimer(100)
 
@@ -131,7 +146,20 @@ def main():
     map_name = Map.GetMapName()
 
     if not widget_config.title_applied:
-        if map_name in asuran_map_names:
+        # Quest-based overrides take priority over map-name matching
+        quest_override = None
+        try:
+            quest_ids = set(Quest.GetQuestLogIds())
+            for quest_id, title in quest_title_overrides.items():
+                if quest_id in quest_ids:
+                    quest_override = title
+                    break
+        except Exception:
+            pass
+
+        if quest_override is not None:
+            Player.SetActiveTitle(quest_override.value)
+        elif map_name in asuran_map_names:
             Player.SetActiveTitle(TitleID.Asuran.value)
         elif map_name in deldrimor_map_names:
             Player.SetActiveTitle(TitleID.Deldrimor.value)

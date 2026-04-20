@@ -2,8 +2,10 @@ from Py4GWCoreLib import Botting, Agent, GLOBAL_CACHE, Routines, ActionQueueMana
 import PyImGui, Py4GW
 import os
 BOT_NAME = "Killroy Stoneskin"
+MODULE_NAME = "Killroy Stonekin's Punch-Out Extravaganza!"
+MODULE_ICON = "Textures\\Module_Icons\\Leveler - Killroy Stoneskin.png"
 
-bot = Botting(BOT_NAME)
+bot = Botting(BOT_NAME, config_stop_on_party_wipe=False)
 
 def bot_routine(bot: Botting) -> None:
     KillroyMap(bot)
@@ -25,14 +27,15 @@ def KillroyMap(bot: Botting) -> None:
             (12249.79, -16291.74),]
     bot.Move.FollowAutoPath(path)
     bot.Wait.UntilOutOfCombat()
+    bot.Wait.ForTime(1000)
     bot.Interact.WithGadgetAtXY(13275.00, -16039.00)
+    bot.Wait.ForTime(2000)
     bot.Templates.Pacifist()
     bot.Wait.ForTime(3000)
     bot.Party.Resign()
     bot.Wait.UntilOnOutpost()
     bot.Move.XYAndDialog(17341.00, -4796.00, 0x835807)
     bot.Map.TravelGH()
-    bot.Wait.UntilOnOutpost()
     bot.Map.LeaveGH()
     bot.Wait.ForMapLoad(target_map_id=644)  # gunnars_hold_id
     bot.States.JumpToStepName("[H]Killroy Stoneskin_1")
@@ -66,6 +69,7 @@ def _on_death(bot: "Botting"):
         if max_energy >= 80: #we can go much higher but were dying too much, not worth the time
             bot.config.FSM.pause()
             yield from bot.Map._coro_travel(644)
+            yield from Routines.Yield.wait(1000)
             bot.config.FSM.jump_to_state_by_name("[H]Killroy Stoneskin_1")
             bot.config.FSM.resume()
             yield from Routines.Yield.wait(1000)

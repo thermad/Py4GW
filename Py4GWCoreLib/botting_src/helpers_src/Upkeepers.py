@@ -266,7 +266,9 @@ class _Upkeepers:
             elif (self._config.upkeep.four_leaf_clover.is_active()):
                 yield from Routines.Yield.Upkeepers.Upkeep_Morale(100)
             elif self._config.upkeep.morale.is_active():
-                yield from Routines.Yield.Upkeepers.Upkeep_Morale(100)
+                target_morale = int(self._config.upkeep.morale.get("target_morale"))
+                target_morale = max(0, min(110, target_morale))
+                yield from Routines.Yield.Upkeepers.Upkeep_Morale(target_morale)
             else:
                 yield from Routines.Yield.wait(500)
 
@@ -277,6 +279,32 @@ class _Upkeepers:
         from ...GlobalCache import GLOBAL_CACHE
         from ...enums import ModelID
         from ...Map import Map
+        from ...Quest import Quest
+        
+        # Quest IDs where summoning stones should NOT be used
+        excluded_quest_ids = [
+            490,  # The Council is Called
+            503,  # All's Well That Ends Well
+            504,  # Warning Kehanni
+            505,  # Calling the Order
+            507,  # Pledge of the Merchant Princes
+            581,  # Heart or Mind: Garden in Danger
+            586,  # Heart or Mind: Ronjok in Danger
+            683,  # Securing_Champions_Dawn
+            730,  # Gain Goren
+            737,  # Battle Preparations
+        ]
+        
+        # Map IDs where summoning stones should NOT be used
+        excluded_map_ids = [
+            351,  # Divine Path
+            423,  # The Tribunal
+            436,  # Command Post
+            503,  # Throne of Secrets
+            700,  # The Norn Fighting Tournament
+            710,  # Epilogue
+            840,  # Lion's Arch Keep
+        ]
         
         # Priority list for summoning stones (items)
         priority_stones = [
@@ -308,18 +336,20 @@ class _Upkeepers:
         ]
         
         # Known summon creature model IDs (the actual spawned allies, not the items)
-        summon_creature_model_ids = [
-            8028,  # Legionnaire
-            9055,  # Tengu Support Flare - Warrior
-            9056,  # Tengu Support Flare - Ranger
-            9058,  # Tengu Support Flare - Monk
-            9060,  # Tengu Support Flare - Mesmer
-            9062,  # Tengu Support Flare - Ritualist
-            9065,  # Tengu Support Flare - Assassin
-            9067,  # Tengu Support Flare - Elementalist
-            9069,  # Tengu Support Flare - Necromancer
+        # Tengu summons have two model IDs per profession (two variants)
+        summon_creature_model_ids = {
+            513,         # Fire Imp
+            8028,        # Legionnaire
+            9055, 9076,  # Tengu Support Flare - Warrior
+            9056, 9077,  # Tengu Support Flare - Ranger
+            9058, 9079,  # Tengu Support Flare - Monk
+            9060, 9081,  # Tengu Support Flare - Mesmer
+            9062, 9083,  # Tengu Support Flare - Ritualist
+            9065, 9086,  # Tengu Support Flare - Assassin
+            9067, 9088,  # Tengu Support Flare - Elementalist
+            9069, 9090,  # Tengu Support Flare - Necromancer
             # Add more as discovered via summon_model_id_detector.py
-        ]
+        }
         
         # Summoning Sickness effect ID - applies to all summons
         summoning_sickness_effect_id = 2886
@@ -331,11 +361,28 @@ class _Upkeepers:
                     yield from Routines.Yield.wait(1000)
                     continue
                 
+                # Skip if an excluded quest is in the quest log
+                active_quests = Quest.GetQuestLogIds()
+                if any(qid in excluded_quest_ids for qid in active_quests):
+                    yield from Routines.Yield.wait(1000)
+                    continue
+                
+                # Skip if in an excluded map
+                if Map.GetMapID() in excluded_map_ids:
+                    yield from Routines.Yield.wait(1000)
+                    continue
+                
                 # Check if player is alive
                 if Agent.IsDead(Player.GetAgentID()):
                     yield from Routines.Yield.wait(1000)
                     continue
                 
+                # Check if player has skill points (required to use summoning stones)
+                current_sp, _ = Player.GetSkillPointData()
+                if current_sp <= 0:
+                    yield from Routines.Yield.wait(1000)
+                    continue
+
                 # Check if player has Summoning Sickness effect
                 has_summoning_sickness = GLOBAL_CACHE.Effects.HasEffect(Player.GetAgentID(), summoning_sickness_effect_id)
                 

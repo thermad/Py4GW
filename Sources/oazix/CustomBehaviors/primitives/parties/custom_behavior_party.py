@@ -9,16 +9,16 @@ from PyAgent import AttributeClass
 
 from Py4GWCoreLib import Routines, Map, Agent, Player
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
 from Py4GWCoreLib.py4gwcorelib_src.Timer import ThrottledTimer
 
 
 from Sources.oazix.CustomBehaviors.primitives.behavior_state import BehaviorState
+from Sources.oazix.CustomBehaviors.primitives.following_behavior_priority import FollowingBehaviorPriority
 from Sources.oazix.CustomBehaviors.primitives import constants
 
 from Sources.oazix.CustomBehaviors.primitives.helpers import custom_behavior_helpers
-from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_shared_memory import CustomBehaviorWidgetData, CustomBehaviorWidgetMemoryManager
 from Sources.oazix.CustomBehaviors.primitives.parties.party_command_contants import PartyCommandConstants
 from Sources.oazix.CustomBehaviors.primitives.parties.party_command_handler_manager import PartyCommandHandlerManager
 from Sources.oazix.CustomBehaviors.primitives.parties.party_flagging_manager import PartyFlaggingManager
@@ -27,6 +27,7 @@ from Sources.oazix.CustomBehaviors.primitives.parties.shared_lock_manager import
 from Sources.oazix.CustomBehaviors.primitives.parties.party_teambuild_manager import PartyTeamBuildManager
 from Sources.oazix.CustomBehaviors.primitives.skills.utility_skill_typology import UtilitySkillTypology
 from Sources.oazix.CustomBehaviors.primitives.parties.party_command_contants import PartyCommandConstants
+from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_shared_memory import CustomBehaviorWidgetData, CustomBehaviorWidgetMemoryManager
 
 @dataclass
 class PartyData:
@@ -349,3 +350,17 @@ class CustomBehaviorParty:
             party_target_id=shared_data.party_target_id,
             party_leader_email=leader_email,
             party_forced_state=shared_data.party_forced_state)
+
+    #---
+
+    def get_party_following_behavior(self) -> FollowingBehaviorPriority | None:
+        return self.party_following_manager.party_following_behavior
+
+    def set_party_following_behavior_priority(self, behavior: FollowingBehaviorPriority | None):
+        """Set the party following behavior and apply the preset configuration to all accounts"""
+        if behavior is None:
+            # If None, just set the enum without applying preset
+            self.party_following_manager.party_following_behavior = behavior
+        else:
+            # Apply the preset configuration to all accounts
+            self.party_following_manager.set_party_following_behavior_state(behavior)

@@ -58,7 +58,8 @@ class NecromancerSkills:
         skill.SkillType = SkillType.Signet.value
         skill.TargetAllegiance = Skilltarget.Enemy.value
         skill.Nature = SkillNature.EnergyBuff.value
-        skill.Conditions.LessLife = 0.5
+        skill.Conditions.LessLife = 0.6
+        skill.Conditions.LessEnergy = 0.6
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -133,7 +134,12 @@ class NecromancerSkills:
         skill.TargetAllegiance = Skilltarget.OtherAlly.value
         skill.Nature = SkillNature.EnergyBuff.value
         skill.Conditions.LessEnergy = 0.4
-        skill.Conditions.SacrificeHealth = 0.5
+        skill.Conditions.SacrificeHealth = 0.3
+        # BiP sacrifices 33% of max HP. Require the caster to remain above 55% of max HP and
+        # above 175 HP absolute after the sacrifice, so we never self-kill or drop to unsafe HP.
+        skill.Conditions.SacrificePercent = 0.33
+        skill.Conditions.MinHealthAfterSacrificePercent = 0.55
+        skill.Conditions.MinHealthAfterSacrificeAbsolute = 175
         skill.Conditions.TargetingStrict = True
         skill_data[skill.SkillID] = skill
 
@@ -165,15 +171,7 @@ class NecromancerSkills:
         skill.SkillType = SkillType.Enchantment.value
         skill.TargetAllegiance = Skilltarget.Self.value
         skill.Nature = SkillNature.Buff.value
-        skill.Conditions.SacrificeHealth = 0.20
-        skill_data[skill.SkillID] = skill
-
-        skill = CustomSkill()
-        skill.SkillID = GLOBAL_CACHE.Skill.GetID("Dark_Fury")
-        skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.Enemy.value
-        skill.Nature = SkillNature.Offensive.value
-        skill.Conditions.SacrificeHealth = 0.3
+        skill.Conditions.SacrificeHealth = 0.2
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()

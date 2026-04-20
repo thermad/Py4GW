@@ -216,7 +216,10 @@ class CharContext:
 
     @staticmethod
     def _update_ptr():
-        ptr = PyPointers.PyPointers.GetCharContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.CharContext
+        #ptr = PyPointers.PyPointers.GetCharContextPtr()
         CharContext._ptr = ptr
         if not ptr:
             CharContext._cached_ctx = None
@@ -234,7 +237,8 @@ class CharContext:
             CharContext._callback_name,
             PyCallback.Phase.PreUpdate,
             CharContext._update_ptr,
-            priority=2
+            priority=2,
+            context=PyCallback.Context.Draw
         )
 
     @staticmethod

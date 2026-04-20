@@ -220,7 +220,10 @@ class AccAgentContext:
         return AccAgentContext._ptr    
     @staticmethod
     def _update_ptr():
-        ptr = PyPointers.PyPointers.GetAgentContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.AgentContext
+        #ptr = PyPointers.PyPointers.GetAgentContextPtr()
         AccAgentContext._ptr = ptr
         if not ptr:
             AccAgentContext._cached_ctx = None
@@ -237,7 +240,8 @@ class AccAgentContext:
             AccAgentContext._callback_name,
             PyCallback.Phase.PreUpdate,
             AccAgentContext._update_ptr,
-            priority=5
+            priority=5,
+            context=PyCallback.Context.Draw
         )
 
 

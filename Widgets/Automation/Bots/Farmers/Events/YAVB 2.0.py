@@ -8,14 +8,16 @@ from Py4GWCoreLib.enums import ModelID, Range, TitleID
 
 from Py4GWCoreLib.BuildMgr import BuildMgr
 
-from Py4GWCoreLib.Builds import SF_Mes_vaettir
-from Py4GWCoreLib.Builds import SF_Ass_vaettir
+from Py4GWCoreLib.Builds.Mesmer.Me_A.SF_Mes_vaettir import SF_Mes_vaettir
+from Py4GWCoreLib.Builds.Assassin.A_Me.SF_Ass_vaettir import SF_Ass_vaettir
 
 from typing import List, Tuple
 
 bot = Botting("YAVB 2.0", 
               upkeep_birthday_cupcake_restock=1)
   
+MODULE_ICON = "Textures\\Module_Icons\\YAVB 2.0 mascot.png"
+
 def create_bot_routine(bot: Botting) -> None:
     TownRoutines(bot)
     TraverseBjoraMarches(bot)
@@ -125,6 +127,7 @@ def JagaMoraineFarmRoutine(bot: Botting) -> None:
     bot.Items.LootItems()
     bot.Items.AutoIDAndSalvageItems()
     bot.States.AddCustomState(lambda: NeedsInventoryManagement(bot), "Needs Inventory Management")
+    bot.Properties.Disable("birthday_cupcake")
     bot.Move.XYAndExitMap(15850,-20550, target_map_id=482) # target_map_name="Bjora Marches")
     
     
@@ -205,6 +208,11 @@ def AssignBuild(bot: Botting):
 def EquipSkillBar(bot: Botting):
     yield from AssignBuild(bot)
     yield from bot.config.build_handler.LoadSkillBar()
+
+
+def _set_build_stuck_signal(build: BuildMgr, stuck_counter: int) -> None:
+    if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
+        build.SetStuckSignal(stuck_counter)
 
 
 def HandleInventory(bot: Botting) -> None:
@@ -349,7 +357,7 @@ def HandleStuckJagaMoraine(bot: Botting):
             ConsoleLog("HandleStuck", "Instance time exceeded 7 minutes, force resigning.", Py4GW.Console.MessageType.Debug, forced_log)
             stuck_counter = 0
             if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                build.SetStuckSignal(stuck_counter)
+                _set_build_stuck_signal(build, stuck_counter)
                 
             Player.SendChatCommand("resign") 
             yield from Routines.Yield.wait(500)
@@ -360,7 +368,7 @@ def HandleStuckJagaMoraine(bot: Botting):
             ConsoleLog("HandleStuck", "In waiting routine, resetting stuck counter.", Py4GW.Console.MessageType.Debug, log_actions)
             stuck_counter = 0
             if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                build.SetStuckSignal(stuck_counter)
+                _set_build_stuck_signal(build, stuck_counter)
             stuck_timer.Reset()
             yield from Routines.Yield.wait(1000)
             continue
@@ -370,7 +378,7 @@ def HandleStuckJagaMoraine(bot: Botting):
             ConsoleLog("HandleStuck", "Finished routine, resetting stuck counter.", Py4GW.Console.MessageType.Debug, log_actions)
             stuck_counter = 0
             if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                build.SetStuckSignal(stuck_counter)
+                _set_build_stuck_signal(build, stuck_counter)
             stuck_timer.Reset()
             yield from Routines.Yield.wait(1000)
             continue
@@ -380,7 +388,7 @@ def HandleStuckJagaMoraine(bot: Botting):
             ConsoleLog("HandleStuck", "In killing routine, resetting stuck counter.", Py4GW.Console.MessageType.Debug, log_actions)
             stuck_counter = 0
             if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                build.SetStuckSignal(stuck_counter)
+                _set_build_stuck_signal(build, stuck_counter)
             stuck_timer.Reset()
             yield from Routines.Yield.wait(1000)
             continue
@@ -402,7 +410,7 @@ def HandleStuckJagaMoraine(bot: Botting):
                     stuck_counter += 1
                     ConsoleLog("HandleStuck", f"Stuck counter incremented to {stuck_counter}.", Py4GW.Console.MessageType.Debug, log_actions)
                     if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                        build.SetStuckSignal(stuck_counter)
+                        _set_build_stuck_signal(build, stuck_counter)
                     stuck_timer.Reset()
                 else:
                     old_player_position = current_player_pos
@@ -416,7 +424,7 @@ def HandleStuckJagaMoraine(bot: Botting):
                 ConsoleLog("HandleStuck", "Unrecoverable stuck detected, force resigning.", Py4GW.Console.MessageType.Error, forced_log)
                 stuck_counter = 0
                 if isinstance(build, SF_Ass_vaettir) or isinstance(build, SF_Mes_vaettir):
-                    build.SetStuckSignal(stuck_counter)
+                    _set_build_stuck_signal(build, stuck_counter)
                 
                 Player.SendChatCommand("resign") 
                 yield from Routines.Yield.wait(500)

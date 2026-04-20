@@ -19,6 +19,7 @@ class BuffConfigurationPerProfession(CustomBuffTarget):
     BUFF_CONFIGURATION_MARTIAL: list[ProfessionConfiguration] = [ProfessionConfiguration(Profession.Warrior, True), ProfessionConfiguration(Profession.Assassin, True), ProfessionConfiguration(Profession.Dervish, True), ProfessionConfiguration(Profession.Paragon, True), ProfessionConfiguration(Profession.Ranger, True)]
     BUFF_CONFIGURATION_ALL: list[ProfessionConfiguration] = [ProfessionConfiguration(Profession.Monk, True), ProfessionConfiguration(Profession.Ritualist, True), ProfessionConfiguration(Profession.Elementalist, True), ProfessionConfiguration(Profession.Mesmer, True), ProfessionConfiguration(Profession.Necromancer, True), ProfessionConfiguration(Profession.Warrior, True), ProfessionConfiguration(Profession.Assassin, True), ProfessionConfiguration(Profession.Dervish, True), ProfessionConfiguration(Profession.Paragon, True), ProfessionConfiguration(Profession.Ranger, True)]
     ALL_PROFESSIONS = [Profession.Assassin, Profession.Warrior, Profession.Ranger, Profession.Monk, Profession.Necromancer, Profession.Mesmer, Profession.Elementalist, Profession.Ritualist, Profession.Paragon, Profession.Dervish]
+    NONE: list[ProfessionConfiguration] = []
 
     def __init__(self, custom_skill: CustomSkill, custom_configuration: list[ProfessionConfiguration] | None = None):
 
@@ -79,6 +80,10 @@ class BuffConfigurationPerProfession(CustomBuffTarget):
     @override
     def get_agent_id_predicate(self) -> Callable[[int], bool]:
         return lambda agent_id: self.__should_apply_effect(agent_id)
+    
+    @override
+    def get_agent_id_ordering_predicate(self) -> Callable[[int], int]:
+        return lambda agent_id: 0
 
     def __should_apply_effect(self, agent_id: int) -> bool:
         for target_configuration in self.__target_configurations:

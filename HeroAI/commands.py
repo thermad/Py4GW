@@ -2,7 +2,7 @@ import math
 from typing import Callable
 
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.Map import Map
@@ -24,7 +24,7 @@ class Command:
         is_separator() -> bool: Checks if the command is empty.
         __call__(accounts: list[AccountData]): Executes the command function with the provided accounts.
     '''
-    def __init__(self, name: str, icon: str, command_function : Callable[[list[AccountData]], None] | None, tooltip : str = "", description: str = "", map_types: list[str] = ["Explorable", "Outpost"]) -> None:
+    def __init__(self, name: str, icon: str, command_function : Callable[[list[AccountStruct]], None] | None, tooltip : str = "", description: str = "", map_types: list[str] = ["Explorable", "Outpost"]) -> None:
         self.name = name
         self.icon = icon
         self.command_function = command_function
@@ -37,7 +37,7 @@ class Command:
     def is_separator(self) -> bool:
         return self.name == "Empty" and self.command_function is None
     
-    def __call__(self, accounts: list[AccountData]):
+    def __call__(self, accounts: list[AccountStruct]):
         if self.command_function:
             self.command_function(accounts)
 
@@ -80,6 +80,7 @@ class HeroAICommands:
         self.CombatPrep = Command("Prepare for Combat", IconsFontAwesome5.ICON_SHIELD_ALT, self.__combat_prep_command, "Use Combat Preparations", map_types=["Explorable"])
         self.DisbandParty = Command("Disband Party", IconsFontAwesome5.ICON_SIGN_OUT_ALT, self.__leave_party_command, "Make all heroes leave party", map_types=["Outpost"])
         self.FormParty = Command("Form Party", IconsFontAwesome5.ICON_USERS, self.__invite_all_command, "Invite all heroes to party", map_types=["Outpost"])
+        self.TravelAltsToLeaderMap = Command("Travel Alt Accounts to Leader's Map", IconsFontAwesome5.ICON_MAP_MARKED_ALT, self.__travel_alts_to_leader_map_command, "Send all alt accounts to the leader's map", map_types=["Outpost"])
         self.LeavePartyAndTravelGH = Command("Leave & Travel to GH", IconsFontAwesome5.ICON_HOME, self.__leave_party_and_travel_gh_command, "Leave party and travel to Guild Hall")
         
         self.__commands = [
@@ -97,6 +98,7 @@ class HeroAICommands:
             self.CombatPrep,
             self.DisbandParty,
             self.FormParty,
+            self.TravelAltsToLeaderMap,
             self.LeavePartyAndTravelGH,
         ]
     
@@ -129,7 +131,7 @@ class HeroAICommands:
         
         return False
     
-    def send_dialog(self, accounts: list[AccountData], dialog_option: int):
+    def send_dialog(self, accounts: list[AccountStruct], dialog_option: int):
         sender_email = Player.GetAccountEmail()
         own_map_id = Map.GetMapID()
         own_region = Map.GetRegion()[0]
@@ -137,60 +139,74 @@ class HeroAICommands:
         own_language = Map.GetLanguage()[0]
         
         for account in accounts:
-            same_map = own_map_id == account.MapID and own_region == account.MapRegion and own_district == account.MapDistrict and own_language == account.MapLanguage
+            same_map = own_map_id == account.AgentData.Map.MapID and own_region == account.AgentData.Map.Region and own_district == account.AgentData.Map.District and own_language == account.AgentData.Map.Language
             
             if same_map:
                 GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.SendDialog, (dialog_option, 0, 0, 0))
                 
-    def __leave_party_command(self, accounts: list[AccountData]):
+    def __leave_party_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.LeaveParty, (0, 0, 0, 0))
     
-    def __leave_party_and_travel_gh_command(self, accounts: list[AccountData]):
+    def __leave_party_and_travel_gh_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.LeaveParty, (0, 0, 0, 0))
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.TravelToGuildHall, (0, 0, 0, 0))
 
-    def __combat_prep_command(self, accounts: list[AccountData]):
+    def __combat_prep_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.UseSkillCombatPrep, (1, 0, 0, 0))
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.UseSkillCombatPrep, (2, 0, 0, 0))
     
-    def __pick_up_loot_command(self, accounts: list[AccountData]):
+    def __pick_up_loot_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PickUpLoot, (0, 0, 0, 0))
         
-    def __donate_faction_command(self, accounts: list[AccountData]):
+    def __donate_faction_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.DonateToGuild, (0, 0, 0, 0))
     
-    def __invite_all_command(self, accounts: list[AccountData]):
+    def __invite_all_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()
         sender_id = Player.GetAgentID()
-        
+
         def SetWaitingActions(delay_ms: int):
             delays = math.ceil(delay_ms // 50)
             for _ in range(delays):
                 GLOBAL_CACHE._ActionQueueManager.AddAction("ACTION", lambda: None)  # Adding a no-op to ensure spacing between invites
-        
+
+        # Invite order priority:
+        # 1) melee-like first (R/W/A/D), 2) Mesmer, 3) Paragon, 4) Necro, 5) Ritualist, 6) others.
+        melee_professions = {1, 2, 7, 10}
+        priority_by_profession = {5: 1, 9: 2, 4: 3, 8: 4}
+
+        def _invite_priority(account: AccountStruct) -> tuple[int, str]:
+            prof = int(account.AgentData.Profession[0]) if account.AgentData.Profession else 0
+            char_name = str(account.AgentData.CharacterName or "")
+            if prof in melee_professions:
+                return (0, char_name)
+            return (priority_by_profession.get(prof, 5), char_name)
+
+        accounts = sorted(accounts, key=_invite_priority)
+
         for account in accounts:
             if account.AccountEmail == sender_email:
                 continue
             
-            same_map = Map.GetMapID() == account.MapID and Map.GetRegion()[0] == account.MapRegion and Map.GetDistrict() == account.MapDistrict and Map.GetLanguage()[0] == account.MapLanguage
+            same_map = Map.GetMapID() == account.AgentData.Map.MapID and Map.GetRegion()[0] == account.AgentData.Map.Region and Map.GetDistrict() == account.AgentData.Map.District and Map.GetLanguage()[0] == account.AgentData.Map.Language
             
-            if same_map and not GLOBAL_CACHE.Party.IsPartyMember(account.PlayerID):        
-                char_name = account.CharacterName
+            if same_map and not GLOBAL_CACHE.Party.IsPartyMember(account.AgentData.AgentID):        
+                char_name = account.AgentData.CharacterName
                 def send_invite(name = char_name):
                     ConsoleLog("HeroAI", f"Inviting {name} to party.")
                     Player.SendChatCommand("invite " + name)
@@ -211,13 +227,41 @@ class HeroAICommands:
                 )
             ) 
             
-    def __resign_command(self, accounts: list[AccountData]):
+    def __travel_alts_to_leader_map_command(self, accounts: list[AccountStruct]):
+        sender_email = Player.GetAccountEmail()
+        map_id = Map.GetMapID()
+        region = Map.GetRegion()[0]
+        district = Map.GetDistrict()
+        language = Map.GetLanguage()[0]
+
+        for account in GLOBAL_CACHE.ShMem.GetAllAccountData():
+            if account.AccountEmail == sender_email:
+                continue
+
+            same_map = (
+                map_id == account.AgentData.Map.MapID
+                and region == account.AgentData.Map.Region
+                and district == account.AgentData.Map.District
+                and language == account.AgentData.Map.Language
+            )
+            if same_map:
+                continue
+
+            ConsoleLog("HeroAI", f"Traveling {account.AgentData.CharacterName} to leader's map.")
+            GLOBAL_CACHE.ShMem.SendMessage(
+                sender_email,
+                account.AccountEmail,
+                SharedCommandType.TravelToMap,
+                (map_id, region, district, language),
+            )
+
+    def __resign_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.Resign, (0, 0, 0, 0))
         
-    def __pixel_stack_command(self, accounts: list[AccountData]):
+    def __pixel_stack_command(self, accounts: list[AccountStruct]):
         player_x, player_y = Player.GetXY()
         sender_email = Player.GetAccountEmail()
         
@@ -227,7 +271,7 @@ class HeroAICommands:
             
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PixelStack, (player_x, player_y, 0, 0))
             
-    def __unlock_chest_command(self, accounts: list[AccountData]):
+    def __unlock_chest_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         target_id = Player.GetTargetID()
         
@@ -235,51 +279,51 @@ class HeroAICommands:
         if account_data is None:
             return 
         
-        party_id = account_data.PartyID
-        map_id = account_data.MapID
-        map_region = account_data.MapRegion
-        map_district = account_data.MapDistrict
-        map_language = account_data.MapLanguage
+        party_id = account_data.AgentPartyData.PartyID
+        map_id = account_data.AgentData.Map.MapID
+        map_region = account_data.AgentData.Map.Region
+        map_district = account_data.AgentData.Map.District
+        map_language = account_data.AgentData.Map.Language
 
-        def on_same_map_and_party(account : AccountData) -> bool:                    
-            return (account.PartyID == party_id and
-                    account.MapID == map_id and
-                    account.MapRegion == map_region and
-                    account.MapDistrict == map_district and
-                    account.MapLanguage == map_language)
+        def on_same_map_and_party(account : AccountStruct) -> bool:                    
+            return (account.AgentPartyData.PartyID == party_id and
+                    account.AgentData.Map.MapID == map_id and
+                    account.AgentData.Map.Region == map_region and
+                    account.AgentData.Map.District == map_district and
+                    account.AgentData.Map.Language == map_language)
             
         all_accounts = [account for account in GLOBAL_CACHE.ShMem.GetAllAccountData() if on_same_map_and_party(account)]
-        lowest_party_index_account = min(all_accounts, key=lambda account: account.PartyPosition, default=None)
+        lowest_party_index_account = min(all_accounts, key=lambda account: account.AgentPartyData.PartyPosition, default=None)
         if lowest_party_index_account is None:
             return
         
         GLOBAL_CACHE.ShMem.SendMessage(sender_email, lowest_party_index_account.AccountEmail, SharedCommandType.OpenChest, (target_id, 1, 0, 0))
             
-    def __interact_with_target_command(self, accounts: list[AccountData]):
+    def __interact_with_target_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         target_id = Player.GetTargetID()
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.InteractWithTarget, (target_id, 0, 0, 0))
     
-    def __talk_and_dialog_with_target_command(self, accounts: list[AccountData]):
+    def __talk_and_dialog_with_target_command(self, accounts: list[AccountStruct]):
         sender_email = Player.GetAccountEmail()        
         target_id = Player.GetTargetID()
         
         for account in accounts:
             GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.TakeDialogWithTarget, (target_id, 1, 0, 0))
 
-    def __open_consumables_commands(self, accounts: list[AccountData]):
+    def __open_consumables_commands(self, accounts: list[AccountStruct]):
         from HeroAI import ui
         ui.show_configure_consumables_window()
 
-    def __flag_heroes_command(self, accounts: list[AccountData]):
-        from HeroAI import windows
-        windows.HeroAI_Windows.capture_flag_all = True
-        windows.HeroAI_Windows.capture_hero_flag = True
-        windows.HeroAI_Windows.capture_hero_index = 0
-        windows.HeroAI_Windows.one_time_set_flag = False    
+    def __flag_heroes_command(self, accounts: list[AccountStruct]):
+        from HeroAI.ui_base import HeroAI_BaseUI
+        HeroAI_BaseUI.capture_flag_all = True
+        HeroAI_BaseUI.capture_hero_flag = True
+        HeroAI_BaseUI.capture_hero_index = 0
+        HeroAI_BaseUI.one_time_set_flag = False    
     
-    def __unflag_heroes_command(self, accounts: list[AccountData]):
-        from HeroAI import windows
-        windows.HeroAI_Windows.ClearFlags = True
+    def __unflag_heroes_command(self, accounts: list[AccountStruct]):
+        from HeroAI.ui_base import HeroAI_BaseUI
+        HeroAI_BaseUI.ClearFlags = True

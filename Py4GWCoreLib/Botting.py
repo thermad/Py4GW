@@ -29,6 +29,7 @@ class BottingClass:
                  #CONFIG
                  config_log_actions: bool = False,
                  config_halt_on_death: bool = True,
+                 config_stop_on_party_wipe: bool = True,
                  config_pause_on_danger: bool = False,
                  config_movement_timeout: int = 15000,
                  config_movement_tolerance: int = 150,
@@ -115,6 +116,7 @@ class BottingClass:
         self.config = BotConfig(self, bot_name,
                                 config_log_actions=config_log_actions,
                                 config_halt_on_death=config_halt_on_death,
+                                config_stop_on_party_wipe=config_stop_on_party_wipe,
                                 config_pause_on_danger=config_pause_on_danger,
                                 config_movement_timeout=config_movement_timeout,
                                 config_movement_tolerance=config_movement_tolerance,
@@ -279,6 +281,16 @@ class BottingClass:
         self.config.fsm_running = True
         self.config.FSM.reset()
         self.config.FSM.jump_to_state_by_name(step_name)
+
+    #region Travel helpers
+    def Travel_To_Random_District(
+        self,
+        target_map_id: int = 0,
+        target_map_name: str = "",
+        region_pool: str = "eu",
+    ) -> None:
+        """Travel to a random allowed region pool."""
+        self.Map.Travel_To_Random_District(target_map_id, target_map_name, region_pool)
 
     def Update(self):
         if self.config.fsm_running:

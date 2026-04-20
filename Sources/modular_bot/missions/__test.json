@@ -1,0 +1,7 @@
+
+{
+  "name": "restocker",
+  "steps": [
+    {"type": "use_consumables", "mode": "all", "multibox": true}
+  ]
+}

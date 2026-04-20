@@ -129,12 +129,12 @@ class Targeting:
     def TargetLowestAllyCaster(other_ally=False, filter_skill_id=0):
         from ..Py4GWcorelib import Utils
         from ..AgentArray import AgentArray
-        from ..Agent import Agent
+        from .Checks import Checks
 
         distance = Range.Spellcast.value
         ally_array = AgentArray.GetAllyArray()
         ally_array = Targeting.FilterAllyArray(ally_array, distance, other_ally, filter_skill_id)
-        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Agent.IsCaster(agent_id))
+        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Checks.Agents.IsCaster(agent_id))
 
         ally_array = AgentArray.Sort.ByHealth(ally_array)
         return Utils.GetFirstFromArray(ally_array)
@@ -144,11 +144,12 @@ class Targeting:
         from ..Py4GWcorelib import Utils
         from ..AgentArray import AgentArray
         from ..Agent import Agent
+        from .Checks import Checks
 
         distance = Range.Spellcast.value
         ally_array = AgentArray.GetAllyArray()
         ally_array = Targeting.FilterAllyArray(ally_array, distance, other_ally, filter_skill_id)
-        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Agent.IsMartial(agent_id))
+        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Checks.Agents.IsMartial(agent_id))
         
         spirit_pet_array = AgentArray.GetSpiritPetArray()
         spirit_pet_array = Targeting.FilterAllyArray(spirit_pet_array, distance, other_ally, filter_skill_id)
@@ -163,11 +164,12 @@ class Targeting:
         from ..Py4GWcorelib import Utils
         from ..AgentArray import AgentArray
         from ..Agent import Agent
+        from .Checks import Checks
 
         distance = Range.Spellcast.value
         ally_array = AgentArray.GetAllyArray()
         ally_array = Targeting.FilterAllyArray(ally_array, distance, other_ally, filter_skill_id)
-        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Agent.IsMelee(agent_id))
+        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Checks.Agents.IsMelee(agent_id))
         
         spirit_pet_array = AgentArray.GetSpiritPetArray()
         spirit_pet_array = Targeting.FilterAllyArray(spirit_pet_array, distance, other_ally, filter_skill_id)
@@ -181,12 +183,12 @@ class Targeting:
     def TargetLowestAllyRanged(other_ally=False, filter_skill_id=0):
         from ..Py4GWcorelib import Utils
         from ..AgentArray import AgentArray
-        from ..Agent import Agent
+        from .Checks import Checks
 
         distance = Range.Spellcast.value
         ally_array = AgentArray.GetAllyArray()
         ally_array = Targeting.FilterAllyArray(ally_array, distance, other_ally, filter_skill_id)
-        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Agent.IsRanged(agent_id))
+        ally_array = AgentArray.Filter.ByCondition(ally_array, lambda agent_id: Checks.Agents.IsRanged(agent_id))
         
         ally_array = AgentArray.Sort.ByHealth(ally_array)
         return Utils.GetFirstFromArray(ally_array)
@@ -281,10 +283,32 @@ class Targeting:
         return Utils.GetFirstFromArray(enemy_array)
 
     @staticmethod
-    def GetEnemyInjured(max_distance=4500.0, aggressive_only = False): 
-        from ..Py4GWcorelib import Utils 
-        from ..AgentArray import AgentArray 
-        from ..GlobalCache import GLOBAL_CACHE 
+    def GetEnemyCastingSpellOrChant(max_distance=4500.0, aggressive_only=False):
+        from ..Py4GWcorelib import Utils
+        from ..AgentArray import AgentArray
+        from ..GlobalCache import GLOBAL_CACHE
+        from .Agents import Agents
+        from ..Agent import Agent
+        def _filter_spells_or_chants(enemy_array):
+            result_array = []
+            for enemy_id in enemy_array:
+                casting_skill_id = Agent.GetCastingSkillID(enemy_id)
+                if GLOBAL_CACHE.Skill.Flags.IsSpell(casting_skill_id) or GLOBAL_CACHE.Skill.Flags.IsChant(casting_skill_id):
+                    result_array.append(enemy_id)
+            return result_array
+
+        player_pos = Player.GetXY()
+        enemy_array = Agents.GetFilteredEnemyArray(player_pos[0], player_pos[1], max_distance, aggressive_only)
+        enemy_array = AgentArray.Filter.ByCondition(enemy_array, lambda agent_id: Agent.IsCasting(agent_id))
+        enemy_array = _filter_spells_or_chants(enemy_array)
+        enemy_array = AgentArray.Sort.ByDistance(enemy_array, player_pos)
+        return Utils.GetFirstFromArray(enemy_array)
+
+    @staticmethod
+    def GetEnemyInjured(max_distance=4500.0, aggressive_only = False):
+        from ..Py4GWcorelib import Utils
+        from ..AgentArray import AgentArray
+        from ..GlobalCache import GLOBAL_CACHE
         from .Agents import Agents 
         from ..Agent import Agent
         player_pos = Player.GetXY() 

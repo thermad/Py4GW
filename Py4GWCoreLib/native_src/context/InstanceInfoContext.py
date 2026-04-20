@@ -138,6 +138,9 @@ class InstanceInfo:
         return InstanceInfo._ptr    
     @staticmethod
     def _update_ptr():
+        #from ..ShMem.SysShaMem import SystemShaMemMgr
+        #if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        #ptr = SSM.InstanceInfo
         ptr = InstanceInfo_GetPtr.read_ptr()
         InstanceInfo._ptr = ptr
         if not ptr:
@@ -155,7 +158,8 @@ class InstanceInfo:
             InstanceInfo._callback_name,
             PyCallback.Phase.PreUpdate,
             InstanceInfo._update_ptr,
-            priority=3
+            priority=3,
+            context=PyCallback.Context.Draw
         )
 
 

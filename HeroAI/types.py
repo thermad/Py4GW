@@ -115,8 +115,10 @@ class Skilltarget (IntEnum):
     Minion = 14
     Spirit = 15
     Pet = 16
+    AllyNPCByModel = 17  # scan all agents by model ID, fallback to AllyMartial
+
     #added targets
-    
+
     EnemyClustered = 22
     EnemyAttacking = 23
     EnemyCasting = 24
@@ -132,6 +134,8 @@ class Skilltarget (IntEnum):
     EnemyPoisoned = 34
     EnemyCrippled = 35
     EnemyHealthy = 36
+    EnemyCastingSpellOrChant = 37
+    AllyWeaponSpell = 38
 
 
 

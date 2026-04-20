@@ -1,17 +1,16 @@
 from operator import index
-from Py4GWCoreLib import GLOBAL_CACHE, Map,IconsFontAwesome5, ImGui, Utils, Overlay, Range, SharedCommandType, ConsoleLog, Color
+from Py4GWCoreLib import GLOBAL_CACHE, Map,IconsFontAwesome5, ImGui, Utils, Overlay, Range, SharedCommandType, ConsoleLog, Color, ColorPalette
 from Py4GWCoreLib import UIManager, ModelID, GLOBAL_CACHE, WindowFrames
 from Py4GWCoreLib import Agent, Player
 from Py4GWCoreLib import (Routines, ActionQueueManager,Key, Keystroke, ThrottledTimer)
-from HeroAI.constants import (FOLLOW_DISTANCE_OUT_OF_COMBAT, MAX_NUM_PLAYERS, MELEE_RANGE_VALUE, PARTY_WINDOW_FRAME_EXPLORABLE_OFFSETS,
-                              PARTY_WINDOW_FRAME_OUTPOST_OFFSETS, PARTY_WINDOW_HASH, RANGED_RANGE_VALUE)
+from Py4GWCoreLib.IniManager import IniManager
 from Py4GWCoreLib.ImGui_src.WindowModule import WindowModule
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData, HeroAIOptionStruct, SharedMessage
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct, HeroAIOptionStruct, SharedMessageStruct
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 
 from .constants import MAX_NUM_PLAYERS, NUMBER_OF_SKILLS
 from .types import SkillType, SkillNature, Skilltarget
-from .globals import capture_mouse_timer, show_area_rings, show_hero_follow_grid, show_distance_on_followers, hero_formation
+from .globals import capture_mouse_timer, show_area_rings, show_hero_follow_grid, show_distance_on_followers, show_broadcast_follow_positions, show_broadcast_follow_threshold_rings, hero_formation, show_flagging_window
 from .utils import IsHeroFlagged, DrawFlagAll, DrawHeroFlag, DistanceFromWaypoint, SameMapAsAccount
 from HeroAI.settings import Settings
 
@@ -42,7 +41,7 @@ class HeroAI_FloatingWindows():
     SETTINGS_THROTTLE = ThrottledTimer(50)
     ACCOUNT_THROTTLE = ThrottledTimer(500)
     hero_windows : dict[str, WindowModule] = {}
-    messages : list[tuple[int, SharedMessage]] = []
+    messages : list[tuple[int, SharedMessageStruct]] = []
     widget_handler = get_widget_handler()
     init_success:bool  = False
     module_info = None
@@ -80,135 +79,42 @@ class HeroAI_FloatingWindows():
         for agent_id in enemy_array:
             x, y, z = Agent.GetXYZ(agent_id)
             screen_x, screen_y = Overlay.WorldToScreen(x, y, z + 25)
-            if ImGui.floating_button(
-                f"{IconsFontAwesome5.ICON_CROSSHAIRS}", name=agent_id, x=screen_x - 12, y=screen_y - 12, width=25, height=25
-            ):
+            # --- Configuration for "O" (The Outer Ring) ---
+            o_x, o_y = screen_x - 12, screen_y - 12
+            o_w, o_h = 35, 35
+
+            # --- Configuration for "+" (The Inner Cross) ---
+            # Adjust these until the + is perfectly centered inside the O
+            plus_x, plus_y = o_x-2, o_y -10
+            plus_w, plus_h = 40, 40
+
+            clicked = False
+
+            # 1. Draw the "O" layer
+            if ImGui.floating_button(f"O", name=f"O_{agent_id}", 
+                                    x=o_x, y=o_y, 
+                                    width=o_w, height=o_h, 
+                                    font_size=30):
+                clicked = True
+
+            # 2. Draw the "+" layer with its own dimensions
+            if ImGui.floating_button(f"+", name=f"plus_{agent_id}", 
+                                    x=plus_x, y=plus_y, 
+                                    width=plus_w, height=plus_h, 
+                                    font_size=45):
+                clicked = True
+
+            # 3. Shared Logic
+            if clicked:
                 Player.ChangeTarget(agent_id)
                 Player.Interact(agent_id, True)
                 ActionQueueManager().AddAction("ACTION", Keystroke.PressAndReleaseCombo, [Key.Ctrl.value, Key.Space.value])
         Overlay().EndDraw()
 
     @staticmethod
-    def DrawFramedContent(cached_data: CacheData, content_frame_id):
-        
-        if  HeroAI_FloatingWindows.selected_tab == HeroAI_FloatingWindows.TabType.party:
-            return
-
-        child_left, child_top, child_right, child_bottom = UIManager.GetFrameCoords(content_frame_id)
-        width = child_right - child_left
-        height = child_bottom - child_top
-
-        UIManager().DrawFrame(content_frame_id, Utils.RGBToColor(0, 0, 0, 255))
-
-        flags = PyImGui.WindowFlags.NoCollapse | PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize
-        PyImGui.push_style_var(ImGui.ImGuiStyleVar.WindowRounding, 0.0)
-        PyImGui.set_next_window_pos(child_left, child_top)
-        PyImGui.set_next_window_size(width, height)
-
-        def control_panel_case(cached_data : CacheData):
-            own_party_number = GLOBAL_CACHE.Party.GetOwnPartyNumber()
-            
-            if own_party_number == 0:
-                # leader control panel
-                
-                HeroAI_Windows.DrawPanelButtons("global", cached_data.global_options, set_global=True)
-                
-                if PyImGui.collapsing_header("Player Control"):
-                    for index in range(MAX_NUM_PLAYERS):
-                        account = GLOBAL_CACHE.ShMem.GetAccountDataFromPartyNumber(index)
-                        options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(index)
-                        
-                        if account and not account.IsHero:                            
-                            if PyImGui.tree_node(f"{account.CharacterName}##ControlPlayer{index}"):
-                                if options is not None:
-                                    HeroAI_Windows.DrawPanelButtons(account.AccountEmail, options)
-                                
-                                PyImGui.tree_pop()
-            else:
-                # follower control panel
-                options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(cached_data.account_email)
-                
-                if options is not None:
-                    HeroAI_Windows.DrawPanelButtons(cached_data.account_email, options)
-
-        if PyImGui.begin("##heroai_framed_content", True, flags):
-            match HeroAI_FloatingWindows.selected_tab:
-                case HeroAI_FloatingWindows.TabType.control_panel:
-                    control_panel_case(cached_data)
-                case HeroAI_FloatingWindows.TabType.candidates:
-                    HeroAI_Windows.DrawCandidateWindow(cached_data)
-                case HeroAI_FloatingWindows.TabType.flagging:
-                    HeroAI_Windows.DrawFlaggingWindow(cached_data)
-                case HeroAI_FloatingWindows.TabType.config:
-                    HeroAI_Windows.DrawOptions(cached_data)
-                case HeroAI_FloatingWindows.TabType.messaging:
-                    # Placeholder for messaging tab
-                    HeroAI_Windows.DrawMessagingOptions(cached_data)
-
-        PyImGui.end()
-        PyImGui.pop_style_var(1)
-
-    @staticmethod
-    def DrawEmbeddedWindow(cached_data: CacheData):         
-        if not HeroAI_FloatingWindows.settings.ShowPartyPanelUI:        
-             return
-         
-        parent_frame_id = UIManager.GetFrameIDByHash(PARTY_WINDOW_HASH)
-        outpost_content_frame_id = UIManager.GetChildFrameID(PARTY_WINDOW_HASH, PARTY_WINDOW_FRAME_OUTPOST_OFFSETS)
-        explorable_content_frame_id = UIManager.GetChildFrameID(PARTY_WINDOW_HASH, PARTY_WINDOW_FRAME_EXPLORABLE_OFFSETS)
-
-        if Map.IsMapReady() and Map.IsExplorable():
-            content_frame_id = explorable_content_frame_id
-        else:
-            content_frame_id = outpost_content_frame_id
-
-        left, top, right, _bottom = UIManager.GetFrameCoords(parent_frame_id)
-        frame_offset = 5
-        width = right - left - frame_offset
-
-        flags = ImGui.PushTransparentWindow()
-
-        PyImGui.set_next_window_pos(left, top - 35)
-        PyImGui.set_next_window_size(width, 35)
-        if PyImGui.begin("embedded contorl panel", True, flags):
-            if PyImGui.begin_tab_bar("HeroAITabs"):
-                if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_USERS + "Party##PartyTab"):
-                    HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.party
-                    PyImGui.end_tab_item()
-                ImGui.show_tooltip("Party")
-                if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_RUNNING + "HeroAI##controlpanelTab"):
-                    HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.control_panel
-                    PyImGui.end_tab_item()
-                ImGui.show_tooltip("HeroAI Control Panel")
-                if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_BULLHORN + "##messagingTab"):
-                    HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.messaging
-                    PyImGui.end_tab_item()
-                ImGui.show_tooltip("Messaging")
-                if Map.IsOutpost():
-                    if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_USER_PLUS + "##candidatesTab"):
-                        HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.candidates
-                        PyImGui.end_tab_item()
-                    ImGui.show_tooltip("Candidates")
-                else:
-                    if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_FLAG + "##flaggingTab"):
-                        HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.flagging
-                        PyImGui.end_tab_item()
-                    ImGui.show_tooltip("Flagging")
-                if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_COGS + "##configTab"):
-                    HeroAI_FloatingWindows.selected_tab = HeroAI_FloatingWindows.TabType.config
-                    PyImGui.end_tab_item()
-                ImGui.show_tooltip("Config")
-                PyImGui.end_tab_bar()
-        PyImGui.end()
-
-        ImGui.PopTransparentWindow()
-            
-        HeroAI_FloatingWindows.DrawFramedContent(cached_data, content_frame_id)
-
-    @staticmethod
     def DistanceToDestination(cached_data: CacheData):
         account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
-        options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(cached_data.account_email)
+        options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(cached_data.account_email)
         
         if not account:
             return 0.0
@@ -216,7 +122,13 @@ class HeroAI_FloatingWindows():
         if not options:
             return 0.0
                 
-        destination = (options.FlagPosX, options.FlagPosY) if options.IsFlagged else Agent.GetXY(GLOBAL_CACHE.Party.GetPartyLeaderID())
+        if options.IsFlagged:
+            if account.AgentPartyData.PartyPosition == 0:
+                destination = (options.AllFlag.x, options.AllFlag.y)
+            else:
+                destination = (options.FlagPos.x, options.FlagPos.y)
+        else:
+            destination = Agent.GetXY(GLOBAL_CACHE.Party.GetPartyLeaderID())
         return Utils.Distance(destination, Agent.GetXY(Player.GetAgentID()))
 
     @staticmethod
@@ -238,11 +150,11 @@ class HeroAI_FloatingWindows():
             HeroAI_FloatingWindows.settings.write_settings()
             
     @staticmethod
-    def combined_hero_panel(own_data : AccountData, cached_data: CacheData):
+    def combined_hero_panel(own_data : AccountStruct, cached_data: CacheData):
         combined_identifier = "combined_hero_panel"
         accounts = cached_data.party.accounts.values()
         
-        if not HeroAI_FloatingWindows.settings.ShowPanelOnlyOnLeaderAccount or own_data.PlayerIsPartyLeader:
+        if not HeroAI_FloatingWindows.settings.ShowPanelOnlyOnLeaderAccount or own_data.AgentPartyData.IsPartyLeader:
             if HeroAI_FloatingWindows.settings.ShowHeroPanels:
                 messages = GLOBAL_CACHE.ShMem.GetAllMessages()
             
@@ -314,7 +226,7 @@ class HeroAI_FloatingWindows():
             if HeroAI_FloatingWindows.settings.ShowPartySearchOverlay:
                 draw_party_search_overlay(cached_data)
             
-            if (HeroAI_FloatingWindows.settings.ShowCommandPanel and (own_data.PlayerIsPartyLeader or not HeroAI_FloatingWindows.settings.ShowCommandPanelOnlyOnLeaderAccount) 
+            if (HeroAI_FloatingWindows.settings.ShowCommandPanel and (own_data.AgentPartyData.IsPartyLeader or not HeroAI_FloatingWindows.settings.ShowCommandPanelOnlyOnLeaderAccount) 
                 ):
                 draw_command_panel(HeroAI_FloatingWindows.command_panel_window, cached_data)
             
@@ -348,8 +260,6 @@ class HeroAI_Windows():
     capture_hero_index = -1
     capture_hero_flag = False
     capture_flag_all = False
-    
-    
     outline_color:Color = Color(255, 255, 255, 255)
     color_tick = 0
     
@@ -386,7 +296,6 @@ class HeroAI_Windows():
     show_confirm_dialog = False
     dialog_options = []
     target_id = 0
-        
     @staticmethod
     def DrawBuffWindow(cached_data:CacheData):
         global MAX_NUM_PLAYERS
@@ -397,14 +306,14 @@ class HeroAI_Windows():
             account = GLOBAL_CACHE.ShMem.GetAccountDataFromPartyNumber(index)
             
             if account and account.IsSlotActive:
-                if Agent.IsPlayer(account.PlayerID):
-                    player_name = Agent.GetNameByID(account.PlayerID)
+                if Agent.IsPlayer(account.AgentData.AgentID):
+                    player_name = Agent.GetNameByID(account.AgentData.AgentID)
                 else:
-                    player_name = GLOBAL_CACHE.Party.Heroes.GetNameByAgentID(account.PlayerID)
+                    player_name = GLOBAL_CACHE.Party.Heroes.GetNameByAgentID(account.AgentData.AgentID)
 
                 if PyImGui.tree_node(f"{player_name}##DebugBuffsPlayer{index}"):
                     # Retrieve buffs for the player
-                    player_buffs = account.PlayerBuffs
+                    player_buffs = account.AgentData.Buffs.Buffs
                     headers = ["Skill ID", "Skill Name"]
                     data = [(buff.SkillId, GLOBAL_CACHE.Skill.GetName(buff.SkillId)) for buff in player_buffs]
                     ImGui.table(f"{player_name} Buffs", headers, data)
@@ -525,41 +434,62 @@ class HeroAI_Windows():
 
     @staticmethod
     def DrawFlags(cached_data:CacheData):
-        leader_options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(0)    
+        global show_broadcast_follow_positions, show_broadcast_follow_threshold_rings
+        shmem = GLOBAL_CACHE.ShMem
+        party = GLOBAL_CACHE.Party
+        party_heroes = party.Heroes
+        active_account_option_pairs: list[tuple[AccountStruct, HeroAIOptionStruct]] = shmem.GetAllActiveAccountHeroAIPairs(sort_results=False)
+        options_by_party: list[HeroAIOptionStruct | None] = [None] * MAX_NUM_PLAYERS
+        accounts_by_party: list[AccountStruct | None] = [None] * MAX_NUM_PLAYERS
+
+        # Build once per frame, keyed by party position; source is active IsAccount-only.
+        for account, options in active_account_option_pairs:
+            party_index: int = account.AgentPartyData.PartyPosition
+            if 0 <= party_index < MAX_NUM_PLAYERS:
+                accounts_by_party[party_index] = account
+                options_by_party[party_index] = options
+
+        leader_options: HeroAIOptionStruct | None = options_by_party[0]
         
-        if HeroAI_Windows.capture_hero_flag:        
+        if HeroAI_Windows.capture_hero_flag:
             x, y, _ = Overlay().GetMouseWorldPos()
             if HeroAI_Windows.capture_flag_all:
                 DrawFlagAll(x, y)
-                pass
-            
             else:
                 DrawHeroFlag(x, y)
-                
-            if PyImGui.is_mouse_clicked(0) and HeroAI_Windows.one_time_set_flag:
+
+            mouse_clicked = PyImGui.is_mouse_clicked(0)
+            if mouse_clicked and HeroAI_Windows.one_time_set_flag:
                 HeroAI_Windows.one_time_set_flag = False
                 return
-            
-            if PyImGui.is_mouse_clicked(0) and not HeroAI_Windows.one_time_set_flag:
-                if HeroAI_Windows.capture_hero_index > 0 and HeroAI_Windows.capture_hero_index <= GLOBAL_CACHE.Party.GetHeroCount():
-                    if not HeroAI_Windows.capture_flag_all:   
-                        agent_id = GLOBAL_CACHE.Party.Heroes.GetHeroAgentIDByPartyPosition(HeroAI_Windows.capture_hero_index)
-                        GLOBAL_CACHE.Party.Heroes.FlagHero(agent_id, x, y)
+
+            if mouse_clicked:
+                capture_index = HeroAI_Windows.capture_hero_index
+                hero_count = party.GetHeroCount()
+
+                if 0 < capture_index <= hero_count:
+                    if not HeroAI_Windows.capture_flag_all:
+                        agent_id = party_heroes.GetHeroAgentIDByPartyPosition(capture_index)
+                        party_heroes.FlagHero(agent_id, x, y)
                         HeroAI_Windows.one_time_set_flag = True
                 else:
-                    if HeroAI_Windows.capture_hero_index == 0:
+                    if capture_index == 0:
                         hero_ai_index = 0
-                        GLOBAL_CACHE.Party.Heroes.FlagAllHeroes(x, y)
+                        party_heroes.FlagAllHeroes(x, y)
                     else:
-                        hero_ai_index = HeroAI_Windows.capture_hero_index - GLOBAL_CACHE.Party.GetHeroCount()
-                    
-                    options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(hero_ai_index)
+                        hero_ai_index = capture_index - hero_count
+
+                    options: HeroAIOptionStruct | None = options_by_party[hero_ai_index] if 0 <= hero_ai_index < MAX_NUM_PLAYERS else None
                     if options:
-                        options.FlagPosX = x
-                        options.FlagPosY = y
+                        if capture_index == 0:
+                            options.AllFlag.x = x
+                            options.AllFlag.y = y
+                        else:
+                            options.FlagPos.x = x
+                            options.FlagPos.y = y
                         options.IsFlagged = True
-                        options.FlagFacingAngle = Agent.GetRotationAngle(GLOBAL_CACHE.Party.GetPartyLeaderID())
-                    
+                        options.FlagFacingAngle = Agent.GetRotationAngle(party.GetPartyLeaderID())
+
                     HeroAI_Windows.one_time_set_flag = True
 
                 HeroAI_Windows.capture_flag_all = False
@@ -569,31 +499,72 @@ class HeroAI_Windows():
 
         #All flag is handled by the game even with no heroes
         if leader_options and leader_options.IsFlagged:
-            DrawFlagAll(leader_options.FlagPosX, leader_options.FlagPosY)
+            DrawFlagAll(leader_options.AllFlag.x, leader_options.AllFlag.y)
             
-        for i in range(1, MAX_NUM_PLAYERS):            
-            options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(i)
-            account = GLOBAL_CACHE.ShMem.GetAccountDataFromPartyNumber(i)
-            
-            if options is None:
+        for i in range(1, MAX_NUM_PLAYERS):
+            options: HeroAIOptionStruct | None = options_by_party[i]
+            if options is None or not options.IsFlagged:
                 continue
-            
-            if options.IsFlagged and account and account.IsSlotActive and not account.IsHero:
-                DrawHeroFlag(options.FlagPosX, options.FlagPosY)
 
-        if HeroAI_Windows.ClearFlags:            
+            account: AccountStruct | None = accounts_by_party[i]
+            if account:
+                DrawHeroFlag(options.FlagPos.x, options.FlagPos.y)
+
+        if GLOBAL_CACHE.Party.GetPartyLeaderID() == Player.GetAgentID() and Map.IsExplorable():
+            if show_broadcast_follow_positions or show_broadcast_follow_threshold_rings:
+                segments = 24
+                Overlay().BeginDraw()
+                for i in range(1, MAX_NUM_PLAYERS):
+                    options: HeroAIOptionStruct | None = options_by_party[i]
+                    account: AccountStruct | None = accounts_by_party[i]
+                    if options is None or account is None or not account.IsSlotActive:
+                        continue
+                    fx = float(options.FollowPos.x)
+                    fy = float(options.FollowPos.y)
+                    if abs(fx) < 0.001 and abs(fy) < 0.001:
+                        continue
+                    fz = Overlay().FindZ(fx, fy, 0)
+                    if show_broadcast_follow_positions:
+                        Overlay().DrawPoly3D(
+                            fx, fy, fz,
+                            radius=Range.Touch.value / 3,
+                            color=Utils.RGBToColor(0, 255, 255, 140),
+                            numsegments=segments,
+                            thickness=2.0
+                        )
+                        Overlay().DrawText3D(
+                            fx, fy, fz - 110,
+                            f"F{i}",
+                            color=Utils.RGBToColor(0, 255, 255, 220),
+                            autoZ=False, centered=True, scale=1.8
+                        )
+                    if show_broadcast_follow_threshold_rings:
+                        thr = max(0.0, float(getattr(options, "FollowMoveThreshold", 0.0)))
+                        if thr > 0.0:
+                            Overlay().DrawPoly3D(
+                                fx, fy, fz,
+                                radius=thr,
+                                color=Utils.RGBToColor(255, 215, 0, 110),
+                                numsegments=max(24, segments),
+                                thickness=2.0
+                        )
+            Overlay().EndDraw()
+
+        if HeroAI_Windows.ClearFlags:
             for i in range(MAX_NUM_PLAYERS):
-                options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(i)
+                options: HeroAIOptionStruct | None = options_by_party[i]
             
                 if options:
                     options.IsFlagged = False
-                    options.FlagPosX = 0.0
-                    options.FlagPosY = 0.0
+                    options.FlagPos.x = 0.0
+                    options.FlagPos.y = 0.0
+                    options.AllFlag.x = 0.0
+                    options.AllFlag.y = 0.0
                     options.FlagFacingAngle = 0.0
                     
-                GLOBAL_CACHE.Party.Heroes.UnflagHero(i)
+                party_heroes.UnflagHero(i)
                 
-            GLOBAL_CACHE.Party.Heroes.UnflagAllHeroes()
+            party_heroes.UnflagAllHeroes()
             HeroAI_Windows.ClearFlags = False
                 
         
@@ -604,37 +575,53 @@ class HeroAI_Windows():
             PyImGui.text("No Follower or Heroes to Flag.")
             return
 
-        if PyImGui.collapsing_header("Flagging"):
-            if PyImGui.begin_table("Flags",3):
-                PyImGui.table_next_row()
-                PyImGui.table_next_column()
-                if party_size >= 2:
-                    HeroAI_Windows.HeroFlags[0] = ImGui.toggle_button("1", IsHeroFlagged(1), 30, 30)
-                PyImGui.table_next_column()
-                if party_size >= 3:
-                    HeroAI_Windows.HeroFlags[1] = ImGui.toggle_button("2", IsHeroFlagged(2),30,30)
-                PyImGui.table_next_column()
-                if party_size >= 4:
-                    HeroAI_Windows.HeroFlags[2] = ImGui.toggle_button("3", IsHeroFlagged(3),30,30)
-                PyImGui.table_next_row()
-                PyImGui.table_next_column()
-                if party_size >= 5:
-                    HeroAI_Windows.HeroFlags[3] = ImGui.toggle_button("4", IsHeroFlagged(4),30,30)
-                PyImGui.table_next_column()
-                HeroAI_Windows.AllFlag = ImGui.toggle_button("All", IsHeroFlagged(0), 30, 30)
-                PyImGui.table_next_column()
-                if party_size >= 6:
-                    HeroAI_Windows.HeroFlags[4] = ImGui.toggle_button("5", IsHeroFlagged(5),30,30)
-                PyImGui.table_next_row()
-                PyImGui.table_next_column()
-                if party_size >= 7:
-                    HeroAI_Windows.HeroFlags[5] = ImGui.toggle_button("6", IsHeroFlagged(6),30,30)
-                PyImGui.table_next_column()
-                if party_size >= 8:
-                    HeroAI_Windows.HeroFlags[6] = ImGui.toggle_button("7", IsHeroFlagged(7), 30, 30)
-                PyImGui.table_next_column()
-                HeroAI_Windows.ClearFlags = ImGui.toggle_button("X", HeroAI_Windows.HeroFlags[7],30,30)
-                PyImGui.end_table()
+        #if PyImGui.collapsing_header("Flagging"):
+        if PyImGui.button("Pin Down Flag Position"):
+            leader_x, leader_y = Agent.GetXY(GLOBAL_CACHE.Party.GetPartyLeaderID())
+            leader_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(0)
+            if leader_options:
+                leader_options.AllFlag.x = leader_x
+                leader_options.AllFlag.y = leader_y
+                leader_options.IsFlagged = True
+                leader_options.FlagFacingAngle = Agent.GetRotationAngle(GLOBAL_CACHE.Party.GetPartyLeaderID())
+            GLOBAL_CACHE.Party.Heroes.FlagAllHeroes(leader_x, leader_y)
+            HeroAI_Windows.AllFlag = True
+            HeroAI_Windows.capture_hero_flag = False
+            HeroAI_Windows.capture_flag_all = False
+            HeroAI_Windows.capture_hero_index = 0
+            HeroAI_Windows.one_time_set_flag = False
+            capture_mouse_timer.Stop()
+            
+        if PyImGui.begin_table("Flags",3):
+            PyImGui.table_next_row()
+            PyImGui.table_next_column()
+            if party_size >= 2:
+                HeroAI_Windows.HeroFlags[0] = ImGui.toggle_button("1", IsHeroFlagged(1), 30, 30)
+            PyImGui.table_next_column()
+            if party_size >= 3:
+                HeroAI_Windows.HeroFlags[1] = ImGui.toggle_button("2", IsHeroFlagged(2),30,30)
+            PyImGui.table_next_column()
+            if party_size >= 4:
+                HeroAI_Windows.HeroFlags[2] = ImGui.toggle_button("3", IsHeroFlagged(3),30,30)
+            PyImGui.table_next_row()
+            PyImGui.table_next_column()
+            if party_size >= 5:
+                HeroAI_Windows.HeroFlags[3] = ImGui.toggle_button("4", IsHeroFlagged(4),30,30)
+            PyImGui.table_next_column()
+            HeroAI_Windows.AllFlag = ImGui.toggle_button("All", IsHeroFlagged(0), 30, 30)
+            PyImGui.table_next_column()
+            if party_size >= 6:
+                HeroAI_Windows.HeroFlags[4] = ImGui.toggle_button("5", IsHeroFlagged(5),30,30)
+            PyImGui.table_next_row()
+            PyImGui.table_next_column()
+            if party_size >= 7:
+                HeroAI_Windows.HeroFlags[5] = ImGui.toggle_button("6", IsHeroFlagged(6),30,30)
+            PyImGui.table_next_column()
+            if party_size >= 8:
+                HeroAI_Windows.HeroFlags[6] = ImGui.toggle_button("7", IsHeroFlagged(7), 30, 30)
+            PyImGui.table_next_column()
+            HeroAI_Windows.ClearFlags = ImGui.toggle_button("X", HeroAI_Windows.HeroFlags[7],30,30)
+            PyImGui.end_table()
                     
                     
         if HeroAI_Windows.AllFlag != IsHeroFlagged(0):
@@ -652,57 +639,7 @@ class HeroAI_Windows():
                 HeroAI_Windows.one_time_set_flag = False
                 capture_mouse_timer.Start()
             
-    @staticmethod
-    def DrawCandidateWindow(cached_data:CacheData):
-        def _OnSameMap(self_account, candidate):
-            if (candidate.MapID == self_account.MapID and
-                candidate.MapRegion == self_account.MapRegion and
-                candidate.MapDistrict == self_account.MapDistrict):
-                return True
-            return False
-        
-        def _OnSameParty(self_account, candidate):
-            if self_account.PartyID == candidate.PartyID:
-                return True
-            return False
-            
-        table_flags = PyImGui.TableFlags.Sortable | PyImGui.TableFlags.Borders | PyImGui.TableFlags.RowBg
-        if PyImGui.begin_table("CandidateTable", 2, table_flags):
-            # Setup columns
-            PyImGui.table_setup_column("Command", PyImGui.TableColumnFlags.NoSort)
-            PyImGui.table_setup_column("Candidate", PyImGui.TableColumnFlags.NoFlag)
-            PyImGui.table_headers_row()
-
-            account_email = Player.GetAccountEmail()
-            self_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(account_email)
-            if not self_account:
-                PyImGui.text("No account data found.")
-                PyImGui.end_table()
-                return
-            
-            accounts = cached_data.party.accounts.values()
-            
-            for account in accounts:
-                if account.AccountEmail == account_email:
-                    continue
-                
-                if _OnSameMap(self_account, account) and not _OnSameParty(self_account, account):
-                    PyImGui.table_next_row()
-                    PyImGui.table_next_column()
-                    if PyImGui.button(f"Invite##invite_{account.PlayerID}"):
-                        GLOBAL_CACHE.Party.Players.InvitePlayer(account.CharacterName)
-                        GLOBAL_CACHE.ShMem.SendMessage(account_email, account.AccountEmail,SharedCommandType.InviteToParty, (self_account.PlayerID,0,0,0))
-                    PyImGui.table_next_column()
-                    PyImGui.text(f"{account.CharacterName}")
-                else:
-                    if not _OnSameMap(self_account, account):
-                        PyImGui.table_next_row()
-                        PyImGui.table_next_column()
-                        if PyImGui.button(f"Summon##summon_{account.PlayerID}"):
-                            GLOBAL_CACHE.ShMem.SendMessage(account_email, account.AccountEmail,SharedCommandType.TravelToMap, (self_account.MapID,self_account.MapRegion,self_account.MapDistrict,0))
-                        PyImGui.table_next_column()
-                        PyImGui.text(f"{account.CharacterName}")
-            PyImGui.end_table()
+    
 
     @staticmethod
     def DrawPlayersDebug(cached_data:CacheData):
@@ -714,37 +651,43 @@ class HeroAI_Windows():
 
         if PyImGui.button("Submit"):
             self_id = Player.GetAgentID()
-            account = GLOBAL_CACHE.ShMem.GetStruct().AccountData[HeroAI_Windows.slot_to_write]
-            options = GLOBAL_CACHE.ShMem.GetStruct().HeroAIOptions[HeroAI_Windows.slot_to_write]
+            account = GLOBAL_CACHE.ShMem.GetAllAccounts().AccountData[HeroAI_Windows.slot_to_write]
+            options = GLOBAL_CACHE.ShMem.GetAllAccounts().HeroAIOptions[HeroAI_Windows.slot_to_write]
 
-            account.PlayerID = self_id
+            account.AgentData.AgentID = self_id
             player_id = Player.GetAgentID()
-            account.PlayerEnergyRegen = Agent.GetEnergyRegen(player_id)
-            account.PlayerEnergy = Agent.GetEnergy(player_id)
+            account.AgentData.Energy.Regen = Agent.GetEnergyRegen(player_id)
+            account.AgentData.Energy.Current = Agent.GetEnergy(player_id)
+            account.AgentData.Energy.Max = Agent.GetMaxEnergy(player_id)
+            account.AgentData.Energy.Pips = Utils.calculate_energy_pips(account.AgentData.Energy.Max, account.AgentData.Energy.Regen)
             account.IsSlotActive = True
             account.IsHero = False
             
             options.IsFlagged = False
-            options.FlagPosX = 0.0
-            options.FlagPosY = 0.0
+            options.FlagPos.x = 0.0
+            options.FlagPos.y = 0.0
+            options.AllFlag.x = 0.0
+            options.AllFlag.y = 0.0
 
-        headers = ["Slot","PlayerID", "EnergyRegen", "Energy", "IsSlotActive", "IsHero", "IsFlagged", "FlagPosX", "FlagPosY", "LastUpdated"]
+        headers = ["Slot","PlayerID", "EnergyRegen", "Energy", "IsSlotActive", "IsHero", "IsFlagged", "FlagPosX", "FlagPosY", "AllFlagX", "AllFlagY", "LastUpdated"]
 
         data = []
         for i in range(MAX_NUM_PLAYERS):
             account = GLOBAL_CACHE.ShMem.GetAccountDataFromPartyNumber(i)
-            options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(i)
+            options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(i)
             if account and options:
                 data.append((
                     i,  # Slot index
-                    account.PlayerID,
-                    f"{account.PlayerEnergyRegen:.4f}", 
-                    f"{account.PlayerEnergy:.4f}",       
+                    account.AgentData.AgentID,
+                    f"{account.AgentData.Energy.Regen:.4f}", 
+                    f"{account.AgentData.Energy.Current:.4f}",       
                     account.IsSlotActive,
                     account.IsHero,
                     options.IsFlagged,
-                    f"{options.FlagPosX:.4f}",     
-                    f"{options.FlagPosY:.4f}",     
+                    f"{options.FlagPos.x:.4f}",
+                    f"{options.FlagPos.y:.4f}",
+                    f"{options.AllFlag.x:.4f}",
+                    f"{options.AllFlag.y:.4f}",
                     account.LastUpdated
                 ))
 
@@ -796,7 +739,7 @@ class HeroAI_Windows():
 
         data = []
         for i in range(MAX_NUM_PLAYERS):
-            options = GLOBAL_CACHE.ShMem.GetGerHeroAIOptionsByPartyNumber(i)
+            options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(i)
             
             if options is None:
                 continue
@@ -902,7 +845,7 @@ class HeroAI_Windows():
             
                 if account and account.IsSlotActive:
                     Overlay().BeginDraw()
-                    player_id = account.PlayerID
+                    player_id = account.AgentData.AgentID
                     if player_id == Player.GetAgentID():
                         continue
                     target_x, target_y, target_z = Agent.GetXYZ(player_id)
@@ -954,7 +897,7 @@ class HeroAI_Windows():
                 if self_account.AccountEmail == account.AccountEmail:
                     continue
                 ConsoleLog("Messaging", "Pixelstacking account: " + account.AccountEmail)
-                GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PixelStack, (self_account.PlayerPosX,self_account.PlayerPosY,0,0))
+                GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PixelStack, (self_account.AgentData.Pos.x,self_account.AgentData.Pos.y,0,0))
         ImGui.show_tooltip("Pixel Stack (Carto Helper)")
         
         PyImGui.same_line(0,-1)
@@ -1164,394 +1107,4 @@ class HeroAI_Windows():
             if PyImGui.collapsing_header("Buff Debug"):
                 HeroAI_Windows.DrawBuffWindow(cached_data)
             
-    @staticmethod
-    def DrawMultiboxTools(cached_data:CacheData):
-        global MAX_NUM_PLAYERS
-        cached_data.HeroAI_windows.tools_window.initialize()
-
-        if cached_data.HeroAI_windows.tools_window.begin():
-            if Map.IsOutpost() and Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
-                if PyImGui.collapsing_header("Party Setup",PyImGui.TreeNodeFlags.DefaultOpen):
-                    HeroAI_Windows.DrawCandidateWindow(cached_data)
-            if Map.IsExplorable() and Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
-                if PyImGui.collapsing_header("Flagging"):
-                    HeroAI_Windows.DrawFlaggingWindow(cached_data)
-
-            if PyImGui.collapsing_header("Debug Options"):
-                HeroAI_Windows.DrawDebugWindow(cached_data)
     
-        cached_data.HeroAI_windows.tools_window.process_window()
-        cached_data.HeroAI_windows.tools_window.end()            
-
-    @staticmethod
-    def DrawPanelButtons(identifier: str, source_game_option : HeroAIOptionStruct, set_global : bool = False):
-        style = ImGui.get_style()
-        
-        def set_global_option(game_option:HeroAIOptionStruct, option_name:str="", skill_index:int=-1):
-            cached_data: CacheData = CacheData()
-            accounts = cached_data.party.accounts.values()
-            
-            if not accounts:
-                ConsoleLog("HeroAI", "No accounts found in shared memory.")
-                return
-                    
-            for account in accounts:          
-                if not account or not account.IsSlotActive or account.IsHero or account.PartyID != GLOBAL_CACHE.Party.GetPartyID():
-                    continue
-                  
-                account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account.AccountEmail)
-                if not account_options:
-                    continue
-                
-                
-                
-                match option_name:
-                    case "Following" | "Avoidance" | "Looting" | "Targeting" | "Combat":
-                        value = getattr(game_option, option_name)
-                        ConsoleLog("HeroAI", f"Setting {option_name} to {value} for account {account.AccountEmail}")
-                        setattr(account_options, option_name, value)
-                    
-                    case "Skills":
-                        if skill_index >= 0 and skill_index < NUMBER_OF_SKILLS:
-                            ConsoleLog("HeroAI", f"Setting Skills[{skill_index}] to {game_option.Skills[skill_index]} for account {account.AccountEmail}")
-                            account_options.Skills[skill_index] = game_option.Skills[skill_index]         
-        
-        avail_x, avail_y = PyImGui.get_content_region_avail()
-        table_width = avail_x
-        btn_size = (table_width / 5) - 4
-        skill_size = (table_width / NUMBER_OF_SKILLS) - 4
-        
-        style.ItemSpacing.push_style_var(0, 0)
-        style.CellPadding.push_style_var(2, 2)
-        
-        if PyImGui.begin_table(f"GameOptionTable##{identifier}", 5, 0, table_width, btn_size + 2):
-            PyImGui.table_next_row()
-            PyImGui.table_next_column()
-            Following = ImGui.toggle_button(IconsFontAwesome5.ICON_RUNNING + "##Following" + identifier, source_game_option.Following, btn_size, btn_size)
-            if Following != source_game_option.Following:
-                source_game_option.Following = Following
-                
-                if set_global:
-                    set_global_option(source_game_option, "Following")
-                
-            ImGui.show_tooltip("Following")
-            PyImGui.table_next_column()
-            Avoidance = ImGui.toggle_button(IconsFontAwesome5.ICON_PODCAST + "##Avoidance" + identifier, source_game_option.Avoidance, btn_size, btn_size)
-            if Avoidance != source_game_option.Avoidance:
-                source_game_option.Avoidance = Avoidance
-                
-                if set_global:
-                    set_global_option(source_game_option, "Avoidance")
-                
-            ImGui.show_tooltip("Avoidance")
-            PyImGui.table_next_column()
-            Looting = ImGui.toggle_button(IconsFontAwesome5.ICON_COINS + "##Looting" + identifier, source_game_option.Looting, btn_size, btn_size)
-            if Looting != source_game_option.Looting:
-                source_game_option.Looting = Looting
-                
-                if set_global:
-                    set_global_option(source_game_option, "Looting")
-                
-            ImGui.show_tooltip("Looting")
-            PyImGui.table_next_column()
-            Targeting = ImGui.toggle_button(IconsFontAwesome5.ICON_BULLSEYE + "##Targeting" + identifier    , source_game_option.Targeting, btn_size, btn_size)
-            if Targeting != source_game_option.Targeting:
-                source_game_option.Targeting = Targeting
-                
-                if set_global:
-                    ConsoleLog("HeroAI", f"Setting Targeting to {Targeting} for all heroes in party.")
-                    set_global_option(source_game_option, "Targeting")
-                    
-                
-            ImGui.show_tooltip("Targeting")
-            PyImGui.table_next_column()
-            Combat = ImGui.toggle_button(IconsFontAwesome5.ICON_SKULL_CROSSBONES + "##Combat" + identifier, source_game_option.Combat, btn_size, btn_size)
-            if Combat != source_game_option.Combat:
-                source_game_option.Combat = Combat
-                
-                if set_global:
-                    set_global_option(source_game_option, "Combat")
-                
-            ImGui.show_tooltip("Combat")
-            PyImGui.end_table()
-
-        style.ButtonPadding.push_style_var(5 if style.Theme not in ImGui.Textured_Themes else 0, 3 if style.Theme not in ImGui.Textured_Themes else 2)
-        if PyImGui.begin_table("SkillsTable", NUMBER_OF_SKILLS, 0, table_width, (btn_size / 3)):
-            PyImGui.table_next_row()
-            for i in range(NUMBER_OF_SKILLS):
-                PyImGui.table_next_column()
-                skill_active = ImGui.toggle_button(f"{i + 1}##Skill{i}" + identifier, source_game_option.Skills[i], skill_size, skill_size)
-                
-                if skill_active != source_game_option.Skills[i]:
-                    source_game_option.Skills[i] = skill_active
-                    
-                    if set_global:
-                        set_global_option(source_game_option, "Skills", i)                        
-                    
-                ImGui.show_tooltip(f"Skill {i + 1}")
-            PyImGui.end_table()
-        style.ButtonPadding.pop_style_var()
-        
-        style.ItemSpacing.pop_style_var()
-        style.CellPadding.pop_style_var()      
-        
-    @staticmethod
-    def DrawFollowerUI(cached_data:CacheData): 
-         
-        own_party_number = GLOBAL_CACHE.Party.GetOwnPartyNumber()
-        
-        if own_party_number <= 0:
-            return
-        
-        party_window_frame = WindowFrames["PartyWindow"]
-                
-        def advance_rainbow_color(tick: int) -> tuple[int,Color]:
-            tick += 2
-            # Use sine waves offset from each other to create a rainbow pulse
-            r = int((math.sin(tick * 0.05) * 0.5 + 0.5) * 255)  # Red wave
-            g = int((math.sin(tick * 0.05 + 2.0) * 0.5 + 0.5) * 255)  # Green wave
-            b = int((math.sin(tick * 0.05 + 4.0) * 0.5 + 0.5) * 255)  # Blue wave
-            return tick, Color(r, g, b, 255).copy()
-        
-
-        HeroAI_Windows.color_tick, HeroAI_Windows.outline_color = advance_rainbow_color(HeroAI_Windows.color_tick)
-        party_window_frame.DrawFrameOutline(HeroAI_Windows.outline_color.to_color(), 3)
-
-        left, top, right, _bottom = party_window_frame.GetCoords()
-        frame_offset = 5
-        width = right - left - frame_offset
-
-        flags = ImGui.PushTransparentWindow()
-
-        PyImGui.set_next_window_pos(left, top - 35)
-        PyImGui.set_next_window_size(width, 35)
-        if PyImGui.begin("embedded contorl panel", True, flags):
-            if PyImGui.begin_tab_bar("HeroAITabs"):
-                if PyImGui.begin_tab_item(IconsFontAwesome5.ICON_USERS + "HeroAI##HeroAITab"):
-                    pass
-                    PyImGui.end_tab_item()
-                ImGui.show_tooltip("HeroAI is Active. \nRefer to Leaders control panel for options.")
-                PyImGui.end_tab_bar()
-        PyImGui.end()
-
-        ImGui.PopTransparentWindow()
-    
-        HeroAI_FloatingWindows.DrawFramedContent(cached_data, party_window_frame.GetFrameID())
-
-    @staticmethod
-    def DrawButtonBar(cached_data:CacheData):
-        from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
-        btn_size = 23
-        table_width = btn_size * 6 + 30
-
-        ImGui.push_font("Regular",10)
-        if PyImGui.begin_child("ControlPanelChild", (215, 0), False, PyImGui.WindowFlags.AlwaysAutoResize):
-            if PyImGui.begin_table("MessagingTable", 5):
-                PyImGui.table_next_row()
-                PyImGui.table_next_column()
-                if ImGui.colored_button(f"{IconsFontAwesome5.ICON_SKULL}##commands_resign", 
-                                        HeroAI_Windows.ButtonColors["Resign"].button_color, 
-                                        HeroAI_Windows.ButtonColors["Resign"].hovered_color, 
-                                        HeroAI_Windows.ButtonColors["Resign"].active_color,
-                                        btn_size, btn_size):
-                    accounts = cached_data.party.accounts.values()
-                    sender_email = cached_data.account_email
-                    for account in accounts:
-                        ConsoleLog("Messaging", "Resigning account: " + account.AccountEmail)
-                        GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.Resign, (0,0,0,0))
-                ImGui.pop_font()
-                ImGui.show_tooltip("Resign Party")
-                ImGui.push_font("Regular",10)
-                PyImGui.same_line(0,-1)
-                PyImGui.text("|")
-                PyImGui.same_line(0,-1)
-
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_COMPRESS_ARROWS_ALT}##commands_pixelstack",
-                                        btn_size, btn_size):
-                    self_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
-                    if not self_account:
-                        return
-                    accounts = cached_data.party.accounts.values()
-                    sender_email = cached_data.account_email
-                    for account in accounts:
-                        if self_account.AccountEmail == account.AccountEmail:
-                            continue
-                        ConsoleLog("Messaging", "Pixelstacking account: " + account.AccountEmail)
-                        GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PixelStack, (self_account.PlayerPosX,self_account.PlayerPosY,0,0))
-                ImGui.pop_font()
-                ImGui.show_tooltip("Pixel Stack (Carto Helper)")
-                ImGui.push_font("Regular",10)
-                
-                PyImGui.same_line(0,-1)
-
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_HAND_POINT_RIGHT}##commands_InteractTarget",
-                                        btn_size, btn_size):
-                    target = Player.GetTargetID()
-                    if target == 0:
-                        ConsoleLog("Messaging", "No target to interact with.")
-                        return
-                    self_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
-                    if not self_account:
-                        return
-                    accounts = cached_data.party.accounts.values()
-                    sender_email = cached_data.account_email
-                    for account in accounts:
-                        if self_account.AccountEmail == account.AccountEmail:
-                            continue
-                        ConsoleLog("Messaging", f"Ordering {account.AccountEmail} to interact with target: {target}")
-                        GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.InteractWithTarget, (target,0,0,0))
-                
-                ImGui.pop_font()
-                ImGui.show_tooltip("Interact with Target")
-                ImGui.push_font("Regular",10)
-                PyImGui.same_line(0,-1)
-
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_COMMENT_DOTS}##commands_takedialog",
-                                        btn_size, btn_size):
-                    target = Player.GetTargetID()
-                    if target == 0:
-                        ConsoleLog("Messaging", "No target to interact with.")
-                        return
-                    if not UIManager.IsNPCDialogVisible():
-                        ConsoleLog("Messaging", "No dialog is open.")
-                        return
-                    
-                    # i need to display a modal dialog here to confirm options
-                    options = UIManager.GetDialogButtonCount()
-                    
-                    self_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
-                    if not self_account:
-                        return
-                    accounts = cached_data.party.accounts.values()
-                    sender_email = cached_data.account_email
-                    for account in accounts:
-                        if self_account.AccountEmail == account.AccountEmail:
-                            continue
-                        ConsoleLog("Messaging", f"Ordering {account.AccountEmail} to interact with target: {target}")
-                        GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.TakeDialogWithTarget, (target,1,0,0))
-                
-                ImGui.pop_font()
-                ImGui.show_tooltip("Get Dialog")
-                ImGui.push_font("Regular",10)
-                PyImGui.same_line(0,-1)
-                
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_KEY}##unlock_chest",
-                                        btn_size, btn_size):
-                    sender_email = Player.GetAccountEmail()        
-                    target_id = Player.GetTargetID()
-                    
-                    account_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(sender_email) 
-                    if account_data is None:
-                        return 
-                    
-                    party_id = account_data.PartyID
-                    map_id = account_data.MapID
-                    map_region = account_data.MapRegion
-                    map_district = account_data.MapDistrict
-                    map_language = account_data.MapLanguage
-
-                    def on_same_map_and_party(account : AccountData) -> bool:                    
-                        return (account.PartyID == party_id and
-                                account.MapID == map_id and
-                                account.MapRegion == map_region and
-                                account.MapDistrict == map_district and
-                                account.MapLanguage == map_language)
-                        
-                    all_accounts = [account for account in cached_data.party.accounts.values()]
-                    lowest_party_index_account = min(all_accounts, key=lambda account: account.PartyPosition, default=None)
-                    if lowest_party_index_account is None:
-                        return
-                    
-                    GLOBAL_CACHE.ShMem.SendMessage(sender_email, lowest_party_index_account.AccountEmail, SharedCommandType.OpenChest, (target_id, 1, 0, 0))
-            
-                ImGui.pop_font()
-                ImGui.show_tooltip("Open Chest")
-                ImGui.push_font("Regular",10)
-                PyImGui.same_line(0,-1)
-                
-                if PyImGui.button(f"{IconsFontAwesome5.ICON_COINS}##pickup_loot",
-                                        btn_size, btn_size):
-                    sender_email = Player.GetAccountEmail()        
-                    accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
-                    for account in accounts:
-                        GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PickUpLoot, (0, 0, 0, 0))
-                
-                ImGui.pop_font()
-                ImGui.show_tooltip("Pick up Loot")
-                ImGui.push_font("Regular",10)
-                PyImGui.same_line(0,-1)
-                  
-                from HeroAI import ui  
-                v = ui.is_base_configure_consumables_window_open()
-                new_v = ImGui.toggle_button(label=f"{IconsFontAwesome5.ICON_CANDY_CANE}##consumables",
-                                       v= v,
-                                       width=btn_size, 
-                                       height=btn_size)
-                if new_v != v:
-                    ui.show_base_configure_consumables_window()
-                
-                ImGui.pop_font()
-                ImGui.show_tooltip("Consumables")
-                ImGui.push_font("Regular",10)
-                
-                PyImGui.end_table()
-            PyImGui.end_child()
-        ImGui.pop_font()
-            
-    @staticmethod
-    def DrawControlPanelWindow(cached_data:CacheData):
-        if not HeroAI_FloatingWindows.settings.ShowControlPanelWindow:      
-            return
-        
-        global MAX_NUM_PLAYERS
-        own_party_number = GLOBAL_CACHE.Party.GetOwnPartyNumber()
-        if own_party_number != 0:
-            return
-        
-        def _close_spacing():
-            dummy_spacing = 5
-            PyImGui.dummy(0,dummy_spacing)
-            PyImGui.separator()
-            PyImGui.dummy(0,dummy_spacing)
-
-        
-        if ImGui.Begin(ini_key=cached_data.ini_key, name="HeroAI Control Panel", p_open=True, flags=PyImGui.WindowFlags.AlwaysAutoResize):
-            if PyImGui.begin_child("ControlPanelChild", (200, 110), False, PyImGui.WindowFlags.AlwaysAutoResize):
-                style = ImGui.get_style()
-                style.ItemSpacing.push_style_var(2, 2)
-                style.CellPadding.push_style_var(2, 2)
-            
-                HeroAI_Windows.DrawPanelButtons(cached_data.account_email, cached_data.global_options, set_global=True) 
-                _close_spacing() 
-                HeroAI_Windows.DrawButtonBar(cached_data)
-                
-                style.CellPadding.pop_style_var()
-                style.ItemSpacing.pop_style_var()
-                PyImGui.end_child()
-                    
-            PyImGui.separator()
-            if PyImGui.tree_node("Players"):
-                style = ImGui.get_style()
-                style.ItemSpacing.push_style_var(2, 2)
-                style.CellPadding.push_style_var(2, 2)
-                sorted_by_party_position = sorted(cached_data.party.accounts.values(), key=lambda acc: acc.PartyPosition)
-                index = 0
-                
-                for account in sorted_by_party_position:
-                    if account and account.IsSlotActive and not account.IsHero and account.PartyID == GLOBAL_CACHE.Party.GetPartyID():
-                        index += 1
-                        original_game_option = cached_data.party.options.get(account.PlayerID)
-                        
-                        if PyImGui.tree_node(f"{index}. {account.CharacterName}##ControlPlayer{index}"):
-                            if original_game_option is not None:
-                                HeroAI_Windows.DrawPanelButtons(account.AccountEmail, original_game_option)
-                            PyImGui.new_line()
-                            PyImGui.tree_pop()
-                        
-                        
-                PyImGui.tree_pop()
-                style.CellPadding.pop_style_var()
-                style.ItemSpacing.pop_style_var()
-                
-        ImGui.End(cached_data.ini_key)
-        

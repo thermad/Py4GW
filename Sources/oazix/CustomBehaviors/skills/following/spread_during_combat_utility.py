@@ -12,6 +12,7 @@ from Sources.oazix.CustomBehaviors.primitives.bus.event_type import EventType
 from Sources.oazix.CustomBehaviors.primitives.helpers import custom_behavior_helpers
 from Sources.oazix.CustomBehaviors.primitives.helpers.behavior_result import BehaviorResult
 from Sources.oazix.CustomBehaviors.primitives.behavior_state import BehaviorState
+from Sources.oazix.CustomBehaviors.primitives.following_behavior_priority import FollowingBehaviorPriority
 from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import CustomBehaviorParty
 from Sources.oazix.CustomBehaviors.primitives.parties.party_following_manager import PartyFollowingManager
 from Sources.oazix.CustomBehaviors.primitives.scores.comon_score import CommonScore
@@ -22,6 +23,8 @@ from Sources.oazix.CustomBehaviors.primitives.bus.event_bus import EventBus
 from Sources.oazix.CustomBehaviors.primitives.scores.score_static_definition import ScoreStaticDefinition
 
 class SpreadDuringCombatUtility(CustomSkillUtilityBase):
+
+    Name = "spread_during_combat"
     """
     Utility that handles spreading behavior during combat for all players (including leaders).
 
@@ -32,6 +35,7 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
     - Attracts toward party leader using attraction forces
     - Works for all players including party leaders
     - Only active during combat (IN_AGGRO state)
+    - Respects party following behavior mode (BehaviorStateFollowing enum)
     """
 
     def __init__(
@@ -42,7 +46,7 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
 
         super().__init__(
             event_bus=event_bus,
-            skill=CustomSkill("spread_during_combat"),
+            skill=CustomSkill(SpreadDuringCombatUtility.Name),
             in_game_build=current_build,
             score_definition=ScoreStaticDefinition(CommonScore.FOLLOW.value),
             allowed_states=[BehaviorState.IN_AGGRO],  # Only during combat
@@ -55,30 +59,15 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         # Debug
         self.last_target_pos = None
         self.last_result_vector = None
-
-        # Instance-specific enable flags (not shared across party)
-        self.enable_enemy_repulsion = False
-        self.enable_leader_attraction = False
-        self.enable_allies_repulsion = False
-
-        self.event_bus.subscribe(EventType.MAP_CHANGED, self.area_changed, subscriber_name=self.custom_skill.skill_name)
-    
-    def area_changed(self, message: EventMessage)-> Generator[Any, Any, Any]:
-        if Map.IsExplorable():
-            self.enable_enemy_repulsion = False if Agent.IsMelee(Player.GetAgentID()) else True
-            self.enable_leader_attraction = True
-            self.enable_allies_repulsion = False if Agent.IsMelee(Player.GetAgentID()) else True
-        yield
+        self.manager.initialize_account_forces(Player.GetAccountEmail())
         
-
-
     @override
     def are_common_pre_checks_valid(self, current_state: BehaviorState) -> bool:
 
         if current_state is BehaviorState.IDLE: return False
         if self.allowed_states is not None and current_state not in self.allowed_states: return False
         if custom_behavior_helpers.CustomBehaviorHelperParty.is_party_leader(): return False
-        # Only run if this player has a defined flag position (spread around flag)
+        # Don't spread if this player has a defined flag position (use flagging behavior instead)
         if CustomBehaviorParty().party_flagging_manager.is_flag_defined(Player.GetAccountEmail()): return False
 
         return True
@@ -103,7 +92,9 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
 
     def _get_enemy_positions(self) -> list[tuple[float, float]]:
         """Get positions of nearby enemies for repulsion"""
-        if not self.enable_enemy_repulsion:
+        # Check if enemy repulsion is enabled for this account
+        account_email = Player.GetAccountEmail()
+        if not self.manager.get_is_repulsion_enemies_active(account_email):
             return []
 
         positions = []
@@ -145,6 +136,10 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             print(f"SpreadDuringCombatUtility._get_party_leader_position error: {e}")
             return None
 
+    def _debug_log(self, message: str) -> None:
+        if self.manager.enable_debug_overlay:
+            print(message)
+
     def _calculate_finale_position(self, my_pos: tuple[float, float]) -> tuple[float, float] | None:
         """
         Calculate target position using single VectorFields instance combining:
@@ -152,25 +147,56 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         2. Repulsion from enemies
         3. Attraction to leader
         All forces are combined in one VectorFields calculation.
+        Respects party following behavior to enable/disable specific forces.
         """
 
-        party_positions: list[tuple[float, float]] = self._get_party_member_positions() if self.enable_allies_repulsion else []
-        enemy_positions: list[tuple[float, float]] = self._get_enemy_positions() if self.enable_enemy_repulsion else []
-        leader_pos: tuple[float, float] | None = self._get_party_leader_position() if self.enable_leader_attraction else None
+        # Get the current party following behavior
+        party_behavior = CustomBehaviorParty().get_party_following_behavior()
+
+        # Get per-account force activation flags from shared memory
+        account_email = Player.GetAccountEmail()
+        is_martial = Agent.IsMartial(Player.GetAgentID())
+
+        # Read current settings from shared memory
+        base_allies_repulsion = self.manager.get_is_repulsion_allies_active(account_email)
+        base_leader_attraction = self.manager.get_is_attraction_leader_active(account_email)
+        base_enemies_repulsion = self.manager.get_is_repulsion_enemies_active(account_email)
+
+        # Apply preset behavior overrides
+        # Note: PRIORITIZE modes override shared memory settings for tactical control
+        # PRIORITIZE_VECTOR_FIELD and LOW_PRIORITY_VECTOR_FIELD respect shared memory settings
+        enable_allies_repulsion_for_calc = base_allies_repulsion
+        enable_enemy_repulsion_for_calc = base_enemies_repulsion
+        enable_leader_attraction_for_calc = base_leader_attraction
+
+        self._debug_log(f"Final force settings: allies={enable_allies_repulsion_for_calc}, leader={enable_leader_attraction_for_calc}, enemies={enable_enemy_repulsion_for_calc}")
+
+        party_positions: list[tuple[float, float]] = self._get_party_member_positions() if enable_allies_repulsion_for_calc else []
+        enemy_positions: list[tuple[float, float]] = self._get_enemy_positions() if enable_enemy_repulsion_for_calc else []
+        leader_pos: tuple[float, float] | None = self._get_party_leader_position() if enable_leader_attraction_for_calc else None
+
+        self._debug_log(f"Collected positions: {len(party_positions)} allies, {len(enemy_positions)} enemies, leader={'Yes' if leader_pos else 'No'}")
+
+        # Check if all forces are disabled
+        if not enable_allies_repulsion_for_calc and not enable_enemy_repulsion_for_calc and not enable_leader_attraction_for_calc:
+            self._debug_log("All forces disabled - no movement will be calculated")
+            return None
 
         # Create single VectorFields instance with combined radii
         # Use the largest radius to encompass all force types
         # For attraction, we need a much larger radius to handle long distances
         max_repulsion_radius = max(
-            self.manager.allies_repulsion_threshold if self.enable_allies_repulsion else 0,
-            self.manager.enemy_repulsion_threshold if self.enable_enemy_repulsion else 0
+            self.manager.allies_repulsion_threshold if enable_allies_repulsion_for_calc else 0,
+            self.manager.enemy_repulsion_threshold if enable_enemy_repulsion_for_calc else 0
         )
 
         # For attraction, use a larger radius to handle long-distance leader attraction
         max_attraction_radius = 1500.0  # Large enough to handle most leader distances
 
         max_radius = max(max_repulsion_radius, max_attraction_radius)
-        if max_radius == 0: return None  # No forces enabled
+        if max_radius == 0:
+            self._debug_log("Max radius is 0 - no forces enabled")
+            return None  # No forces enabled
 
         vf = VectorFields(
             my_pos,
@@ -179,33 +205,44 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         )
 
         # 1. Add allies repulsion positions (with distance check)
-        if self.enable_allies_repulsion and party_positions:
+        if enable_allies_repulsion_for_calc and party_positions:
             for ally_pos in party_positions:
                 distance = Utils.Distance(my_pos, ally_pos)
                 if distance < self.manager.allies_repulsion_threshold:
                     vf.add_custom_repulsion_position(ally_pos)
 
         # 2. Add enemy repulsion positions (with distance check)
-        if self.enable_enemy_repulsion and enemy_positions:
+        if enable_enemy_repulsion_for_calc and enemy_positions:
             for enemy_pos in enemy_positions:
                 distance = Utils.Distance(my_pos, enemy_pos)
                 if distance < self.manager.enemy_repulsion_threshold:
                     vf.add_custom_repulsion_position(enemy_pos)
 
         # 3. Add leader attraction position (with distance check)
-        if self.enable_leader_attraction and leader_pos is not None:
+        if enable_leader_attraction_for_calc and leader_pos is not None:
             distance_to_leader = Utils.Distance(my_pos, leader_pos)
-            print(f"Leader attraction: distance={distance_to_leader:.1f}, threshold={self.manager.leader_attraction_threshold:.1f}")
+            self._debug_log(f"Leader attraction: distance={distance_to_leader:.1f}, threshold={self.manager.leader_attraction_threshold:.1f}")
             # Only attract if beyond threshold to avoid clustering on leader
             if distance_to_leader > self.manager.leader_attraction_threshold:
                 vf.add_custom_attraction_position(leader_pos)
-                print(f"Added leader attraction position: {leader_pos}")
+                self._debug_log(f"✓ Added leader attraction position: {leader_pos}")
             else:
-                print(f"Leader attraction: distance {distance_to_leader:.1f} <= threshold {self.manager.leader_attraction_threshold:.1f}, no attraction")
+                self._debug_log(f"✗ Leader attraction SKIPPED: distance {distance_to_leader:.1f} <= threshold {self.manager.leader_attraction_threshold:.1f}")
+        elif enable_leader_attraction_for_calc and leader_pos is None:
+            self._debug_log(f"✗ Leader attraction SKIPPED: leader_pos is None")
+        elif not enable_leader_attraction_for_calc:
+            self._debug_log(f"✗ Leader attraction DISABLED in config")
 
         # Compute combined vector from all forces
-        combined_vector = vf.compute_combined_vector()
-        print(f"Combined vector from VectorFields: ({combined_vector[0]:.2f}, {combined_vector[1]:.2f})")
+        try:
+            self._debug_log(f"Computing vector field with {len(vf.custom_repulsion_positions)} repulsion positions and {len(vf.custom_attraction_positions)} attraction positions")
+            combined_vector = vf.compute_combined_vector()
+            self._debug_log(f"Combined vector from VectorFields: ({combined_vector[0]:.2f}, {combined_vector[1]:.2f})")
+        except Exception as e:
+            self._debug_log(f"ERROR in compute_combined_vector: {e}")
+            import traceback
+            self._debug_log(f"Traceback: {traceback.format_exc()}")
+            return None
 
         # Apply weights by scaling the vector components
         result_vector_x = combined_vector[0]
@@ -215,7 +252,12 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         # This applies to all movement types (allies, enemies, leader)
         if vector_magnitude := math.sqrt(result_vector_x * result_vector_x + result_vector_y * result_vector_y):
             # Calculate movement scaling based on active forces and distances
-            movement_scale = self._calculate_movement_scale(my_pos, party_positions, enemy_positions, leader_pos)
+            movement_scale = self._calculate_movement_scale(
+                my_pos, party_positions, enemy_positions, leader_pos,
+                enable_leader_attraction_for_calc,
+                enable_allies_repulsion_for_calc,
+                enable_enemy_repulsion_for_calc
+            )
 
             # Apply scaling to the vector
             result_vector_x *= movement_scale
@@ -224,18 +266,18 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             # Recalculate magnitude after scaling
             vector_magnitude = math.sqrt(result_vector_x * result_vector_x + result_vector_y * result_vector_y)
 
-            print(f"Applied movement scale: {movement_scale:.2f}")
-            print(f"Scaled vector: ({result_vector_x:.2f}, {result_vector_y:.2f}), magnitude={vector_magnitude:.2f}")
+            self._debug_log(f"Applied movement scale: {movement_scale:.2f}")
+            self._debug_log(f"Scaled vector: ({result_vector_x:.2f}, {result_vector_y:.2f}), magnitude={vector_magnitude:.2f}")
 
         # Store for debug
         self.last_result_vector = (result_vector_x, result_vector_y, vector_magnitude)
 
-        print(f"Final vector: ({result_vector_x:.2f}, {result_vector_y:.2f}), magnitude={vector_magnitude:.2f}")
-        print(f"Min threshold: {self.manager.min_move_threshold:.2f}")
+        self._debug_log(f"Final vector: ({result_vector_x:.2f}, {result_vector_y:.2f}), magnitude={vector_magnitude:.2f}")
+        self._debug_log(f"Min threshold: {self.manager.min_move_threshold:.2f}")
 
         # Only move if vector is significant
         if vector_magnitude < self.manager.min_move_threshold:
-            print(f"Vector magnitude {vector_magnitude:.2f} < threshold {self.manager.min_move_threshold:.2f}, not moving")
+            self._debug_log(f"Vector magnitude {vector_magnitude:.2f} < threshold {self.manager.min_move_threshold:.2f}, not moving")
             return None
 
         # Limit movement distance to prevent overshooting
@@ -253,7 +295,10 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
     def _calculate_movement_scale(self, my_pos: tuple[float, float],
                                 party_positions: list[tuple[float, float]],
                                 enemy_positions: list[tuple[float, float]],
-                                leader_pos: tuple[float, float] | None) -> float:
+                                leader_pos: tuple[float, float] | None,
+                                enable_leader_attraction: bool,
+                                enable_allies_repulsion: bool,
+                                enable_enemy_repulsion: bool) -> float:
         """
         Calculate movement scaling factor based on active forces and distances.
         This applies to all movement types for consistent scaling.
@@ -264,32 +309,32 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         total_scale = base_scale
 
         # Scale based on leader distance if leader attraction is active
-        if self.enable_leader_attraction and leader_pos is not None:
+        if enable_leader_attraction and leader_pos is not None:
             distance_to_leader = Utils.Distance(my_pos, leader_pos)
             if distance_to_leader > self.manager.leader_attraction_threshold:
                 # Farther from leader = larger steps
                 leader_distance_factor = min(distance_to_leader / 200.0, 5.0)
                 leader_weight_factor = self.manager.leader_attraction_weight / 100.0
                 total_scale *= leader_distance_factor * leader_weight_factor
-                print(f"Leader scaling: distance={distance_to_leader:.1f}, distance_factor={leader_distance_factor:.2f}, weight_factor={leader_weight_factor:.2f}")
+                self._debug_log(f"Leader scaling: distance={distance_to_leader:.1f}, distance_factor={leader_distance_factor:.2f}, weight_factor={leader_weight_factor:.2f}")
 
         # Scale based on ally repulsion if active
-        if self.enable_allies_repulsion and party_positions:
+        if enable_allies_repulsion and party_positions:
             close_allies = sum(1 for ally_pos in party_positions
                              if Utils.Distance(my_pos, ally_pos) < self.manager.allies_repulsion_threshold)
             if close_allies > 0:
                 ally_weight_factor = self.manager.allies_repulsion_weight / 100.0
                 total_scale *= ally_weight_factor
-                print(f"Ally scaling: close_allies={close_allies}, weight_factor={ally_weight_factor:.2f}")
+                self._debug_log(f"Ally scaling: close_allies={close_allies}, weight_factor={ally_weight_factor:.2f}")
 
         # Scale based on enemy repulsion if active
-        if self.enable_enemy_repulsion and enemy_positions:
+        if enable_enemy_repulsion and enemy_positions:
             close_enemies = sum(1 for enemy_pos in enemy_positions
                               if Utils.Distance(my_pos, enemy_pos) < self.manager.enemy_repulsion_threshold)
             if close_enemies > 0:
                 enemy_weight_factor = self.manager.enemy_repulsion_weight / 100.0
                 total_scale *= enemy_weight_factor
-                print(f"Enemy scaling: close_enemies={close_enemies}, weight_factor={enemy_weight_factor:.2f}")
+                self._debug_log(f"Enemy scaling: close_enemies={close_enemies}, weight_factor={enemy_weight_factor:.2f}")
 
         # Ensure minimum scale
         total_scale = max(total_scale, 1.0)
@@ -311,6 +356,12 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
         my_agent_id = Player.GetAgentID()
         _, _, my_z = Agent.GetXYZ(my_agent_id)
 
+        # Get current force activation from shared memory
+        account_email = Player.GetAccountEmail()
+        enable_allies_repulsion = self.manager.get_is_repulsion_allies_active(account_email)
+        enable_enemy_repulsion = self.manager.get_is_repulsion_enemies_active(account_email)
+        enable_leader_attraction = self.manager.get_is_attraction_leader_active(account_email)
+
         # Color scheme for different force types
         player_color = Utils.RGBToColor(0, 150, 255, 255)  # Blue
         ally_color = Utils.RGBToColor(255, 100, 0, 255)    # Orange
@@ -325,16 +376,16 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
 
         # Draw force radius circles
         max_radius = max(
-            self.manager.allies_repulsion_threshold if self.enable_allies_repulsion else 0,
-            self.manager.enemy_repulsion_threshold if self.enable_enemy_repulsion else 0,
-            self.manager.leader_attraction_threshold if self.enable_leader_attraction else 0
+            self.manager.allies_repulsion_threshold if enable_allies_repulsion else 0,
+            self.manager.enemy_repulsion_threshold if enable_enemy_repulsion else 0,
+            self.manager.leader_attraction_threshold if enable_leader_attraction else 0
         )
 
         if max_radius > 0:
             Overlay().DrawPoly3D(my_pos[0], my_pos[1], my_z, max_radius, Utils.RGBToColor(128, 128, 128, 100), numsegments=32, thickness=2.0)
 
         # 1. ALLIES REPULSION FORCES
-        if self.enable_allies_repulsion:
+        if enable_allies_repulsion:
             # Draw allies repulsion threshold circle
             Overlay().DrawPoly3D(my_pos[0], my_pos[1], my_z, self.manager.allies_repulsion_threshold, Utils.RGBToColor(255, 100, 0, 80), numsegments=32, thickness=2.0)
 
@@ -360,7 +411,7 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
 
 
         # 2. ENEMY REPULSION FORCES
-        if self.enable_enemy_repulsion:
+        if enable_enemy_repulsion:
             # Draw enemy repulsion threshold circle
             Overlay().DrawPoly3D(my_pos[0], my_pos[1], my_z, self.manager.enemy_repulsion_threshold, Utils.RGBToColor(255, 0, 255, 80), numsegments=32, thickness=2.0)
 
@@ -387,7 +438,7 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
                     Overlay().DrawLine3D(my_pos[0], my_pos[1], my_z, end_x, end_y, my_z, enemy_color, thickness=4.0)
 
         # 3. LEADER ATTRACTION FORCE
-        if self.enable_leader_attraction and leader_pos is not None:
+        if enable_leader_attraction and leader_pos is not None:
             distance_to_leader = Utils.Distance(my_pos, leader_pos)
 
             # Draw leader position (large gold circle)
@@ -436,27 +487,32 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
     @override
     def _evaluate(self, current_state: BehaviorState, previously_attempted_skills: list[CustomSkill]) -> float | None:
 
-        if self.allowed_states is not None and current_state not in self.allowed_states:
-            return None
+        # Get the current party following behavior
+        party_behavior = CustomBehaviorParty().get_party_following_behavior()
+        if party_behavior == FollowingBehaviorPriority.NONE: return None
 
-        if custom_behavior_helpers.CustomBehaviorHelperParty.is_party_leader():
-            return None
-
-        if not self.throttle_timer.IsExpired():
-            return None
+        if party_behavior == FollowingBehaviorPriority.HIGH_PRIORITY_WITH_THROTTLE:
+            if not self.throttle_timer.IsExpired():
+                return None
 
         my_pos = Player.GetXY()
+        if my_pos is None: return None
 
         # Use vector field computation to determine if movement is needed
         # If the vector field produces a significant vector, we need to move
         target_pos = self._calculate_finale_position(my_pos)
+        if target_pos is None: return None
 
-        # If we have a valid target position, we need to move
-        if target_pos is not None:
-            score = self.score_definition.get_score()
-            return score
-
-        return None
+        # Adjust score based on party following behavior
+        if party_behavior == FollowingBehaviorPriority.LOW_PRIORITY:
+            return self.score_definition.get_score()
+        elif party_behavior == FollowingBehaviorPriority.HIGH_PRIORITY:
+            return CommonScore.FOLLOW_VECTOR_FIELD.value
+        elif party_behavior == FollowingBehaviorPriority.HIGH_PRIORITY_WITH_THROTTLE:
+            return CommonScore.FOLLOW_VECTOR_FIELD.value
+        else:
+            # Default to normal score
+            return self.score_definition.get_score()
 
     @override
     def _execute(self, state: BehaviorState) -> Generator[Any, None, BehaviorResult]:
@@ -510,20 +566,52 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
     @override
     def customized_debug_ui(self, current_state: BehaviorState) -> None:
         """Comprehensive debug UI for vector field-based spread during combat"""
+        PyImGui.bullet_text(f"IsMartial : {Agent.IsMartial(Player.GetAgentID())}")
+
         self.draw_overlay(current_state)
 
         if PyImGui.collapsing_header("Vector Field Spread Configuration", PyImGui.TreeNodeFlags.DefaultOpen):
 
-            # === ALLIES REPULSION CONFIGURATION ===
-            PyImGui.text_colored("Allies Repulsion Forces:", (1.0, 0.6, 0.0, 1.0))  # Orange
+            # === PER-ACCOUNT FORCE ACTIVATION ===
+            PyImGui.text_colored("Per-Account Force Activation (Stored in Shared Memory):", (0.0, 1.0, 1.0, 1.0))  # Cyan
+            account_email = Player.GetAccountEmail()
 
-            self.enable_allies_repulsion = PyImGui.checkbox("Enable Allies Repulsion", self.enable_allies_repulsion)
+            # Get current values from shared memory
+            enable_allies_repulsion = self.manager.get_is_repulsion_allies_active(account_email)
+            enable_leader_attraction = self.manager.get_is_attraction_leader_active(account_email)
+            enable_enemies_repulsion = self.manager.get_is_repulsion_enemies_active(account_email)
+
+            # Checkboxes to toggle per-account forces
+            new_enable_allies = PyImGui.checkbox("Enable Allies Repulsion (This Account)", enable_allies_repulsion)
+            if new_enable_allies != enable_allies_repulsion:
+                self.manager.set_is_repulsion_allies_active(account_email, new_enable_allies)
             PyImGui.same_line(0.0, -1.0)
             PyImGui.text_colored("(?)", (0.5, 0.5, 0.5, 1.0))
             if PyImGui.is_item_hovered():
-                PyImGui.set_tooltip("Push away from nearby party members and spirits")
+                PyImGui.set_tooltip("Enable/disable allies repulsion for this account only")
 
-            if self.enable_allies_repulsion:
+            new_enable_leader = PyImGui.checkbox("Enable Leader Attraction (This Account)", enable_leader_attraction)
+            if new_enable_leader != enable_leader_attraction:
+                self.manager.set_is_attraction_leader_active(account_email, new_enable_leader)
+            PyImGui.same_line(0.0, -1.0)
+            PyImGui.text_colored("(?)", (0.5, 0.5, 0.5, 1.0))
+            if PyImGui.is_item_hovered():
+                PyImGui.set_tooltip("Enable/disable leader attraction for this account only")
+
+            new_enable_enemies = PyImGui.checkbox("Enable Enemies Repulsion (This Account)", enable_enemies_repulsion)
+            if new_enable_enemies != enable_enemies_repulsion:
+                self.manager.set_is_repulsion_enemies_active(account_email, new_enable_enemies)
+            PyImGui.same_line(0.0, -1.0)
+            PyImGui.text_colored("(?)", (0.5, 0.5, 0.5, 1.0))
+            if PyImGui.is_item_hovered():
+                PyImGui.set_tooltip("Enable/disable enemies repulsion for this account only")
+
+            PyImGui.separator()
+
+            # === ALLIES REPULSION CONFIGURATION ===
+            PyImGui.text_colored("Allies Repulsion Forces (Global Settings):", (1.0, 0.6, 0.0, 1.0))  # Orange
+
+            if enable_allies_repulsion:
                 # Allies repulsion threshold
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, Utils.ColorToTuple(Utils.RGBToColor(255, 100, 0, 100)))
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBgHovered, Utils.ColorToTuple(Utils.RGBToColor(255, 100, 0, 150)))
@@ -573,15 +661,9 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             PyImGui.separator()
 
             # === ENEMY REPULSION CONFIGURATION ===
-            PyImGui.text_colored("Enemy Repulsion Forces:", (1.0, 0.0, 1.0, 1.0))  # Magenta
+            PyImGui.text_colored("Enemy Repulsion Forces (Global Settings):", (1.0, 0.0, 1.0, 1.0))  # Magenta
 
-            self.enable_enemy_repulsion = PyImGui.checkbox("Enable Enemy Repulsion", self.enable_enemy_repulsion)
-            PyImGui.same_line(0.0, -1.0)
-            PyImGui.text_colored("(?)", (0.5, 0.5, 0.5, 1.0))
-            if PyImGui.is_item_hovered():
-                PyImGui.set_tooltip("Push away from nearby enemies during combat")
-
-            if self.enable_enemy_repulsion:
+            if enable_enemies_repulsion:
                 # Enemy repulsion threshold
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, Utils.ColorToTuple(Utils.RGBToColor(255, 0, 255, 100)))
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBgHovered, Utils.ColorToTuple(Utils.RGBToColor(255, 0, 255, 150)))
@@ -631,15 +713,9 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             PyImGui.separator()
 
             # === LEADER ATTRACTION CONFIGURATION ===
-            PyImGui.text_colored("Leader Attraction Forces:", (1.0, 0.84, 0.0, 1.0))  # Gold
+            PyImGui.text_colored("Leader Attraction Forces (Global Settings):", (1.0, 0.84, 0.0, 1.0))  # Gold
 
-            self.enable_leader_attraction = PyImGui.checkbox("Enable Leader Attraction", self.enable_leader_attraction)
-            PyImGui.same_line(0.0, -1.0)
-            PyImGui.text_colored("(?)", (0.5, 0.5, 0.5, 1.0))
-            if PyImGui.is_item_hovered():
-                PyImGui.set_tooltip("Pull toward party leader when too far away")
-
-            if self.enable_leader_attraction:
+            if enable_leader_attraction:
                 # Leader attraction threshold
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBg, Utils.ColorToTuple(Utils.RGBToColor(255, 215, 0, 100)))
                 PyImGui.push_style_color(PyImGui.ImGuiCol.FrameBgHovered, Utils.ColorToTuple(Utils.RGBToColor(255, 215, 0, 150)))
@@ -783,10 +859,16 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             try:
                 my_pos = Player.GetXY()
                 if my_pos is not None:
+                    # Get current force activation from shared memory
+                    account_email = Player.GetAccountEmail()
+                    enable_allies_repulsion_status = self.manager.get_is_repulsion_allies_active(account_email)
+                    enable_enemies_repulsion_status = self.manager.get_is_repulsion_enemies_active(account_email)
+                    enable_leader_attraction_status = self.manager.get_is_attraction_leader_active(account_email)
+
                     # Count active forces
-                    party_positions = self._get_party_member_positions() if self.enable_allies_repulsion else []
-                    enemy_positions = self._get_enemy_positions() if self.enable_enemy_repulsion else []
-                    leader_pos = self._get_party_leader_position() if self.enable_leader_attraction else None
+                    party_positions = self._get_party_member_positions() if enable_allies_repulsion_status else []
+                    enemy_positions = self._get_enemy_positions() if enable_enemies_repulsion_status else []
+                    leader_pos = self._get_party_leader_position() if enable_leader_attraction_status else None
 
                     # Allies count
                     active_allies = sum(1 for ally_pos in party_positions
@@ -816,21 +898,27 @@ class SpreadDuringCombatUtility(CustomSkillUtilityBase):
             # === FORCE CONFIGURATION SUMMARY ===
             PyImGui.text_colored("Force Configuration Summary:", (0.8, 0.8, 0.8, 1.0))
 
+            # Get current force activation from shared memory
+            account_email = Player.GetAccountEmail()
+            enable_allies_repulsion_summary = self.manager.get_is_repulsion_allies_active(account_email)
+            enable_enemies_repulsion_summary = self.manager.get_is_repulsion_enemies_active(account_email)
+            enable_leader_attraction_summary = self.manager.get_is_attraction_leader_active(account_email)
+
             # Calculate max radius for vector field
             max_radius = max(
-                self.manager.allies_repulsion_threshold if self.enable_allies_repulsion else 0,
-                self.manager.enemy_repulsion_threshold if self.enable_enemy_repulsion else 0,
-                self.manager.leader_attraction_threshold if self.enable_leader_attraction else 0
+                self.manager.allies_repulsion_threshold if enable_allies_repulsion_summary else 0,
+                self.manager.enemy_repulsion_threshold if enable_enemies_repulsion_summary else 0,
+                self.manager.leader_attraction_threshold if enable_leader_attraction_summary else 0
             )
             PyImGui.text_colored(f"  • Vector Field Radius: {max_radius:.1f}", (0.8, 0.8, 0.8, 1.0))
 
             # Active forces summary
             active_forces = []
-            if self.enable_allies_repulsion:
+            if enable_allies_repulsion_summary:
                 active_forces.append(f"Allies(R:{self.manager.allies_repulsion_threshold:.0f},W:{self.manager.allies_repulsion_weight:.0f})")
-            if self.enable_enemy_repulsion:
+            if enable_enemies_repulsion_summary:
                 active_forces.append(f"Enemies(R:{self.manager.enemy_repulsion_threshold:.0f},W:{self.manager.enemy_repulsion_weight:.0f})")
-            if self.enable_leader_attraction:
+            if enable_leader_attraction_summary:
                 active_forces.append(f"Leader(R:{self.manager.leader_attraction_threshold:.0f},W:{self.manager.leader_attraction_weight:.0f})")
 
             if active_forces:

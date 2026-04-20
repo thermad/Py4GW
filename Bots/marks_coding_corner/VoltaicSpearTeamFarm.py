@@ -18,10 +18,9 @@ from Py4GWCoreLib import LootConfig
 from Py4GWCoreLib import Map, Agent, Player
 
 from Py4GWCoreLib import ChatChannel
-from Py4GWCoreLib.Builds.ShadowTheftDaggerSpammer import AssassinShadowTheftDaggerSpammer
-from Py4GWCoreLib.Builds.ShadowTheftDaggerSpammer import BuildStatus
-from Widgets.CombatPrep import CombatPrep
-
+from Py4GWCoreLib.Builds.Assassin.A_W.ShadowTheftDaggerSpammer import AssassinShadowTheftDaggerSpammer
+from Py4GWCoreLib.Builds.Assassin.A_W.ShadowTheftDaggerSpammer import BuildStatus
+from Widgets.Automation.Multiboxing.CombatPrep import CombatPrep
 
 BOT_NAME = "Voltaic Spear Farm [BETA]"
 TEXTURE = os.path.join(
@@ -172,7 +171,7 @@ def open_final_chest():
             continue
         ConsoleLog("Messaging", f"Ordering {account.AccountEmail} to interact with target: {target}", log=False)
 
-        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account.AccountEmail)
+        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account.AccountEmail)
         if hero_ai_options is None:
             continue
         hero_ai_options.Combat = False
@@ -216,7 +215,7 @@ def clear_item_id_blacklist_and_attempt_open_chest_again():
         if not account.AccountEmail or sender_email == account.AccountEmail:
             continue
 
-        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account.AccountEmail)
+        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account.AccountEmail)
         if hero_ai_options is None:
             continue
         hero_ai_options.Combat = False
@@ -344,7 +343,7 @@ def disable_hero_ai_leader_combat(bot: Botting):
     bot.OverrideBuild(AssassinShadowTheftDaggerSpammer())
     if isinstance(bot.config.build_handler, AssassinShadowTheftDaggerSpammer):
         acount_email = Player.GetAccountEmail()
-        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(acount_email)
+        hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(acount_email)
 
         if hero_ai_options is None:
             return
@@ -356,7 +355,7 @@ def toggle_hero_ai_team_combat(toggle_value: bool):
     accounts = GLOBAL_CACHE.ShMem.GetAllAccountData()
     for account in accounts:
         if account.AccountEmail:
-            hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account.AccountEmail)
+            hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account.AccountEmail)
             if hero_ai_options is None:
                 continue
             hero_ai_options.Combat = toggle_value

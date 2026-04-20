@@ -4,7 +4,7 @@ from Py4GWCoreLib.enums_src.IO_enums import Key, ModifierKey
 from ..Overlay import Overlay
 from ..enums import get_texture_for_model, ImguiFonts
 from ..Py4GWcorelib import Color, ColorPalette, ConsoleLog, Utils
-from typing import Tuple, TypeAlias, Optional, overload
+from typing import Callable, Tuple, TypeAlias, Optional, overload
 from .types import Alignment, HorizontalAlignment, ImGuiStyleVar, StyleTheme, ControlAppearance, TextDecorator, VerticalAlignment
 from .types import ImGuiStyleVar, StyleTheme, ControlAppearance, TextDecorator
 from .Style import Style
@@ -181,6 +181,9 @@ class ImGui:
         py_io = PyImGui.get_io()
         display_size_x = py_io.display_size_x
         display_size_y = py_io.display_size_y
+        
+        if display_size_x == 0 or display_size_y == 0:
+            return pos
 
         # Compute required visible margin in pixels
         if min_visible_x is None:
@@ -278,11 +281,13 @@ class ImGui:
     def _is_textured_theme() -> bool: return ImGui.get_style().Theme in ImGui.Textured_Themes
     
     @staticmethod
-    def Begin(ini_key: str, name: str, p_open=None, flags=PyImGui.WindowFlags.NoFlag) -> bool:
+    def Begin(ini_key: str, name: str, p_open=None, flags:int=PyImGui.WindowFlags.NoFlag) -> bool:
         from Py4GWCoreLib.IniManager import IniManager
         IniManager().begin_window_config(ini_key)
 
-        result = ImGui.begin(name, p_open, flags)
+        # begin_with_close returns (expanded, open). Persistence must key off
+        # the expanded state so collapsed windows do not save header-only sizes.
+        result, _ = ImGui.begin_with_close(name, p_open, flags)
 
         # mark only if window is active
         IniManager().track_window_collapsed(ini_key, result)
@@ -290,9 +295,22 @@ class ImGui:
             IniManager().mark_begin_success(ini_key)
 
         return result
+
+    @staticmethod
+    def BeginWithClose(ini_key: str, name: str, p_open=None, flags:int=PyImGui.WindowFlags.NoFlag) -> tuple[bool, bool]:
+        from Py4GWCoreLib.IniManager import IniManager
+        IniManager().begin_window_config(ini_key)
+
+        expanded, open_ = ImGui.begin_with_close(name, p_open, flags)
+
+        IniManager().track_window_collapsed(ini_key, expanded)
+        if expanded:
+            IniManager().mark_begin_success(ini_key)
+
+        return expanded, open_
     
     @staticmethod
-    def begin (name: str, p_open: Optional[bool] = None, flags: PyImGui.WindowFlags = PyImGui.WindowFlags.NoFlag) -> bool:
+    def begin (name: str, p_open: Optional[bool] = None, flags: int = PyImGui.WindowFlags.NoFlag) -> bool:
         if not ImGui._is_textured_theme(): 
             return PyImGui.begin(name, p_open, flags)
         
@@ -311,7 +329,7 @@ class ImGui:
         return WindowModule._windows[name].begin(p_open, flags)
     
     @staticmethod
-    def begin_with_close(name: str, p_open: Optional[bool] = None, flags: PyImGui.WindowFlags = PyImGui.WindowFlags.NoFlag) -> tuple[bool, bool]:
+    def begin_with_close(name: str, p_open: Optional[bool] = None, flags: int = PyImGui.WindowFlags.NoFlag) -> tuple[bool, bool]:
         if not ImGui._is_textured_theme():
             return PyImGui.begin_with_close(name, p_open if p_open is not None else True, flags)
         
@@ -437,7 +455,8 @@ class ImGui:
         height: float = 0.0,
         alignment: Alignment = Alignment.MidCenter,
         font_size: int | None = None,
-        font_style: str | None = None
+        font_style: str | None = None,
+        color: tuple[float, float, float, float] | None = None,
     ):
         """Draws text aligned inside a given width/height box."""
         width = PyImGui.get_content_region_avail()[0] if width == 0 else width
@@ -464,7 +483,10 @@ class ImGui:
             x0, y0 = PyImGui.get_cursor_pos()
             
             PyImGui.set_cursor_pos(x, y)
-            PyImGui.text(text)
+            if color is not None:
+                ImGui.text_colored(text, color)
+            else:
+                PyImGui.text(text)
             _, _, item_rect_size = ImGui.get_item_rect()
             
             #Restore cursor position
@@ -3089,53 +3111,108 @@ class ImGui:
         return clicked
     
     @staticmethod
-    def keybinding(label : str, key: Key, modifiers: ModifierKey):
-        assigned_key = key
-        assigned_modifiers = modifiers
-        is_hotkey_captured = False
-        
-        ImGui.input_text(f"{label}", f"{modifiers.name}+{key.name.replace('VK_','')}")
-        if PyImGui.is_item_focused():
-            is_hotkey_captured = False
-            io = PyImGui.get_io()
-            modifiers = ModifierKey.NoneKey
-            
-            if io.key_shift:
-                modifiers |= ModifierKey.Shift
-                
-            if io.key_ctrl:
-                modifiers |= ModifierKey.Ctrl
-                
-            if io.key_alt:
-                modifiers |= ModifierKey.Alt
-                
-            for key in Key:                
-                if key == Key.Ctrl or key == Key.LCtrl or key == Key.RCtrl or \
-                    key == Key.Shift or key == Key.LShift or key == Key.RShift or \
-                    key == Key.Alt or key == Key.LAlt or key == Key.RAlt or \
-                    key == Key.Unmapped:                              
-                    continue         
-                
-                if PyImGui.is_key_down(key.value): 
-                    
-                    assigned_key = key
-                    assigned_modifiers = modifiers
-                    
-                    is_hotkey_captured = True                
-                    break
-                            
-        PyImGui.same_line(0, 0)
-        ImGui.invisible_button("##HotkeyCapture",0,0)
-        if is_hotkey_captured:
-            PyImGui.set_keyboard_focus_here(-1)
-            
-        return assigned_key, assigned_modifiers
+    def format_hotkey(key, modifiers):
+        if key is None or key == Key.Unmapped or key == Key.VK_0x00:
+            return "Unassigned"
 
+        parts = []
+        if modifiers & ModifierKey.Ctrl:
+            parts.append("Ctrl")
+        if modifiers & ModifierKey.Shift:
+            parts.append("Shift")
+        if modifiers & ModifierKey.Alt:
+            parts.append("Alt")
+
+        parts.append(key.name.replace("VK_", ""))
+        return "+".join(parts)
     
-    
+    @staticmethod
+    def keybinding(label: str, key: Key, modifiers: ModifierKey):
+        changed = False
+        popup_done = False
+
+        display_text = ImGui.format_hotkey(key, modifiers)
+        display_label = label.split("##")[0]
+        popup_id = f"##KeybindPopup_{label}"
+
+        PyImGui.begin_group()
+        if display_label:
+            PyImGui.columns(2, f"{label}_columns", False)
+
+        if ImGui.button(display_text, -1, 0):
+            PyImGui.open_popup(popup_id)
+
+        _, _, size = ImGui.get_item_rect()
+        ImGui.show_tooltip("Click to set hotkey")
+
+        if display_label:
+            PyImGui.next_column()
+            ImGui.text_aligned(display_label, alignment=Alignment.MidLeft, height=size[1])
+            PyImGui.end_columns()
+
+        PyImGui.end_group()
+
+        if PyImGui.begin_popup_modal(
+            popup_id,
+            True,
+            PyImGui.WindowFlags.AlwaysAutoResize
+            | PyImGui.WindowFlags.NoMove
+            | PyImGui.WindowFlags.NoSavedSettings
+            | PyImGui.WindowFlags.NoTitleBar
+        ):
+            ImGui.text_aligned("Press a key combination", alignment=Alignment.TopCenter, height=30)
+            PyImGui.separator()
+            PyImGui.spacing()
+            ImGui.text_aligned("Esc to cancel", alignment=Alignment.TopCenter, height=30)
+            PyImGui.spacing()
+
+            if ImGui.button("Clear", -1, 20):
+                key = Key.Unmapped
+                modifiers = ModifierKey.NoneKey
+                changed = True
+                popup_done = True
+                PyImGui.close_current_popup()
+
+            io = PyImGui.get_io()
+            if not popup_done:
+                new_mods = ModifierKey.NoneKey
+                if io.key_ctrl:
+                    new_mods |= ModifierKey.Ctrl
+                if io.key_shift:
+                    new_mods |= ModifierKey.Shift
+                if io.key_alt:
+                    new_mods |= ModifierKey.Alt
+
+                for k in Key:
+                    if k in (
+                        Key.Ctrl, Key.LCtrl, Key.RCtrl,
+                        Key.Shift, Key.LShift, Key.RShift,
+                        Key.Alt, Key.LAlt, Key.RAlt,
+                        Key.Unmapped, Key.Escape, Key.VK_0x00
+                    ):
+                        continue
+
+                    if PyImGui.is_key_pressed(k.value):
+                        key = k
+                        modifiers = new_mods
+                        changed = True
+                        popup_done = True
+                        PyImGui.close_current_popup()
+                        break
+
+            if PyImGui.is_key_pressed(Key.Escape.value):
+                PyImGui.close_current_popup()
+                
+            if (not popup_done and not PyImGui.is_any_item_active() and (PyImGui.is_mouse_released(0) or PyImGui.is_mouse_released(1)) and not PyImGui.is_window_hovered() and not PyImGui.is_window_appearing()):
+                PyImGui.close_current_popup()
+
+            PyImGui.end_popup()
+        
+        return key, modifiers, changed
+
 
     @staticmethod
-    def floating_button(caption, x, y, width = 18, height = 18 , color: Color = Color(255, 255, 255, 255), name = ""):
+    def floating_button(caption, x, y, width = 18, height = 18 , color: Color = Color(255, 255, 255, 255), name = "", font_size: int = -1):
         if not name:
             name = caption
         
@@ -3162,10 +3239,16 @@ class ImGui:
 
         PyImGui.push_style_color(PyImGui.ImGuiCol.Text, color.to_tuple_normalized())
         result = False
+        
+        font_scaled = False
+        if font_size > 0:
+            PyImGui.push_font_scaled(ImguiFonts.Regular_14.value, font_size / 14.0)
+            font_scaled = True
         if PyImGui.begin(f"{caption}##invisible_buttonwindow{name}", flags):
             result = PyImGui.button(f"{caption}##floating_button{name}", width=width, height=height)
 
-            
+        if font_scaled:
+            PyImGui.pop_font_scaled()
         PyImGui.end()
         PyImGui.pop_style_color(5)  # Button, Hovered, Active, Text, WindowBg
         PyImGui.pop_style_var(2)
@@ -3434,15 +3517,72 @@ class ImGui:
 
                 PyImGui.table_next_row()
                 PyImGui.table_set_column_index(0)
-                PyImGui.bullet_text("")  # draw bullet using ImGui's bullet
+                ImGui.objective_text("")  # draw bullet using ImGui's bullet
                 PyImGui.table_set_column_index(1)
 
                 PyImGui.push_text_wrap_pos(PyImGui.get_cursor_pos_x() + text_col_width)
-                PyImGui.text_wrapped(text)
+                ImGui.text_wrapped(text)
                 PyImGui.pop_text_wrap_pos()
 
                 PyImGui.end_table()
-            
+                
+    @staticmethod
+    def render_wrapped_objective(text: str, max_width: float = 400.0, completed : bool = False):
+            """
+            Custom bullet renderer that allows wrapped text.
+            The bullet is rendered in the left column; text wraps in the right column.
+            """
+            bullet_col_width = PyImGui.get_text_line_height()
+            text_col_width = max_width - bullet_col_width
+            style = ImGui.get_style()
+
+            if completed:
+                style.TextObjectiveCompleted.get_current().push_color()
+            style.CellPadding.push_style_var(0, 2)
+            if PyImGui.begin_table("bullet_table", 2, PyImGui.TableFlags.NoBordersInBody):
+                PyImGui.table_setup_column("bullet", PyImGui.TableColumnFlags.WidthFixed, bullet_col_width)
+                PyImGui.table_setup_column("text", PyImGui.TableColumnFlags.WidthStretch)
+
+                PyImGui.table_next_row()
+                PyImGui.table_set_column_index(0)
+                cursor = PyImGui.get_cursor_screen_pos()
+                texture_rect = (cursor[0], cursor[1], bullet_col_width - 2, bullet_col_width - 2)
+                
+                if style.Theme in ImGui.Textured_Themes:                                
+                    ThemeTextures.Quest_Objective_Bullet_Point.value.get_texture().draw_in_drawlist(
+                        texture_rect[:2],
+                        texture_rect[2:],
+                        state=TextureState.Normal if completed else TextureState.Active,
+                    )
+                else:
+                    PyImGui.set_cursor_screen_pos(cursor[0] - 4, cursor[1])
+                    ImGui.bullet_text("")  # draw bullet using ImGui's bullet
+                
+                PyImGui.table_set_column_index(1)
+
+                PyImGui.push_text_wrap_pos(PyImGui.get_cursor_pos_x() + text_col_width)
+                ImGui.text_wrapped(text)
+                PyImGui.pop_text_wrap_pos()
+                            
+                item_rect_min, item_rect_max, item_rect_size = ImGui.get_item_rect()
+                if completed:
+                    lines = round(item_rect_size[1] / bullet_col_width)
+                    for i in range(lines):
+                        PyImGui.draw_list_add_line(
+                            item_rect_min[0],
+                            item_rect_min[1] + (i + 0.5) * bullet_col_width,
+                            item_rect_max[0], 
+                            item_rect_min[1] + (i + 0.5) * bullet_col_width,
+                            style.TextObjectiveCompleted.get_current().color_int,
+                            1.0
+                        )
+
+                PyImGui.end_table()
+                
+            style.CellPadding.pop_style_var()
+            if completed:
+                style.TextObjectiveCompleted.get_current().pop_color()
+                
     @staticmethod
     def render_tokenized_markup(tokenized_lines: list[list[dict]], max_width: float, COLOR_MAP: dict[str, tuple[float, float, float, float]]):
         """
@@ -3457,24 +3597,18 @@ class ImGui:
         style.ItemSpacing = (_orig_item[0], 0.0)   # spacing between stacked rows
         style.Push()
         
-        color_stack, inside_bullet, gray_bullet = [], False, False
+        color_stack, inside_bullet, completed = [], False, False
         for tokens in tokenized_lines:  # iterate through lines
             for token in tokens:
                 t = token["type"]
                 v = token.get("value")
-                v = v.strip() if isinstance(v, str) else v
-                if not v:
+                if v is None:
                     v = ""
                 if t == "text":
                     if inside_bullet:
-                        PyImGui.push_style_color(
-                            PyImGui.ImGuiCol.Text,
-                            (0.6, 0.6, 0.6, 1.0) if gray_bullet else (1.0, 1.0, 1.0, 1.0),
-                        )
-                        ImGui.render_wrapped_bullet(v, max_width=max_width)
-                        PyImGui.pop_style_color(1)
+                        ImGui.render_wrapped_objective(v, max_width=max_width, completed=completed)
                         inside_bullet = False
-                        gray_bullet = False
+                        completed = False
                     elif color_stack:
                         current_color = color_stack[-1]
                         color = COLOR_MAP.get(current_color, (1, 1, 1, 1))
@@ -3492,13 +3626,13 @@ class ImGui:
                     PyImGui.new_line()
                 elif t == "bullet":
                     inside_bullet = True
-                    gray_bullet = token.get("gray", False)
+                    completed = token.get("gray", False)
 
             PyImGui.new_line()
         style.CellPadding = _orig_cell
         style.ItemSpacing = _orig_item
         style.Push()
-
+            
     @staticmethod     
     def PushTransparentWindow():
         PyImGui.push_style_var(ImGuiStyleVar.WindowRounding,0.0)
@@ -3520,6 +3654,201 @@ class ImGui:
     @staticmethod
     def PopTransparentWindow():
         PyImGui.pop_style_var(4)
+        
+    
+    class FloatingIcon:
+        #doc for this class can be found in:
+        #/Py4GWCoreLib/docs/floating_icon_class.md
+        def __init__(
+            self,
+            icon_path: str,
+            button_size: float = 45.0,
+            idle_icon_scale: float = 1.25,
+            hover_icon_scale: float = 1.45,
+            start_pos: tuple[float, float] = (40.0, 40.0),
+            window_id: str = "##floating_toggle_button",
+            window_name: str = "Floating Toggle",
+            tooltip_visible: str = "Hide UI",
+            tooltip_hidden: str = "Show UI",
+            drag_threshold: float = 6.0,
+            visible: bool = True,
+            toggle_ini_key: str = "",
+            toggle_section: str = "Configuration",
+            toggle_var_name: str = "visible",
+            toggle_default: bool = True,
+            on_toggle: Optional[Callable[[bool], None]] = None,
+            draw_callback: Optional[Callable[[], None]] = None,
+        ):
+            self.icon_path = icon_path
+            self.button_size = button_size
+            self.idle_icon_scale = idle_icon_scale
+            self.hover_icon_scale = hover_icon_scale
+            self.position = start_pos
+            self.window_id = window_id
+            self.window_name = window_name
+            self.tooltip_visible = tooltip_visible
+            self.tooltip_hidden = tooltip_hidden
+            self.drag_threshold = drag_threshold
+            self.visible = visible
+            self.toggle_ini_key = toggle_ini_key
+            self.toggle_section = toggle_section
+            self.toggle_var_name = toggle_var_name
+            self.toggle_default = toggle_default
+            self.on_toggle = on_toggle
+            self.draw_callback = draw_callback
+            self._dragged = False
+            self._visibility_loaded = False
+
+        def _ensure_visibility_var(self) -> None:
+            if not self.toggle_ini_key or not self.toggle_var_name:
+                return
+
+            from Py4GWCoreLib.IniManager import IniManager
+            IniManager().add_bool(
+                key=self.toggle_ini_key,
+                var_name=self.toggle_var_name,
+                section=self.toggle_section,
+                name=self.toggle_var_name,
+                default=self.toggle_default,
+            )
+
+        def _ensure_config_vars(self, ini_key: str) -> None:
+            if not ini_key:
+                return
+
+            from Py4GWCoreLib.IniManager import IniManager
+            IniManager().add_str(ini_key, "icon_path", "Floating Icon", "icon_path", self.icon_path)
+            IniManager().add_float(ini_key, "button_size", "Floating Icon", "button_size", float(self.button_size))
+            IniManager().add_float(ini_key, "idle_icon_scale", "Floating Icon", "idle_icon_scale", float(self.idle_icon_scale))
+            IniManager().add_float(ini_key, "hover_icon_scale", "Floating Icon", "hover_icon_scale", float(self.hover_icon_scale))
+
+        def load_config(self, ini_key: str) -> None:
+            if not ini_key:
+                return
+
+            from Py4GWCoreLib.IniManager import IniManager
+            self._ensure_config_vars(ini_key)
+            self.icon_path = IniManager().read_key(ini_key, "Floating Icon", "icon_path", self.icon_path)
+            self.button_size = IniManager().read_float(ini_key, "Floating Icon", "button_size", float(self.button_size))
+            self.idle_icon_scale = IniManager().read_float(ini_key, "Floating Icon", "idle_icon_scale", float(self.idle_icon_scale))
+            self.hover_icon_scale = IniManager().read_float(ini_key, "Floating Icon", "hover_icon_scale", float(self.hover_icon_scale))
+
+        def save_config(self, ini_key: str) -> None:
+            if not ini_key:
+                return
+
+            from Py4GWCoreLib.IniManager import IniManager
+            self._ensure_config_vars(ini_key)
+            IniManager().set(ini_key, "icon_path", self.icon_path, section="Floating Icon")
+            IniManager().set(ini_key, "button_size", float(self.button_size), section="Floating Icon")
+            IniManager().set(ini_key, "idle_icon_scale", float(self.idle_icon_scale), section="Floating Icon")
+            IniManager().set(ini_key, "hover_icon_scale", float(self.hover_icon_scale), section="Floating Icon")
+            IniManager().save_vars(ini_key)
+
+        def load_visibility(self) -> bool:
+            if not self.toggle_ini_key or not self.toggle_var_name:
+                return self.visible
+
+            from Py4GWCoreLib.IniManager import IniManager
+            self._ensure_visibility_var()
+            IniManager().load_once(self.toggle_ini_key)
+            self.visible = bool(IniManager().get(
+                key=self.toggle_ini_key,
+                section=self.toggle_section,
+                var_name=self.toggle_var_name,
+                default=self.toggle_default,
+            ))
+            self._visibility_loaded = True
+            return self.visible
+
+        def save_visibility(self) -> None:
+            if not self.toggle_ini_key or not self.toggle_var_name:
+                return
+
+            from Py4GWCoreLib.IniManager import IniManager
+            self._ensure_visibility_var()
+            IniManager().set(
+                key=self.toggle_ini_key,
+                section=self.toggle_section,
+                var_name=self.toggle_var_name,
+                value=self.visible,
+            )
+            IniManager().save_vars(self.toggle_ini_key)
+
+        def set_visible(self, value: bool, persist: bool = False, invoke_callback: bool = False) -> bool:
+            if self.visible == value:
+                return False
+
+            self.visible = value
+            if persist:
+                self.save_visibility()
+            if invoke_callback and self.on_toggle is not None:
+                self.on_toggle(self.visible)
+            return True
+
+        def sync_begin_with_close(self, open_: bool) -> bool:
+            self.set_visible(open_, persist=True, invoke_callback=False)
+            return self.visible
+
+        def draw(self, ini_key: str) -> bool:
+            if not self._visibility_loaded:
+                self.load_visibility()
+
+            toggled = False
+            flags = PyImGui.WindowFlags(
+                PyImGui.WindowFlags.NoResize
+                | PyImGui.WindowFlags.NoCollapse
+                | PyImGui.WindowFlags.NoTitleBar
+                | PyImGui.WindowFlags.NoScrollbar
+                | PyImGui.WindowFlags.NoScrollWithMouse
+                | PyImGui.WindowFlags.NoSavedSettings
+            )
+
+            padding = max(2.0, self.button_size * 0.05)
+            window_size = (self.button_size + padding * 2, self.button_size + padding * 2)
+            PyImGui.set_next_window_size(window_size, PyImGui.ImGuiCond.Always)
+            PyImGui.set_next_window_pos((self.position[0], self.position[1]), PyImGui.ImGuiCond.Always)
+            if ImGui.Begin(ini_key=ini_key, name=self.window_name, flags=flags):
+                win_pos = PyImGui.get_window_pos()
+                self.position = (win_pos[0], win_pos[1])
+
+                window_hovered = PyImGui.is_window_hovered()
+                scale = self.hover_icon_scale if window_hovered else self.idle_icon_scale
+                image_size = PyImGui.get_content_region_avail()[0] * scale
+                centered_pos = (window_size[0] - image_size) / 2
+                PyImGui.set_cursor_pos(centered_pos, centered_pos)
+
+                cursor_pos = PyImGui.get_cursor_pos()
+                ImGui.image(self.icon_path, (image_size, image_size))
+                PyImGui.set_cursor_pos(cursor_pos[0], cursor_pos[1])
+                PyImGui.invisible_button(f"{self.window_id}_hitbox", image_size, image_size)
+
+                drag_delta = PyImGui.get_mouse_drag_delta(0, self.drag_threshold)
+                is_dragging = PyImGui.is_item_active() and PyImGui.is_mouse_dragging(0, self.drag_threshold)
+                item_hovered = PyImGui.is_item_hovered()
+
+                if item_hovered and not is_dragging:
+                    PyImGui.set_tooltip(self.tooltip_visible if self.visible else self.tooltip_hidden)
+
+                if is_dragging:
+                    self._dragged = True
+                    new_pos = (win_pos[0] + drag_delta[0], win_pos[1] + drag_delta[1])
+                    self.position = new_pos
+                    PyImGui.set_window_pos(new_pos[0], new_pos[1], PyImGui.ImGuiCond.Always)
+                    PyImGui.reset_mouse_drag_delta(0)
+
+                if item_hovered and PyImGui.is_mouse_released(0) and not self._dragged:
+                    self.set_visible(not self.visible, persist=True, invoke_callback=True)
+                    toggled = True
+
+                if PyImGui.is_mouse_released(0):
+                    self._dragged = False
+
+            ImGui.End(ini_key)
+            if self.visible and self.draw_callback is not None:
+                self.draw_callback()
+            return toggled
+
 
 
         

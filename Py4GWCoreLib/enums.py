@@ -38,6 +38,7 @@ from .enums_src.Map_enums import (
 from .enums_src.Model_enums import AgentModelID, ModelID, PetModelID, SPIRIT_BUFF_MAP, SpiritModelID
 from .enums_src.Multiboxing_enums import CombatPrepSkillsType, SharedCommandType
 from .enums_src.Py4GW_enums import Console
+from .enums_src.Quest_enums import QUEST_DATA, QUEST_NAMES, get_quest_id, get_quest_ids, get_quest_name
 from .enums_src.Region_enums import (
     Campaign,
     CampaignName,
@@ -81,7 +82,24 @@ from .enums_src.UI_enums import (
     
 )
 
-from .enums_src.Calendar_enums import YEARS, MONTHS, EVENTS,PVE_WEEKLY_BONUSES,PVP_WEEKLY_BONUSES,NICHOLAS_CYCLE
+from .enums_src.Calendar_enums import (
+    YEARS, MONTHS, EVENTS,
+    PVE_WEEKLY_BONUSES, PVP_WEEKLY_BONUSES,
+    NICHOLAS_CYCLE,
+    ZAISHEN_REFERENCE_DATE,
+    ZAISHEN_MISSION, ZAISHEN_BOUNTY, ZAISHEN_COMBAT, ZAISHEN_VANQUISH,
+)
+
+from .enums_src.Event_enums import (
+    CombatEventDescriptor,
+    EVENT_TYPE_DESCRIPTORS,
+    EventFieldRole,
+    EventType,
+    coerce_event_type,
+    get_event_descriptor,
+    get_event_type_label,
+    get_event_type_name,
+)
 
 __all__ = [
     # GameData_enums
@@ -148,6 +166,13 @@ __all__ = [
     # Py4GW_enums
     "Console",
 
+    # Quest_enums
+    "QUEST_DATA",
+    "QUEST_NAMES",
+    "get_quest_id",
+    "get_quest_ids",
+    "get_quest_name",
+
     # Region_enums
     "Campaign",
     "CampaignName",
@@ -201,6 +226,21 @@ __all__ = [
     "PVE_WEEKLY_BONUSES",
     "PVP_WEEKLY_BONUSES",
     "NICHOLAS_CYCLE",
+    "ZAISHEN_REFERENCE_DATE",
+    "ZAISHEN_MISSION",
+    "ZAISHEN_BOUNTY",
+    "ZAISHEN_COMBAT",
+    "ZAISHEN_VANQUISH",
+    
+    # Event_enums
+    "CombatEventDescriptor",
+    "EVENT_TYPE_DESCRIPTORS",
+    "EventFieldRole",
+    "EventType",
+    "coerce_event_type",
+    "get_event_descriptor",
+    "get_event_type_label",
+    "get_event_type_name",
 ]
 
 

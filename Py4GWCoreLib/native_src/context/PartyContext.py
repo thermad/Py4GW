@@ -219,7 +219,10 @@ class PartyContext:
 
     @staticmethod
     def _update_ptr():
-        ptr = PyParty.PyParty().GetPartyContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.PartyContext
+        #ptr = PyParty.PyParty().GetPartyContextPtr()
         PartyContext._ptr = ptr
         if not ptr:
             PartyContext._cached_ctx = None
@@ -236,7 +239,8 @@ class PartyContext:
             PartyContext._callback_name,
             PyCallback.Phase.PreUpdate,
             PartyContext._update_ptr,
-            priority=6
+            priority=6,
+            context=PyCallback.Context.Draw
         )
 
     @staticmethod

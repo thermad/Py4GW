@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from HeroAI.party_cache import PartyCache
-from Py4GWCoreLib.GlobalCache.SharedMemory import SHMEM_NUMBER_OF_SKILLS, AccountData, HeroAIOptionStruct
+from Py4GWCoreLib.GlobalCache.SharedMemory import SHMEM_MAX_NUMBER_OF_SKILLS, AccountStruct, HeroAIOptionStruct
 
 from .constants import SHARED_MEMORY_FILE_NAME, STAY_ALERT_TIME, MAX_NUM_PLAYERS, NUMBER_OF_SKILLS
 from .globals import HeroAI_varsClass, HeroAI_Window_varsClass
@@ -10,10 +10,13 @@ from Py4GWCoreLib import Timer, ThrottledTimer
 from Py4GWCoreLib import Range, Agent, ConsoleLog, Player
 from Py4GWCoreLib import AgentArray, Weapon, Routines
 from Py4GWCoreLib.IniManager import IniManager
+from Py4GWCoreLib.EnemyBlacklist import EnemyBlacklist
 
 INI_DIR = "HeroAI"
 MAIN_WINDOW_INI = "main_window.ini"
 CONSUMABLES_WINDOW_INI = "consumables_window.ini"
+FORMATION_WINDOW_INI = "formation_window.ini"
+FLAGGING_WINDOW_INI = "flagging_window.ini"
 
 @dataclass
 class GameData:
@@ -52,6 +55,7 @@ class GameData:
             return False
         
         #Player data
+        self.weapon_type = Agent.GetWeaponType(Player.GetAgentID())[0]
         attributes = Agent.GetAttributes(Player.GetAgentID())
         self.fast_casting_exists = False
         self.fast_casting_level = 0
@@ -136,11 +140,14 @@ class CacheData:
         if not self._initialized:
             self.account_email = ""
             self.ini_key : str = ""
+            self.formation_window_ini_key : str = ""
+            self.flagging_window_ini_key : str = ""
+        
             self.consumables_ini_key : str = ""
             
             self.party_position : int = -1
             self.party : PartyCache = PartyCache()
-            self.account_data : AccountData = AccountData()
+            self.account_data : AccountStruct = AccountStruct()
             self.account_options : HeroAIOptionStruct = HeroAIOptionStruct()
             
             self.combat_handler = CombatClass()
@@ -162,12 +169,12 @@ class CacheData:
             self.draw_floating_loot_buttons = False
             self.reset()
             self.ui_state_data = UIStateData()
-            self.follow_throttle_timer = ThrottledTimer(1000)
+            self.follow_throttle_timer = ThrottledTimer(250)
             self.follow_throttle_timer.Start()
             self.option_show_floating_targets = True
             self.global_options = HeroAIOptionStruct()
             
-            for i in range(SHMEM_NUMBER_OF_SKILLS):
+            for i in range(SHMEM_MAX_NUMBER_OF_SKILLS):
                 self.global_options.Skills[i] = True
                 
             self.global_options.Following = True
@@ -184,7 +191,15 @@ class CacheData:
         self.data.reset()   
         
     def InAggro(self, enemy_array, aggro_range = Range.Earshot.value):
-        return Routines.Checks.Agents.InAggro(aggro_range) 
+        bl = EnemyBlacklist()
+        if bl.is_empty():
+            return Routines.Checks.Agents.InAggro(aggro_range)
+        # Blacklist active: filter enemy array manually so blacklisted enemies
+        # never trigger the in-aggro state.
+        player_pos = Player.GetXY()
+        filtered = AgentArray.Filter.ByDistance(enemy_array, player_pos, aggro_range)
+        filtered = [e for e in filtered if Agent.IsAlive(e) and not bl.is_blacklisted(e)]
+        return len(filtered) > 0
         
     def UpdateCombat(self):
         self.combat_handler.Update(self)
@@ -198,7 +213,13 @@ class CacheData:
             if not self.consumables_ini_key:
                 self.consumables_ini_key = IniManager().ensure_key(f"{INI_DIR}/", CONSUMABLES_WINDOW_INI)
                 
-            if not self.ini_key or not self.consumables_ini_key:
+            if not self.formation_window_ini_key:
+                self.formation_window_ini_key = IniManager().ensure_key(f"{INI_DIR}/", FORMATION_WINDOW_INI)
+                
+            if not self.flagging_window_ini_key:
+                self.flagging_window_ini_key = IniManager().ensure_key(f"{INI_DIR}/", FLAGGING_WINDOW_INI)
+            
+            if not self.ini_key or not self.consumables_ini_key or not self.formation_window_ini_key or not self.flagging_window_ini_key:
                 return
             
 
@@ -212,7 +233,7 @@ class CacheData:
                 self.party.update()
                 
                 self.account_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(self.account_email) or self.account_data
-                self.account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(self.account_email) or self.account_options
+                self.account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(self.account_email) or self.account_options
                 
                 if self.stay_alert_timer.HasElapsed(STAY_ALERT_TIME):
                     self.data.in_aggro = self.InAggro(AgentArray.GetEnemyArray(), Range.Earshot.value)

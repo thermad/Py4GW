@@ -1,21 +1,24 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from Py4GW import PingHandler
 import PyImGui
 
 from Py4GWCoreLib import *
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData, FactionsStruct, TitleStruct
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
+from Py4GWCoreLib.GlobalCache.shared_memory_src.TitlesStruct import TitleUnitStruct
+from Py4GWCoreLib.GlobalCache.shared_memory_src.FactionStruct import FactionStruct
 from typing import Callable
 from multiprocessing import shared_memory
 from ctypes import sizeof
 
-MODULE_NAME = "Py4GW Shared Memory Manager Monitor"
+MODULE_NAME = "Shared Memory Monitor"
+MODULE_ICON = "Textures/Module_Icons/Shared Memory.png"
   
 SMM = GLOBAL_CACHE.ShMem    
 BASE_PATH = Py4GW.Console.get_projects_path()
 FACTIONS_TEXTURE_BASE_PATH = BASE_PATH + "\\Textures\\Faction_Icons\\"
 GAME_UI_TEXTURE_BASE_PATH = BASE_PATH + "\\Textures\\Game UI\\"
 
-active_players :list[AccountData] = []
+active_players :list[AccountStruct] = []
 
 def tooltip():
     PyImGui.begin_tooltip()
@@ -73,14 +76,16 @@ def end_striped_table():
 
 
 #region AccountInfo
-def draw_account_info(player: AccountData):
+def draw_account_info(player: AccountStruct):
 
-    timestamp = datetime.fromtimestamp(player.LastUpdated / 1000)
+    current_tick = Py4GW.Game.get_tick_count64()
+    age_ms = max(0, current_tick - player.LastUpdated) # Time since update in ms
+    timestamp = datetime.now() - timedelta(milliseconds=age_ms)
     milliseconds = int(timestamp.microsecond / 1000)
 
-    num_heroes = SMM.GetNumHeroesFromPlayers(player.PlayerData.AgentData.AgentID)
-    num_pets = SMM.GetNumPetsFromPlayers(player.PlayerID)
-    player_buffs = [buff.SkillId for buff in player.PlayerData.BuffData if buff.SkillId != 0]
+    num_heroes = SMM.GetNumHeroesFromPlayers(player.AgentData.AgentID)
+    num_pets = SMM.GetNumPetsFromPlayers(player.AgentData.AgentID)
+    player_buffs = [buff.SkillId for buff in player.AgentData.Buffs.Buffs if buff.SkillId != 0]
     num_buffs = len(player_buffs)
 
     if begin_striped_table("AccountInfoTable", 2):
@@ -93,7 +98,7 @@ def draw_account_info(player: AccountData):
         # --- Basic info rows ---
         row("Account Email",     lambda: PyImGui.text(player.AccountEmail))
         row("Account Name",      lambda: PyImGui.text(player.AccountName))
-        row("Character Name",    lambda: PyImGui.text(player.CharacterName))
+        row("Character Name",    lambda: PyImGui.text(player.AgentData.CharacterName))
         row("Slot Number",       lambda: PyImGui.text(str(player.SlotNumber)))
         row("Last Updated",      lambda: PyImGui.text(f"{timestamp.strftime('%H:%M:%S')}.{milliseconds:03d}"))
 
@@ -104,9 +109,10 @@ def draw_account_info(player: AccountData):
         PyImGui.table_set_column_index(0); PyImGui.text("Heroes")
         PyImGui.table_set_column_index(1)
         if PyImGui.tree_node(f"Heroes ({num_heroes})"):
-            heroes = SMM.GetHeroesFromPlayers(player.PlayerID)
+            heroes = SMM.GetHeroesFromPlayers(player.AgentData.AgentID)
+            
             for hero in heroes:
-                PyImGui.text(f"{hero.CharacterName} (HeroID: {hero.HeroID})")
+                PyImGui.text(f"{hero.AgentData.CharacterName} (HeroID: {hero.AgentData.HeroID}) Slot: {hero.SlotNumber}")
             PyImGui.tree_pop()
 
         # -----------------------------------
@@ -116,9 +122,9 @@ def draw_account_info(player: AccountData):
         PyImGui.table_set_column_index(0); PyImGui.text("Pets")
         PyImGui.table_set_column_index(1)
         if PyImGui.tree_node(f"Pets ({num_pets})"):
-            pets = SMM.GetPetsFromPlayers(player.PlayerID)
+            pets = SMM.GetPetsFromPlayers(player.AgentData.AgentID)
             for pet in pets:
-                PyImGui.text(f"{pet.CharacterName} (PlayerID: {pet.PlayerID})")
+                PyImGui.text(f"{pet.AgentData.CharacterName} (PlayerID: {pet.AgentData.AgentID}) Slot: {pet.SlotNumber}")
             PyImGui.tree_pop()
 
         # -----------------------------------
@@ -150,47 +156,47 @@ def draw_account_info(player: AccountData):
                 PyImGui.table_set_column_index(0); PyImGui.text(label)
                 PyImGui.table_set_column_index(1); PyImGui.text(str(value))
 
-            lrow("PlayerID",       player.PlayerID)
-            lrow("OwnerPlayerID",  player.OwnerPlayerID)
-            lrow("MapID",          player.MapID)
-            lrow("Map Region",     player.MapRegion)
-            lrow("Map District",   player.MapDistrict)
-            lrow("Map Language",   player.MapLanguage)
+            lrow("PlayerID",       player.AgentData.AgentID)
+            lrow("OwnerPlayerID",  player.AgentData.OwnerAgentID)
+            lrow("MapID",          player.AgentData.Map.MapID)
+            lrow("Map Region",     player.AgentData.Map.Region)
+            lrow("Map District",   player.AgentData.Map.District)
+            lrow("Map Language",   player.AgentData.Map.Language)
             lrow("Is Slot Active", player.IsSlotActive)
             lrow("Is Account",     player.IsAccount)
             lrow("IsHero",         player.IsHero)
             lrow("IsPet",          player.IsPet)
             lrow("IsNPC",          player.IsNPC)
-            lrow("HeroID",         player.HeroID)
-            lrow("PartyID",         player.PartyID)
+            lrow("HeroID",         player.AgentData.HeroID)
+            lrow("PartyID",         player.AgentPartyData.PartyID)
 
             lrow(
                 "Player HP",
-                f"{int(player.PlayerHP * player.PlayerMaxHP)} / "
-                f"{player.PlayerMaxHP}  Regen: {player.PlayerHealthRegen:.2f}"
+                f"{int(player.AgentData.Health.Current * player.AgentData.Health.Max)} / "
+                f"{player.AgentData.Health.Max}  Regen: {player.AgentData.Health.Regen:.2f}"
             )
 
             lrow(
                 "Player Energy",
-                f"{int(player.PlayerEnergy * player.PlayerMaxEnergy)} / "
-                f"{player.PlayerMaxEnergy}  Regen: {player.PlayerEnergyRegen:.2f}"
+                f"{int(player.AgentData.Energy.Current * player.AgentData.Energy.Max)} / "
+                f"{player.AgentData.Energy.Max}  Regen: {player.AgentData.Energy.Regen:.2f}"
             )
 
             lrow(
                 "Player XYZ",
-                f"({player.PlayerPosX:.2f}, {player.PlayerPosY:.2f}, {player.PlayerPosZ:.2f})"
+                f"({player.AgentData.Pos.x:.2f}, {player.AgentData.Pos.y:.2f}, {player.AgentData.Pos.z:.2f})"
             )
 
-            lrow("Facing Angle", f"{Utils.RadToDeg(player.PlayerFacingAngle):.2f}")
-            lrow("Target ID",    player.PlayerTargetID)
-            lrow("Login Number", player.PlayerLoginNumber)
-            lrow("Is Ticked",    player.PlayerIsTicked)
+            lrow("Facing Angle", f"{Utils.RadToDeg(player.AgentData.RotationAngle):.2f}")
+            lrow("Target ID",    player.AgentData.TargetID)
+            lrow("Login Number", player.AgentData.LoginNumber)
+            lrow("Is Ticked",    player.AgentPartyData.IsTicked)
 
             end_striped_table()
 
 #region HeroAI Info
-def draw_heroai_info(player: AccountData):
-    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(player.AccountEmail)
+def draw_heroai_info(player: AccountStruct):
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(player.AccountEmail)
     if hero_ai_options is None:
         PyImGui.text("No HeroAI options found for this account.")
         return
@@ -220,14 +226,14 @@ def draw_heroai_info(player: AccountData):
 #endregion HeroAI Info
 
 #region Rank Info          
-def draw_rank_info(player: AccountData):
+def draw_rank_info(player: AccountStruct):
     if PyImGui.collapsing_header("Rank Data", PyImGui.TreeNodeFlags.NoFlag):
-        PyImGui.text(f"Rank: {player.PlayerData.RankData.Rank}")
-        PyImGui.text(f"Rating: {player.PlayerData.RankData.Rating}")
-        PyImGui.text(f"Qualifier Points: {player.PlayerData.RankData.QualifierPoints}")
-        PyImGui.text(f"Wins: {player.PlayerData.RankData.Wins}")
-        PyImGui.text(f"Losses: {player.PlayerData.RankData.Losses}")
-        PyImGui.text(f"Tournament Reward Points: {player.PlayerData.RankData.TournamentRewardPoints}")
+        PyImGui.text(f"Rank: {player.RankData.Rank}")
+        PyImGui.text(f"Rating: {player.RankData.Rating}")
+        PyImGui.text(f"Qualifier Points: {player.RankData.QualifierPoints}")
+        PyImGui.text(f"Wins: {player.RankData.Wins}")
+        PyImGui.text(f"Losses: {player.RankData.Losses}")
+        PyImGui.text(f"Tournament Reward Points: {player.RankData.TournamentRewardPoints}")
 
 #region Faction Data
 class FactionNode:
@@ -282,12 +288,12 @@ class FactionNode:
             
 class FactionData:
     """Container for all faction nodes."""
-    def __init__(self, player: AccountData):
-        factions_data: FactionsStruct = player.PlayerData.FactionsData
-        kurzick_data = factions_data.Factions[FactionType.Kurzick.value]
-        luxon_data = factions_data.Factions[FactionType.Luxon.value]
-        imperial_data = factions_data.Factions[FactionType.Imperial.value]
-        balthazar_data = factions_data.Factions[FactionType.Balthazar.value]
+    def __init__(self, player: AccountStruct):
+        factions_data: FactionStruct = player.FactionData
+        kurzick_data = factions_data.Kurzick
+        luxon_data = factions_data.Luxon
+        imperial_data = factions_data.Imperial
+        balthazar_data = factions_data.Balthazar
         self.nodes = [
             FactionNode("Balthazar", balthazar_data.Current, balthazar_data.TotalEarned, balthazar_data.Max),
             FactionNode("Kurzick",   kurzick_data.Current, kurzick_data.TotalEarned, kurzick_data.Max),
@@ -302,13 +308,13 @@ class FactionData:
             
 #region Title Data
 class TitleData:
-    def __init__(self, player: AccountData):
-        title_array : list[TitleStruct] = player.PlayerData.TitlesData.Titles
-        self.titles: dict[int, TitleStruct] = {}
+    def __init__(self, player: AccountStruct):
+        title_array : list[Any] = player.TitlesData.Titles
+        self.titles: dict[int, TitleUnitStruct] = {}
         for title in title_array:
              self.titles[title.TitleID] = title
         
-        self.active_title_id: int = player.PlayerData.TitlesData.ActiveTitleID
+        self.active_title_id: int = player.TitlesData.ActiveTitleID
 
     def get_current_tier(self, title_id: int, current_points: int):
         tiers = TITLE_TIERS.get(title_id, [])
@@ -432,7 +438,7 @@ class TitleData:
                 for title in titles:
                     self._draw_title(title, managed=True)
                     
-def draw_available_characters(player: AccountData):
+def draw_available_characters(player: AccountStruct):
     PyImGui.text("Available Characters:")
 
     if PyImGui.begin_table("##char_table", 6, PyImGui.TableFlags.Borders | PyImGui.TableFlags.RowBg):
@@ -449,7 +455,7 @@ def draw_available_characters(player: AccountData):
         PyImGui.table_headers_row()
 
         # Rows
-        for char in player.PlayerData.AvailableCharacters:
+        for char in player.AvailableCharacters.Characters:
             if char.Name == "":
                 continue  # skip empty slots
             PyImGui.table_next_row()
@@ -487,18 +493,17 @@ class PlayerData:
     show_details_global: dict[str, bool] = {}
     skill_name_cache: dict[int, str] = {}
 
-    def __init__(self, player: AccountData):
-        self.target_id: int = player.PlayerData.AgentData.TargetID
-        self.observing_id: int = player.PlayerData.AgentData.ObservingID
-        uuid = player.PlayerData.AgentData.UUID
-        self.player_uuid: Tuple[int, int, int, int] = (uuid[0], uuid[1], uuid[2], uuid[3])
+    def __init__(self, player: AccountStruct):
+        self.target_id: int = player.AgentData.TargetID
+        self.observing_id: int = player.AgentData.ObservingID
+        self.player_uuid: Tuple[int, int, int, int] = player.AgentData.UUID
 
         # RAW ARRAYS
-        self.missions_completed: List[int] = player.PlayerData.MissionData.NormalModeCompleted
-        self.missions_bonus: List[int] = player.PlayerData.MissionData.NormalModeBonus
-        self.missions_completed_hm: List[int] = player.PlayerData.MissionData.HardModeCompleted
-        self.missions_bonus_hm: List[int] = player.PlayerData.MissionData.HardModeBonus
-        self.unlocked_character_skills: List[int] = player.PlayerData.UnlockedSkills
+        self.missions_completed: List[int] = player.MissionData.NormalModeCompleted
+        self.missions_bonus: List[int] = player.MissionData.NormalModeBonus
+        self.missions_completed_hm: List[int] = player.MissionData.HardModeCompleted
+        self.missions_bonus_hm: List[int] = player.MissionData.HardModeBonus
+        self.unlocked_character_skills: List[int] = player.UnlockedSkills.Skills
 
         # UI toggles (checkbox states)
         self.show_details = PlayerData.show_details_global
@@ -736,12 +741,12 @@ class PlayerData:
                 
 #region Experience Data
 class ExperienceData:
-    def __init__(self, player: AccountData):
-        self.level = player.PlayerData.ExperienceData.Level
-        self.experience = player.PlayerData.ExperienceData.Experience
-        self.progress_pct = player.PlayerData.ExperienceData.ProgressPct
-        self.current_skill_points = player.PlayerData.ExperienceData.CurrentSkillPoints
-        self.total_earned_skill_points = player.PlayerData.ExperienceData.TotalEarnedSkillPoints
+    def __init__(self, player: AccountStruct):
+        self.level = player.ExperienceData.Level
+        self.experience = player.ExperienceData.Experience
+        self.progress_pct = player.ExperienceData.ProgressPct
+        self.current_skill_points = player.ExperienceData.CurrentSkillPoints
+        self.total_earned_skill_points = player.ExperienceData.TotalEarnedSkillPoints
 
 
     def draw_content(self):
@@ -789,10 +794,10 @@ class ExperienceData:
             
 #region Health Data
 class HealthData:
-    def __init__(self, player: AccountData):
-        self.Health = player.PlayerData.AgentData.Health      # 0.0 - 1.0
-        self.MaxHealth = player.PlayerData.AgentData.MaxHealth
-        self.HealthPips = player.PlayerData.AgentData.HealthPips
+    def __init__(self, player: AccountStruct):
+        self.Health = player.AgentData.Health.Current    # 0.0 - 1.0
+        self.MaxHealth = player.AgentData.Health.Max
+        self.HealthPips = player.AgentData.Health.Pips
         self.player = player
 
     def draw_content(self):
@@ -819,13 +824,13 @@ class HealthData:
             def _get_health_color():
                 #default 
                 color = ColorPalette.GetColor("firebrick").to_tuple_normalized()
-                if self.player.PlayerData.AgentData.Is_DegenHexed:
+                if self.player.AgentData.Is_DegenHexed:
                     color = ColorPalette.GetColor("dark_magenta").to_tuple_normalized()
             
-                if self.player.PlayerData.AgentData.Is_Poisoned:
+                if self.player.AgentData.Is_Poisoned:
                       color = ColorPalette.GetColor("olive").to_tuple_normalized()
                       
-                if self.player.PlayerData.AgentData.Is_Bleeding:
+                if self.player.AgentData.Is_Bleeding:
                       color = ColorPalette.GetColor("light_coral").to_tuple_normalized()
                     
                 return color
@@ -846,7 +851,7 @@ class HealthData:
             # -----------------------------------------
             #  ICON: HEXED  (down arrow)
             # -----------------------------------------
-            if self.player.PlayerData.AgentData.Is_Hexed:
+            if self.player.AgentData.Is_Hexed:
                 PyImGui.set_cursor_pos(x, icon_y)
                 ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
@@ -861,7 +866,7 @@ class HealthData:
             # -----------------------------------------
             #  ICON: CONDITIONED  (faded down arrow)
             # -----------------------------------------
-            if self.player.PlayerData.AgentData.Is_Conditioned:
+            if self.player.AgentData.Is_Conditioned:
                 PyImGui.set_cursor_pos(x, icon_y)
                 ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
@@ -876,7 +881,7 @@ class HealthData:
             # -----------------------------------------
             #  ICON: ENCHANTED  (up arrow)
             # -----------------------------------------
-            if self.player.PlayerData.AgentData.Is_Enchanted:
+            if self.player.AgentData.Is_Enchanted:
                 PyImGui.set_cursor_pos(x, icon_y)
                 ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
@@ -891,7 +896,7 @@ class HealthData:
             # -----------------------------------------
             #  ICON: WEAPON SPELLED  (weapon spell icon)
             # -----------------------------------------
-            if self.player.PlayerData.AgentData.Is_WeaponSpelled:
+            if self.player.AgentData.Is_WeaponSpelled:
                 PyImGui.set_cursor_pos(x, icon_y - 2)
                 ImGui.DrawTextureExtended(
                     texture_path=GAME_UI_TEXTURE_BASE_PATH + "ui_skill_identifier.png",
@@ -910,22 +915,22 @@ class HealthData:
 
 #region Agent Data
 class AgentData:
-    def __init__(self, player: AccountData):
-        agent_data = player.PlayerData.AgentData
-        self.UUID: list[int] = agent_data.UUID
+    def __init__(self, player: AccountStruct):
+        agent_data = player.AgentData
+        self.UUID: list[int] = list(agent_data.UUID)
         self.AgentID: int = agent_data.AgentID
-        self.OwnerID: int = agent_data.OwnerID
+        self.OwnerID: int = agent_data.OwnerAgentID
         self.TargetID: int = agent_data.TargetID
         self.ObservingID: int = agent_data.ObservingID
         self.PlayerNumber: int = agent_data.PlayerNumber
-        self.Profession: list[int] = agent_data.Profession
+        self.Profession: list[int] = list(agent_data.Profession)
         self.Level: int = agent_data.Level
-        self.Energy: float = agent_data.Energy
-        self.MaxEnergy: float = agent_data.MaxEnergy
-        self.EnergyPips: int = agent_data.EnergyPips
-        self.Health: float = agent_data.Health
-        self.MaxHealth: float = agent_data.MaxHealth
-        self.HealthPips: int = agent_data.HealthPips
+        self.Energy: float = agent_data.Energy.Current
+        self.MaxEnergy: float = agent_data.Energy.Max
+        self.EnergyPips: int = agent_data.Energy.Pips
+        self.Health: float = agent_data.Health.Current
+        self.MaxHealth: float = agent_data.Health.Max
+        self.HealthPips: int = agent_data.Health.Pips
         self.LoginNumber: int = agent_data.LoginNumber
         self.DaggerStatus: int = agent_data.DaggerStatus
         self.WeaponType: int = agent_data.WeaponType
@@ -939,10 +944,10 @@ class AgentData:
         self.AnimationSpeed: float = agent_data.AnimationSpeed
         self.AnimationCode: int = agent_data.AnimationCode
         self.AnimationID: int = agent_data.AnimationID
-        self.XYZ: list[float] = agent_data.XYZ
+        self.XYZ: list[float] = agent_data.Pos.to_list()
         self.ZPlane: int = agent_data.ZPlane
         self.RotationAngle: float = agent_data.RotationAngle
-        self.VelocityVector: list[float] = agent_data.VelocityVector
+        self.VelocityVector: list[float] = agent_data.Velocity.to_list()
 
 #region main
 def main():
@@ -950,7 +955,7 @@ def main():
     if not Routines.Checks.Map.MapValid():
         return
     
-    active_players = GLOBAL_CACHE.ShMem.GetAllActivePlayers()
+    active_players = GLOBAL_CACHE.ShMem.GetAllAccountData()
     
     if PyImGui.begin(f"{MODULE_NAME}"):
         if PyImGui.collapsing_header("Shared Memory Info"):
@@ -959,7 +964,7 @@ def main():
             PyImGui.text(f"Max Number of Players: {SMM.max_num_players}")
             PyImGui.text(f"Number of Active Players: {SMM.GetNumActivePlayers()}")
             PyImGui.text(f"Number of active Slots: {SMM.GetNumActiveSlots()}")
-            ImGui.show_tooltip("\n".join([f"{i}. | Slot:{acc.SlotNumber} {acc.AccountEmail} | {acc.CharacterName}" for i, acc in enumerate(SMM.GetStruct().AccountData) if SMM._is_slot_active(i)]))                        
+            ImGui.show_tooltip("\n".join([f"{i}. | Slot:{acc.SlotNumber} {acc.AccountEmail} | {acc.AgentData.CharacterName}" for i, acc in enumerate(SMM.GetAllAccounts().AccountData) if SMM.GetAllAccounts()._is_slot_active(i)]))                        
         
         MIN_WIDTH = 500
         MIN_HEIGHT = 700
@@ -982,7 +987,7 @@ def main():
         ):
             for player in active_players:
                 if PyImGui.begin_tab_bar("##Accounts"):
-                    if PyImGui.begin_tab_item(f"{player.CharacterName}"):
+                    if PyImGui.begin_tab_item(f"{player.AgentData.CharacterName}"):
                         if PyImGui.begin_tab_bar("##AccountDetails"):
                             #Account Info Tab
                             if PyImGui.begin_tab_item("Account Info"):

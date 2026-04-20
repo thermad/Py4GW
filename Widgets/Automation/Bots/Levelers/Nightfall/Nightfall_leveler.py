@@ -1,9 +1,15 @@
 from __future__ import annotations
 from typing import List, Tuple, Generator, Any
 import os
-from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Map, Player, Py4GW, ConsoleLog, ModelID, Botting,
-                          Agent, ImGui, ActionQueueManager)
 
+import PyImGui
+from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Map, Player, Py4GW, ConsoleLog, ModelID, Bags, Botting,
+                          Agent, ImGui, ActionQueueManager, HeroType)
+from Py4GWCoreLib.ImGui_src.types import Alignment
+from Py4GWCoreLib.py4gwcorelib_src.Color import Color
+
+MODULE_NAME = "Nightfall Leveler"
+MODULE_ICON = "Textures\\Module_Icons\\Leveler - Nightfall.png"
 
 bot = Botting("Nightfall Leveler",
               upkeep_birthday_cupcake_restock=10,
@@ -11,9 +17,62 @@ bot = Botting("Nightfall Leveler",
               upkeep_war_supplies_restock=2,
               upkeep_auto_inventory_management_active=False,
               upkeep_auto_combat_active=False,
-              upkeep_auto_loot_active=True)
- 
+              upkeep_auto_loot_active=False)
+
+
+def _on_party_defeated(bot: Botting, step_name: str):
+    """Party wiped: wait for 'Return to Outpost' widget to bring us back, then restart from the same step."""
+    bot.Properties.ApplyNow("pause_on_danger", "active", False)
+    bot.Properties.ApplyNow("auto_combat", "active", False)
+    while True:
+        yield from Routines.Yield.wait(500)
+        if not Routines.Checks.Map.MapValid():
+            continue
+        if Routines.Checks.Map.IsOutpost() and Map.IsMapReady():
+            break
+    fsm = bot.config.FSM
+    if not step_name or not fsm.has_state(step_name):
+        state_names = fsm.get_state_names()
+        step_name = state_names[0] if state_names else ""
+    if not step_name:
+        fsm.resume()
+        yield
+        return
+    fsm.ResetAndStartAtStep(step_name)
+    bot.Properties.ApplyNow("auto_combat", "active", True)
+    bot.Templates.Aggressive()
+    yield
+
+
+def _get_mission_header_step(fsm):
+    """Return the [H] header state name for the current state (so we restart the mission, not a sub-step)."""
+    if not fsm.current_state or not fsm.states:
+        return None
+    try:
+        idx = fsm.states.index(fsm.current_state)
+    except ValueError:
+        return None
+    for i in range(idx, -1, -1):
+        if fsm.states[i].name.startswith("[H]"):
+            return fsm.states[i].name
+    return None
+
+
+def on_party_defeated(bot: Botting):
+    ConsoleLog("PartyDefeated", "Party defeated. Returning to outpost and retrying current step...", log=True)
+    ActionQueueManager().ResetAllQueues()
+    fsm = bot.config.FSM
+    current_step = _get_mission_header_step(fsm) or (fsm.current_state.name if fsm.current_state else "")
+    fsm.pause()
+    fsm.AddManagedCoroutine("OnPartyDefeated", _on_party_defeated(bot, current_step))
+
+
+def InitializeBot(bot: Botting) -> None:
+    bot.Events.OnPartyDefeatedCallback(lambda: on_party_defeated(bot))
+
+
 def create_bot_routine(bot: Botting) -> None:
+    InitializeBot(bot)
     Skip_Tutorial(bot)
     Into_Chahbek_Village(bot)
     Quiz_the_Recruits(bot)
@@ -21,13 +80,14 @@ def create_bot_routine(bot: Botting) -> None:
     Chahbek_Village_Mission(bot)
     Primary_Training(bot)
     A_Personal_Vault(bot)
-    Armored_Transport(bot)
+    #Armored_Transport(bot)  #Screw this guy
     Material_Girl(bot)
+    Hog_Hunt(bot)
     To_Champions_Dawn(bot)
     Quality_Steel(bot)
     Attribute_Points_Quest_1(bot)
     Craft_First_Weapon(bot)
-    Missing_Shipment(bot)
+    #Missing_Shipment(bot) Need Armored Transport to do this
     Proof_of_Courage_and_Suwash_the_Pirate(bot)
     A_Hidden_Threat(bot)
     Identity_Theft(bot) 
@@ -45,6 +105,7 @@ def create_bot_routine(bot: Botting) -> None:
     Destroy_Starter_Armor_And_Useless_Items(bot)
     # === LEVELING ===
     Farm_Until_Level_10(bot)
+    To_Consulate_Docks(bot)
     Extend_Inventory_Space(bot)
     Unlock_Remaining_Secondary_Professions(bot)
     Unlock_Mercenary_Heroes(bot)
@@ -57,24 +118,19 @@ def create_bot_routine(bot: Botting) -> None:
     Unlock_Eye_Of_The_North_Pool(bot)
     To_Gunnars_Hold(bot)
     Unlock_Kilroy_Stonekin(bot)
-    #To_Longeyes_Edge(bot)
-    #Unlock_NPC_For_Vaettir_Farm(bot)
-    #To_Doomlore_Shrine(bot)
-    #To_Sifhalla(bot)
-    #To_Olafstead(bot)
-    #To_Umbral_Grotto(bot)
     # === FACTIONS CONTENT ===
-    To_Consulate_Docks(bot)
     To_Kaineng_Center(bot)
-    #To_Vizunah_Square_Foreign_Quarter(bot)
     To_Marketplace(bot)
     To_Seitung_Harbor(bot)
     To_Shinjea_Monastery(bot)
     To_Tsumei_Village(bot)
     To_Minister_Cho(bot)
     # === PROPHECIES CONTENT ===
-    To_Lions_Arch(bot) 
-    To_Temple_Of_The_Ages(bot)
+    To_Lions_Arch(bot)
+    Unlock_Olias(bot)
+    toa_profession, _ = Agent.GetProfessionNames(Player.GetAgentID())
+    if toa_profession in ["Dervish", "Ranger"]:
+        To_Temple_Of_The_Ages(bot)
 
 def ConfigurePacifistEnv(bot: Botting) -> None:
     bot.Templates.Pacifist()
@@ -318,18 +374,6 @@ def GetWeaponMaterialPerProfession(bot: Botting):
         return [ModelID.Iron_Ingot.value]    
     return []
 
-def withdraw_gold(target_gold=5000, deposit_all=True):
-    gold_on_char = GLOBAL_CACHE.Inventory.GetGoldOnCharacter()
-
-    if gold_on_char > target_gold and deposit_all:
-        to_deposit = gold_on_char - target_gold
-        GLOBAL_CACHE.Inventory.DepositGold(to_deposit)
-        yield from Routines.Yield.wait(250)
-
-    if gold_on_char < target_gold:
-        to_withdraw = target_gold - gold_on_char
-        GLOBAL_CACHE.Inventory.WithdrawGold(to_withdraw)
-        yield from Routines.Yield.wait(250)
 
 def BuyMaterials():
     for _ in range(2):
@@ -461,7 +505,7 @@ def CraftArmorWithDoubleMats(bot: Botting):
     bot.Map.Travel(target_map_id=491)
     
     # Withdraw gold
-    bot.States.AddCustomState(withdraw_gold, "Withdraw Gold")
+    bot.Items.WithdrawGold(5000)
     
     # Buy common materials
     bot.Move.XY(3495.80, 2050.97)
@@ -634,9 +678,6 @@ def CraftArmor(bot: Botting):
         (BOOTS,  [GetArmorMaterialPerProfession()], [2]),
     ]
     
-    yield from Routines.Yield.Agents.InteractWithAgentXY(3944, 2378)
-    yield
-
     for item_id, mats, qtys in armor_pieces:
         result = yield from Routines.Yield.Items.CraftItem(item_id, 75, mats, qtys)
         if not result:
@@ -662,9 +703,6 @@ def CraftWeapon(bot: Botting):
     for weapon_id in weapon_ids:
         weapon_pieces.append((weapon_id, materials, [1]))  # 1 = 10 materials per weapon minimum
     
-    yield from Routines.Yield.Agents.InteractWithAgentXY(4101.25, 2194.41)
-    yield
-
     for weapon_id, mats, qtys in weapon_pieces:
         result = yield from Routines.Yield.Items.CraftItem(weapon_id, 50, mats, qtys)
         if not result:
@@ -690,9 +728,6 @@ def Craft1stWeapon(bot: Botting):
     for weapon_id in weapon_ids:
         weapon_pieces.append((weapon_id, materials, [1]))  # 1 = 10 materials per weapon minimum
     
-    yield from Routines.Yield.Agents.InteractWithAgentXY(-11270.00, 8785.00)
-    yield
-
     for weapon_id, mats, qtys in weapon_pieces:
         result = yield from Routines.Yield.Items.CraftItem(weapon_id, 20, mats, qtys)
         if not result:
@@ -854,28 +889,43 @@ def A_Personal_Vault(bot: Botting):
     bot.Move.XYAndDialog(-9251, 11826, 0x82A101)
     bot.Move.XYAndDialog(-7761, 14393, 0x84)
     bot.Move.XYAndDialog(-9251, 11826, 0x82A107)
+    bot.Items.WithdrawGold(5000)
 
 def Armored_Transport(bot: Botting):
     bot.States.AddHeader("Quest: Armored Transport")
-    bot.Map.Travel(target_map_id=449) # Kamadan
+    bot.Travel_To_Random_District(target_map_id=449) # Kamadan
     bot.Move.XYAndDialog(-11202, 9346,0x825F01) #+500xp protect quest
     PrepareForBattle(bot, Hero_List=[], Henchman_List=[1,3,4])
     bot.Move.XYAndExitMap(-9326, 18151, target_map_id=430) # Plains of Jarin
     ConfigureAggressiveEnv(bot)
+    bot.Move.XY(18460, 1002, step_name="Bounty")
+    bot.Move.XYAndDialog(18460, 1002, 0x85) #Blessing 
+    bot.Properties.Disable("auto_loot")
     bot.Move.XYAndDialog(16448, 2320,0x825F04)
-    def _exit_condition():
+    def _exit_condition_1():
+        pos = Player.GetXY()
+        if not pos:
+            return False
+        dx = pos[0] - 5516.0
+        dy = pos[1] - 6262.0
+        return (dx * dx + dy * dy) <= (1000.0 * 1000.0)
+    exit_condition_1= lambda: _exit_condition_1()
+    def _exit_condition_2():
         pos = Player.GetXY()
         if not pos:
             return False
         dx = pos[0] - -2750.0
         dy = pos[1] - 1741.0
         return (dx * dx + dy * dy) <= (1000.0 * 1000.0)
-    exit_condition = lambda: _exit_condition()
-    bot.Move.FollowModel(4881, 100, exit_condition) #Model ID updated after GW reforged
+    exit_condition_2= lambda: _exit_condition_2()
+    bot.Move.FollowModel(4881, 100, exit_condition_1) #Spot 1 is the commonly stuck at area.
+    bot.Move.XY(6948.40, 12120.75) #Corsair Spawn Point maybe
+    bot.Move.FollowModel(4881, 100, exit_condition_2) #Spot 2 is the good spot from Spot 1
     bot.Move.XY(-2963, 1813)
     bot.Wait.ForTime(10000)
-    bot.Map.Travel(target_map_id=449) # Kamadan
+    bot.Travel_To_Random_District(target_map_id=449) # Kamadan
     bot.Move.XYAndDialog(-11202, 9346,0x825F07)
+
 
 def Material_Girl(bot: Botting):
     bot.States.AddHeader("Quest: Material Girl")
@@ -910,6 +960,59 @@ def Material_Girl(bot: Botting):
     bot.Dialogs.AtXY(-10024, 8590, 0x828807)
     bot.Move.XYAndDialog(-11356, 9066, 0x826107)
 
+def Hog_Hunt(bot:Botting):
+    bot.States.AddHeader("Quest: Hog Hunt") # 1,000 XP
+    bot.Travel_To_Random_District(431) #SSGH
+    PrepareForBattle(bot, Hero_List=[], Henchman_List=[1,3,4])
+    bot.Move.XYAndExitMap(-3172, 3271, 430) #Plains of Jarin
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-1840.23, 2432.96)
+    bot.Move.XYAndDialog(-1297.00, 3229.00, 0x85) #Insect Bounty
+    Player.ChangeTarget(0) # No Target
+    bot.Move.XY(-269.29, 1981.00)
+    bot.Move.XY(-1894.08, 2403.29)
+    bot.Wait.ForTime(90000)
+    def interact_Nehdukah():
+        from Py4GWCoreLib.native_src.methods.PlayerMethods import PlayerMethods
+        import PyDialog
+        agent_id = Agent.GetAgentIDByEncString("\\x8101\\x246C\\xFDB5\\xB6AD\\x56AB")
+        if agent_id != 0:
+            PlayerMethods.InteractAgent(agent_id)
+        elapsed_ms = 0
+        timeout_ms = 10_000
+        while elapsed_ms < timeout_ms:
+            try:
+                if PyDialog.PyDialog.is_dialog_active():
+                    buttons = [
+                        button for button in PyDialog.PyDialog.get_active_dialog_buttons()
+                        if getattr(button, "dialog_id", 0) != 0
+                    ]
+                    if buttons:
+                        # Send dialog ID 0x828D01 to accept Hog Hunt quest
+                        Player.SendDialog(0x828D01)
+                        ConsoleLog("Hog Hunt", "Quest accepted from Nehdukah", log=True)
+                        yield
+                        return
+            except Exception:
+                pass
+            yield from Routines.Yield.wait(250)
+            elapsed_ms += 250
+        ConsoleLog("Hog Hunt", "Failed to accept quest from Nehdukah", log=True)
+        yield
+    bot.States.AddCustomState(interact_Nehdukah, "Interact with Nehdukah")
+    bot.Move.XY(-6038.05, 2229.41)
+    bot.Move.XY(-10117.84, 3935.15)
+    bot.Move.XY(-12969.55, 9102.46) #Protect Area
+    bot.Wait.UntilOnCombat()
+    bot.Move.XY(-12743.11, 8789.06) #2nd spawn wave
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(-8175.91, 7331.07)
+    bot.Move.XY(-6762.51, 2301.88)
+    bot.Move.XY(-149.15, 1838.02)
+    bot.Move.XY(-1158.39, 1917.86)
+    bot.Dialogs.WithModel(4869, 0x828D07) #Done
+    bot.Travel_To_Random_District(target_map_id=431) #Sunspear Great Hall
+
 def To_Champions_Dawn(bot: Botting): 
     bot.States.AddHeader("To Champion's Dawn")
     bot.Map.Travel(target_map_id=431) #Sunspear Great Hall
@@ -928,7 +1031,7 @@ def Quality_Steel(bot: Botting):
     bot.Move.XYAndDialog(-11208, 8815, 0x826001)
     bot.Map.Travel(target_map_id=431) #Sunspear Great Hall
     bot.Move.XYAndDialog(-4076, 5362, 0x826004)
-    bot.Move.XYAndDialog(-2888, 7024, 0x84)
+    bot.Move.XYAndDialog(-2866, 7093, 0x84)
     PrepareForBattle(bot, Hero_List=[], Henchman_List=[1,3,4])
     bot.Move.XYAndExitMap(-3172, 3271, target_map_id=430) #Plains of Jarin
     ConfigureAggressiveEnv(bot)
@@ -943,7 +1046,7 @@ def Quality_Steel(bot: Botting):
 def Attribute_Points_Quest_1(bot: Botting):
     bot.States.AddHeader("Attribute points quest n. 1")
     bot.Map.Travel(target_map_id=431) #Sunspear Great Hall
-    bot.Move.XYAndDialog(-2888, 7024, 0x82CB01)
+    bot.Move.XYAndDialog(-2866, 7093, 0x82CB01)
 
 def Craft_First_Weapon(bot: Botting):
     bot.States.AddHeader("Craft first weapon")
@@ -971,7 +1074,7 @@ def Missing_Shipment(bot: Botting):
     bot.Move.XYAndDialog(-10235, 16557, 0x827507)
 
 def Proof_of_Courage_and_Suwash_the_Pirate(bot: Botting):
-    bot.States.AddHeader("Quests: Proof of Courage and Suwash the Pirate")
+    bot.States.AddHeader("Quests: Proof of Courage and Suwash the Pirate") 
     bot.Map.Travel(target_map_id=431) #Sunspear Great Hall
     PrepareForBattle(bot, Hero_List=[], Henchman_List=[1,2,4])
     bot.Move.XYAndDialog(-4358, 6535, 0x829301) #Proof of Courage
@@ -1194,9 +1297,10 @@ def Leaving_A_Legacy(bot: Botting):
 def Craft_Player_Armor(bot: Botting):
     bot.States.AddHeader("Craft Player Armor")
     bot.Map.Travel(target_map_id=491)
+    bot.Items.WithdrawGold(5000)
     bot.Move.XYAndInteractNPC(3857.42, 1700.62)  # Material merchant
     bot.States.AddCustomState(BuyMaterials, "Buy Materials")
-    bot.Move.XYAndInteractNPC(3891.62, 2329.84)  # Armor crafter
+    bot.Move.XYAndInteractNPC(3944, 2378)  # Armor crafter
     bot.Wait.ForTime(1000)  # small delay to let the window open
     exec_fn = lambda: CraftArmor(bot)
     bot.States.AddCustomState(exec_fn, "Craft Armor")
@@ -1325,32 +1429,36 @@ def Farm_Until_Level_10(bot):
         bot.Wait.UntilOutOfCombat()
         bot.Map.Travel(target_map_id=491) #Jokanur Diggings
 
+def To_Consulate_Docks(bot: Botting):
+    bot.States.AddHeader("To Consulate Docks")
+    bot.Map.Travel(target_map_id=449)
+    bot.Move.XY(-8075.89, 14592.47)
+    bot.Move.XY(-6743.29, 16663.21)
+    bot.Move.XY(-5271.00, 16740.00)
+    bot.Wait.ForMapLoad(target_map_id=429)
+    bot.Move.XYAndDialog(-4631.86, 16711.79, 0x85)
+    bot.Wait.ForMapToChange(target_map_id=493)
+
 def Extend_Inventory_Space(bot: Botting):
     bot.States.AddHeader("Extend Inventory Space")
     bot.Map.Travel(target_map_id=248) #GTOB
-    bot.States.AddCustomState(withdraw_gold, "Withdraw Gold")
-    bot.helpers.UI.open_all_bags()
+    bot.Items.WithdrawGold(5000)
     bot.Move.XY(-6017.76, -5899.94)
     bot.Move.XYAndInteractNPC(-4861.00, -7441.00) # Merchant NPC in GTOB
-    bot.helpers.Merchant.buy_item(35, 1) # Buy Bag 1
+    bot.helpers.Merchant.buy_item(ModelID.Bag.value, 1) # Buy Bag 1
     bot.Wait.ForTime(250)
-    bot.helpers.Merchant.buy_item(35, 1) # Buy Bag 2
+    bot.helpers.Merchant.buy_item(ModelID.Bag.value, 1) # Buy Bag 2
     bot.Wait.ForTime(250)
-    bot.helpers.Merchant.buy_item(34, 1) # Buy Belt Pouch  
+    bot.helpers.Merchant.buy_item(ModelID.Belt_Pouch.value, 1) # Buy Belt Pouch
     bot.Wait.ForTime(250)
-    bot.Items.MoveModelToBagSlot(34, 1, 0) # Move Belt Pouch to Bag 1 Slot 0
-    bot.UI.BagItemDoubleClick(bag_id=1, slot=0) #Needs to be fixed
-    bot.Wait.ForTime(500) # Wait for equip to complete
-    bot.Items.MoveModelToBagSlot(35, 1, 0) 
-    bot.UI.BagItemDoubleClick(bag_id=1, slot=0) #Needs to be fixed
-    bot.Wait.ForTime(500)
-    bot.Items.MoveModelToBagSlot(35, 1, 0)
-    bot.UI.BagItemDoubleClick(bag_id=1, slot=0) #Needs to be fixed
+    bot.Items.EquipInventoryBag(ModelID.Belt_Pouch.value, Bags.BeltPouch)
+    bot.Items.EquipInventoryBag(ModelID.Bag.value, Bags.Bag1)
+    bot.Items.EquipInventoryBag(ModelID.Bag.value, Bags.Bag2)
 
 def Unlock_Remaining_Secondary_Professions(bot: Botting):
     bot.States.AddHeader("Unlock Remaining Secondary Professions")
     bot.Map.Travel(target_map_id=248)  # GTOB
-    bot.States.AddCustomState(withdraw_gold, "Get 5000 gold")
+    bot.Items.WithdrawGold(5000)
     bot.Move.XY(-3151.22, -7255.13)  # Move to profession trainers area
     primary, _ = Agent.GetProfessionNames(Player.GetAgentID())
     
@@ -1453,9 +1561,9 @@ def Unlock_Xunlai_Material_Storage(bot: Botting) -> None:
 def Attribute_Points_Quest_2(bot: Botting):
     bot.States.AddHeader("Attribute points quest n. 2")
     bot.Map.Travel(target_map_id=431) # Sunspear Great Hall
-    bot.Move.XYAndDialog(-2864, 7031, 0x82CC01)
+    bot.Move.XYAndDialog(-2866, 7093, 0x82CC01)
     bot.Wait.ForTime(3000)
-    bot.Move.XYAndDialog(-2864, 7031, 0x82CC07)
+    bot.Move.XYAndDialog(-2866, 7093, 0x82CC07)
 
 def Unlock_Sunspear_Skills(bot: Botting):
     bot.States.AddHeader("Unlock Sunspear Skills")
@@ -1483,7 +1591,6 @@ def To_Boreal_Station(bot: Botting):
     ConfigureAggressiveEnv(bot)
     bot.Move.XYAndDialog(18191, 167, 0x85) #get Mox
     bot.Move.XY(15407, 209)
-    #bot.Move.XYAndDialog(13761, -13108, 0x86) # Explore The Fissure
     bot.Move.XYAndDialog(13761, -13108, 0x84) # Yes
     bot.Wait.ForMapToChange(target_map_id=693)
     ConfigureAggressiveEnv(bot)
@@ -1528,7 +1635,7 @@ def Unlock_Eye_Of_The_North_Pool(bot: Botting):
     bot.Wait.ForTime(1000)
     #bot.Dialogs.WithModel(5959, 0x630) # Eotn_pool_cinematic. Model id updated 20.12.2025 GW Reforged
     #bot.Wait.ForTime(1000)
-    bot.Dialogs.WithModel(5959, 0x633) # Eotn_pool_cinematic. Model id updated 20.12.2025 GW Reforged
+    bot.Dialogs.WithModel(5959, 0x638) # Eotn_pool_cinematic. Model id updated 20.12.2025 GW Reforged
     bot.Wait.ForTime(1000)
     bot.Wait.ForMapToChange(target_map_id=646)
     bot.Dialogs.WithModel(6021, 0x89) # Gwen dialog. Model id updated 20.12.2025 GW Reforged
@@ -1584,226 +1691,11 @@ def Unlock_Kilroy_Stonekin(bot: Botting):
         bot.Items.Equip(6514)
     elif profession == "Monk":
         bot.Items.Equip(18926)
+    elif profession == "Necromancer":
+        bot.Items.Equip(18914)
+    elif profession == "Ranger":
+        bot.Items.Equip(35829)
         
-def To_Longeyes_Edge(bot: Botting):
-    bot.States.AddHeader("To Longeye's Edge")
-    bot.Map.Travel(target_map_id=644) # Gunnar's Hold
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XY(15886.204101, -6687.815917)
-    bot.Move.XY(15183.199218, -6381.958984)
-    bot.Wait.ForMapLoad(target_map_id=548)  # Norrhart Domains
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(14233.820312, -3638.702636)
-    bot.Move.XY(14944.690429,  1197.740966)
-    bot.Move.XY(14855.548828,  4450.144531)
-    bot.Move.XY(17964.738281,  6782.413574)
-    bot.Move.XY(19127.484375,  9809.458984)
-    bot.Move.XY(21742.705078, 14057.231445)
-    bot.Move.XY(19933.869140, 15609.059570)
-    bot.Move.XY(16294.676757, 16369.736328)
-    bot.Move.XY(16392.476562, 16768.855468)
-    bot.Wait.ForMapLoad(target_map_id=482)  # Bjora Marches
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-11232.550781, -16722.859375)
-    bot.Move.XY(-7655.780273 , -13250.316406)
-    bot.Move.XY(-6672.132324 , -13080.853515)
-    bot.Move.XY(-5497.732421 , -11904.576171)
-    bot.Move.XY(-3598.337646 , -11162.589843)
-    bot.Move.XY(-3013.927490 ,  -9264.664062)
-    bot.Move.XY(-1002.166198 ,  -8064.565429)
-    bot.Move.XY( 3533.099609 ,  -9982.698242)
-    bot.Move.XY( 7472.125976 , -10943.370117)
-    bot.Move.XY(12984.513671 , -15341.864257)
-    bot.Move.XY(17305.523437 , -17686.404296)
-    bot.Move.XY(19048.208984 , -18813.695312)
-    bot.Move.XY(19634.173828, -19118.777343)
-    bot.Wait.ForMapLoad(target_map_id=650)  # Longeyes Ledge
-
-def Unlock_NPC_For_Vaettir_Farm(bot: Botting):
-    bot.States.AddHeader("Unlock NPC For Vaettir Farm")
-    bot.Map.Travel(target_map_id=650)  # longeyes_ledge_id
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XYAndExitMap(-26375, 16180, target_map_name="Bjora Marches")
-    ConfigureAggressiveEnv(bot)
-    path_points_to_traverse_bjora_marches: List[Tuple[float, float]] = [
-    (17810, -17649),(17516, -17270),(17166, -16813),(16862, -16324),(16472, -15934),
-    (15929, -15731),(15387, -15521),(14849, -15312),(14311, -15101),(13776, -14882),
-    (13249, -14642),(12729, -14386),(12235, -14086),(11748, -13776),(11274, -13450),
-    (10839, -13065),(10572, -12590),(10412, -12036),(10238, -11485),(10125, -10918),
-    (10029, -10348),(9909, -9778)  ,(9599, -9327)  ,(9121, -9009)  ,(8674, -8645)  ,
-    (8215, -8289)  ,(7755, -7945)  ,(7339, -7542)  ,(6962, -7103)  ,(6587, -6666)  ,
-    (6210, -6226)  ,(5834, -5788)  ,(5457, -5349)  ,(5081, -4911)  ,(4703, -4470)  ,
-    (4379, -3990)  ,(4063, -3507)  ,(3773, -3031)  ,(3452, -2540)  ,(3117, -2070)  ,
-    (2678, -1703)  ,(2115, -1593)  ,(1541, -1614)  ,(960, -1563)   ,(388, -1491)   ,
-    (-187, -1419)  ,(-770, -1426)  ,(-1343, -1440) ,(-1922, -1455) ,(-2496, -1472) ,
-    (-3073, -1535) ,(-3650, -1607) ,(-4214, -1712) ,(-4784, -1759) ,(-5278, -1492) ,
-    (-5754, -1164) ,(-6200, -796)  ,(-6632, -419)  ,(-7192, -300)  ,(-7770, -306)  ,
-    (-8352, -286)  ,(-8932, -258)  ,(-9504, -226)  ,(-10086, -201) ,(-10665, -215) ,
-    (-11247, -242) ,(-11826, -262) ,(-12400, -247) ,(-12979, -216) ,(-13529, -53)  ,
-    (-13944, 341)  ,(-14358, 743)  ,(-14727, 1181) ,(-15109, 1620) ,(-15539, 2010) ,
-    (-15963, 2380) ,(-18048, 4223 ), (-19196, 4986),(-20000, 5595) ,(-20300, 5600)
-    ]
-    bot.Move.FollowPathAndExitMap(path_points_to_traverse_bjora_marches, target_map_name="Jaga Moraine")
-    bot.Move.XY(13372.44, -20758.50)
-    bot.Dialogs.AtXY(13367, -20771,0x84)
-    bot.Wait.UntilOutOfCombat()
-    bot.Dialogs.AtXY(13367, -20771,0x84)
-    bot.Map.Travel(target_map_id=650)
-    bot.Party.LeaveParty()
-
-def To_Doomlore_Shrine(bot: Botting):
-    bot.States.AddHeader("To Doomlore Shrine")
-    bot.Map.Travel(target_map_id=650) # Longeyes Ledge
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XY(-22469.261718, 13327.513671)
-    bot.Move.XY(-21791.328125, 12595.533203)
-    bot.Wait.ForMapLoad(target_map_id=649)  # Grothmar Wardowns
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-18582.023437, 10399.527343)
-    bot.Move.XY(-13987.378906, 10078.552734)
-    bot.Move.XY(-10700.551757,  9980.495117)
-    bot.Move.XY( -7340.849121,  9353.873046)
-    bot.Move.XY( -4436.997070,  8518.824218)
-    bot.Move.XY( -0445.930755,  8262.403320)
-    bot.Move.XY(  3324.289062,  8156.203613)
-    bot.Move.XY(  7149.326660,  8494.817382)
-    bot.Move.XY( 11733.867187,  7774.760253)
-    bot.Move.XY( 15031.326171,  9167.790039)
-    bot.Move.XY( 18174.601562, 10689.784179)
-    bot.Move.XY( 20369.773437, 12352.750000)
-    bot.Move.XY( 22427.097656, 14882.499023)
-    bot.Move.XY( 24355.289062, 15175.175781)
-    bot.Move.XY( 25188.230468, 15229.357421)
-    bot.Wait.ForMapLoad(target_map_id=647)  # Dalada Uplands
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-16292.620117,  -715.887329)
-    bot.Move.XY(-13617.916992,   405.243469)
-    bot.Move.XY(-13256.524414,  2634.142089)
-    bot.Move.XY(-15958.702148,  6655.416015)
-    bot.Move.XY(-14465.992187,  9742.127929)
-    bot.Move.XY(-13779.127929, 11591.517578)
-    bot.Move.XY(-14929.544921, 13145.501953)
-    bot.Move.XY(-15581.598632, 13865.584960)
-    bot.Wait.ForMapLoad(target_map_id=655)  # Doomlore Shrine
-
-def To_Sifhalla(bot: Botting):
-    bot.States.AddHeader("To Sifhalla")
-    bot.Map.Travel(target_map_id=644) # Gunnar's Hold
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XY(16003.853515, -6544.087402)
-    bot.Move.XY(15193.037109, -6387.140625)
-    bot.Wait.ForMapLoad(target_map_name="Norrhart Domains")
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(13337.167968, -3869.252929)
-    bot.Move.XY( 9826.771484,   416.337768)
-    bot.Move.XY( 6321.207031,  2398.933349)
-    bot.Move.XY( 2982.609619,  2118.243164)
-    bot.Move.XY(  176.124359,  2252.913574)
-    bot.Move.XY( -3766.605468,  3390.211669)
-    bot.Move.XY( -7325.385253,  2669.518066)
-    bot.Move.XY( -9555.996093,  5570.137695)
-    bot.Move.XY(-14153.492187,  5198.475585)
-    bot.Move.XY(-18538.169921,  7079.861816)
-    bot.Move.XY(-22717.630859,  8757.812500)
-    bot.Move.XY(-25531.134765, 10925.241210)
-    bot.Move.XY(-26333.171875, 11242.023437)
-    bot.Wait.ForMapLoad(target_map_name="Drakkar Lake")
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(14399.201171, -16963.455078)
-    bot.Move.XY(12510.431640, -13414.477539)
-    bot.Move.XY(12011.655273,  -9633.283203)
-    bot.Move.XY(11484.183593,  -5569.488769)
-    bot.Move.XY(12456.843750,  -0411.864135)
-    bot.Move.XY(13398.728515,   4328.439453)
-    bot.Move.XY(14000.825195,   8676.782226)
-    bot.Move.XY(14210.789062,  12432.768554)
-    bot.Move.XY(13846.647460,  15850.121093)
-    bot.Move.XY(13595.982421,  18950.578125)
-    bot.Move.XY(13567.612304,  19432.314453)
-    bot.Wait.ForMapLoad(target_map_name="Sifhalla")
-
-def To_Olafstead(bot: Botting):
-    bot.States.AddHeader("To Olafstead")
-    bot.Map.Travel(target_map_id=643) # Sifhalla
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XY(13510.718750, 19647.238281)
-    bot.Move.XY(13596.396484, 19212.427734)
-    bot.Wait.ForMapLoad(target_map_name="Drakkar Lake")
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(13946, 14286)
-    bot.Move.XY(13950, 2646)
-    bot.Move.XY(10394, -3824)
-    bot.Move.XY(-11019,-26164)
-    bot.Wait.ForMapLoad(target_map_id=553)  # Varajar Fells
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY( -1605.245239, 12837.257812)
-    bot.Move.XY( -2047.884399,  8718.327148)
-    bot.Move.XY( -2288.647216,  4162.530273)
-    bot.Move.XY( -3639.192138,  1637.482666)
-    bot.Move.XY( -4178.047851, -2814.842773)
-    bot.Move.XY( -4118.485107, -4432.247070)
-    bot.Move.XY( -3315.862060, -1716.598754)
-    bot.Move.XY( -1648.331054,  1095.387329)
-    bot.Move.XY( -1196.614624,  1241.174560)
-    bot.Wait.ForMapLoad(target_map_name="Olafstead")
-
-def To_Umbral_Grotto(bot: Botting):
-    bot.States.AddHeader("To Umbral Grotto")
-    bot.Map.Travel(target_map_id=645) # Olafstead
-    PrepareForBattle(bot, Hero_List=[], Henchman_List=[5, 6, 7, 9, 4, 3, 2])
-    bot.Move.XY(-883.285644, 1212.171020)
-    bot.Move.XY(-1452.154785, 1177.976684)
-    bot.Wait.ForMapLoad(target_map_id=553)
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-3127.843261, -2462.838867)
-    bot.Move.XY(-4055.151855, -4363.498046)
-    bot.Move.XY(-6962.863769, -3716.343017)
-    bot.Move.XY(-11109.900390, -5252.222167)
-    bot.Move.XY(-14969.330078, -6789.452148)
-    bot.Move.XY(-19738.699218, -9123.355468)
-    bot.Move.XY(-22088.320312,-10958.295898)
-    bot.Move.XY(-24810.935546,-12084.257812)
-    bot.Move.XY(-25980.177734,-13108.872070)
-    bot.Wait.ForMapLoad(target_map_name="Verdant Cascades")  
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(22595.748046, 12731.708984)
-    bot.Move.XY(18976.330078, 11093.851562)
-    bot.Move.XY(15406.838867,  7549.499023)
-    bot.Move.XY(13416.123046,  4368.934570)
-    bot.Move.XY(13584.649414,   156.471313)
-    bot.Move.XY(14162.473632, -1488.160766)
-    bot.Move.XY(13519.756835, -3782.271240)
-    bot.Move.XY(11266.111328, -4884.791992)
-    bot.Move.XY( 7803.414550, -2783.716552)
-    bot.Move.XY( 6404.752441,  1633.880249)
-    bot.Move.XY( 6022.716796,  4174.048828)
-    bot.Move.XY( 3498.960205,  7248.467773)
-    bot.Move.XY(   49.460727,  6212.630371)
-    bot.Move.XY(-2800.293701,  4795.620117)
-    bot.Move.XY(-5035.972167,  2443.692382)
-    bot.Move.XY(-7242.780273,  1866.100219)
-    bot.Move.XY(-8373.044921,  2405.973632)
-    bot.Move.XY(-11243.640625, 3636.515625)
-    bot.Move.XY(-14829.459960, 4882.503417)
-    bot.Move.XY(-18093.113281, 5579.701660)
-    bot.Move.XY(-20726.955078, 5951.445312)
-    bot.Move.XY(-22423.933593, 6339.730468)
-    bot.Move.XY(-22984.621093, 6892.540527)
-    bot.Wait.ForMapLoad(target_map_name="Umbral Grotto")  
-
-def To_Consulate_Docks(bot: Botting):
-    bot.States.AddHeader("To Consulate Docks")
-    bot.Party.LeaveParty()
-    bot.Map.Travel(target_map_id=449)
-    bot.Wait.ForMapLoad(target_map_id=449)  # Kamadan
-    bot.States.AddCustomState(EquipSkillBar, "Equip Skill Bar")
-    bot.Move.XY(-8075.89, 14592.47)
-    bot.Move.XY(-6743.29, 16663.21)
-    bot.Move.XY(-5271.00, 16740.00)
-    bot.Wait.ForMapLoad(target_map_id=429)
-    bot.Move.XYAndDialog(-4631.86, 16711.79, 0x85)
-    bot.Wait.ForMapToChange(target_map_id=493)  # Consulate Docks
-
 def To_Kaineng_Center(bot: Botting):
     bot.States.AddHeader("To Kaineng Center")
     bot.Map.Travel(target_map_id=493)  # Consulate Docks
@@ -1814,48 +1706,6 @@ def To_Kaineng_Center(bot: Botting):
     bot.Move.XYAndDialog(-5134.16, 7004.48, 0x817901)
     bot.Map.Travel(target_map_id=194)  # KC
     bot.Wait.ForMapLoad(target_map_id=194)
-
-def To_Vizunah_Square_Foreign_Quarter(bot: Botting):
-    bot.States.AddHeader("To Vizunah Square Foreign Quarter")
-    bot.Map.Travel(target_map_id=194)
-    PrepareForBattle(bot)
-    bot.Party.LeaveParty()
-    bot.States.AddCustomState(StandardHeroTeam, name="Standard Hero Team")
-    bot.Party.AddHenchmanList([2, 9, 10, 12])
-    bot.Move.XY(3045, -1575)
-    bot.Move.XY(3007, -2609)
-    bot.Move.XY(2909, -3629)
-    bot.Move.XY(3145, -4643)
-    bot.Move.XY(3372, -5617)
-    bot.Wait.ForMapLoad(target_map_id=240)
-    ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-6748, 19737)
-    bot.Move.XY(-5917, 17893)
-    bot.Move.XY(-4466, 16485)
-    bot.Move.XY(-2989, 15105)
-    bot.Move.XY(-1593, 13615)
-    bot.Move.XY(-231, 12109)
-    bot.Move.XY(938, 10443)
-    bot.Move.XY(1282, 8408)
-    bot.Move.XY(2057, 6514)
-    bot.Move.XY(4042, 6223)
-    bot.Move.XY(6052, 5848)
-    bot.Move.XY(7924, 5071)
-    bot.Move.XY(8211, 3045)
-    bot.Move.XY(6473, 1948)
-    bot.Move.XY(4437, 1648)
-    bot.Move.XY(3380, -104)
-    bot.Move.XY(5321, -696)
-    bot.Move.XY(5583, -2684)
-    bot.Move.XY(7584, -2703)
-    bot.Move.XY(9404, -1817)
-    bot.Move.XY(11278, -1107)
-    bot.Move.XY(11311, 958)
-    bot.Move.XY(11415, 2975)
-    bot.Move.XY(12366.46, 5069.94)
-    bot.Dialogs.WithModel(3279, 0x800009) # Dec New ID
-    bot.Dialogs.WithModel(3279, 0x80000B)  # talk to the guard Dec New ID
-    bot.Wait.ForMapToChange(target_map_id=292) #Vizunah Square Foreign
 
 def To_Marketplace(bot: Botting):
     bot.States.AddHeader("To Marketplace")
@@ -1946,6 +1796,34 @@ def To_Lions_Arch(bot: Botting):
     bot.Move.XY(-1856.86, 1434.14)
     bot.Move.FollowPath([(-2144, 1450)])
     bot.Wait.ForMapLoad(target_map_id=55) #has built in wait time now
+
+def Unlock_Olias(bot:Botting):
+    bot.States.AddHeader("Unlock Olias")
+    bot.Map.Travel(target_map_id=493)  # Consulate Docks
+    bot.Move.XYAndDialog(-2367.00, 16796.00, 0x830E01)
+    bot.Party.LeaveParty()
+    bot.Map.Travel(target_map_id=55)
+    bot.Party.LeaveParty()
+    bot.States.AddCustomState(StandardHeroTeam, name="Standard Hero Team")
+    bot.Party.AddHenchmanList([1, 3])
+    bot.Move.XY(1413.11, 9255.51)
+    bot.Move.XY(242.96, 6130.82)
+    bot.Move.XYAndDialog(-1137.00, 2501.00, 0x84)
+    bot.Wait.ForMapToChange(target_map_id=471)
+    bot.Wait.ForTime(3000)
+    bot.Move.XYAndDialog(5117.00, 10515.00, 0x830E04)
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(8518.10, 9309.66)
+    bot.Move.XY(8067.40, 5703.23)
+    bot.Move.XY(5657.20, 4485.55)
+    bot.Move.XY(4461.65, -710.88)
+    bot.Move.XY(9973.11, 1581.00)
+    bot.Wait.ForTime(20000)
+    bot.Wait.ForMapToChange(target_map_id=55)
+    bot.Party.LeaveParty()
+    bot.Map.Travel(target_map_id=449)
+    bot.Move.XY(-8149.02, 14900.65)
+    bot.Move.XYAndDialog(-6480.00, 16331.00, 0x830E07)
 
 def To_Temple_Of_The_Ages(bot: Botting):
     bot.States.AddHeader("To Temple of the Ages")
@@ -2139,5 +2017,37 @@ def main():
     bot.Update()
     bot.UI.draw_window()
 
+def tooltip():
+    PyImGui.set_next_window_size((600, 0))
+    PyImGui.begin_tooltip()
+    
+    # Title
+    title_color = Color(255, 200, 100, 255)
+    ImGui.image(MODULE_ICON, (32, 32))
+    PyImGui.same_line(0, 10)
+    ImGui.push_font("Regular", 20)
+    ImGui.text_aligned(MODULE_NAME, alignment=Alignment.MidLeft, color=title_color.color_tuple, height=32)
+    ImGui.pop_font()
+    PyImGui.spacing()
+    PyImGui.spacing()
+    PyImGui.separator()
+    # Description
+    
+    #ellaborate a better description 
+    PyImGui.text_wrapped("This bot levels a character from 1 to 20 in the Nightfall campaign, unlocking key features and content along the way. It is designed to be efficient and user-friendly, providing a smooth leveling experience for new players or those looking to quickly level an alt.") 
+    PyImGui.spacing()
+    
+    # Features
+    PyImGui.text_colored("Features:", title_color.to_tuple_normalized())
+    PyImGui.bullet_text("Levels a character from 1 to 20 in the Nightfall campaign")
+    PyImGui.bullet_text("...")
+    PyImGui.spacing()
+    
+    # Credits
+    PyImGui.text_colored("Credits:", title_color.to_tuple_normalized())
+    PyImGui.bullet_text("Developed by Wick aka Divinus and Kendor")
+    
+    PyImGui.end_tooltip()
+    
 if __name__ == "__main__":
     main()

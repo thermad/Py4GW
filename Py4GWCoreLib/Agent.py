@@ -1,40 +1,28 @@
+from typing import List, Optional, Tuple
 
-import time
-
-from .model_data import ModelData
+import PyAgent
 from .native_src.context.AgentContext import AgentStruct, AgentLivingStruct, AgentItemStruct, AgentGadgetStruct
 from .native_src.context.WorldContext import AttributeStruct
 from .native_src.internals.helpers import encoded_wstr_to_str
+from .native_src.internals.string_table import decode as decode_raw
+#from .CombatEventQueue_src import helpers as CombatEventHelpers
 
-# Agent
+
 class Agent:
-    name_cache: dict[int, tuple[str, float]] = {}  # agent_id -> (name, timestamp)
-    name_requested: set[int] = set()
-    name_timeout_ms = 1_000
+    ILLUSIONARY_WEAPONRY_ID = 0
+    DEAD_HEALTH_EPSILON = 0.001
 
-    
     @staticmethod
-    def _update_cache() -> None:
-        import PyAgent
-        return
-    
-    
-        """Should be called every frame to resolve names when ready."""
-        now = time.time() * 1000
-        for agent_id in list(Agent.name_requested):
-            name = encoded_wstr_to_str(PyAgent.PyAgent.GetNameByID(agent_id))
-            if name is None:
-                name = "INVALID"
+    def _enc_name_bytes_to_wstr(enc_bytes: list[int]) -> str:
+        """Convert raw GetAgentEncName() byte values into a UTF-16LE Python string."""
+        if not enc_bytes:
+            return ""
 
-            Agent.name_cache[agent_id] = (name, now)
-            Agent.name_requested.discard(agent_id)
-            
-    @staticmethod
-    def _reset_cache() -> None:
-        """Resets the name cache and requested set."""
-        Agent.name_cache.clear()
-        Agent.name_requested.clear()
-        
+        raw = bytes(enc_bytes)
+        text = raw[: len(raw) & ~1].decode("utf-16-le", "ignore")
+        null_index = text.find("\x00")
+        return text[:null_index] if null_index >= 0 else text
+
     @staticmethod
     def IsValid(agent_id: int) -> bool:
         """
@@ -42,27 +30,32 @@ class Agent:
         Args: agent_id (int): The ID of the agent.
         Returns: bool
         """
-        from .AgentArray import AgentArray
-        agent = AgentArray.GetAgentByID(agent_id)
-        if agent is None:
-            return False
-        return True
-    
-    @staticmethod
-    def _require_valid(func):
-        """
-        Decorator for safe agent access.
-        Ensures the agent_id is valid before calling the function.
-        """
-        def wrapper(agent_id, *args, **kwargs):
-            if not Agent.IsValid(agent_id):
-                return None
-            return func(agent_id, *args, **kwargs)
-        return wrapper
+        return Agent.GetAgentByID(agent_id) is not None
+
+    _agent_cache: dict[int, "AgentStruct"] = {}
+    _living_cache: dict[int, "AgentLivingStruct"] = {}
+    _item_cache: dict[int, "AgentItemStruct"] = {}
+    _gadget_cache: dict[int, "AgentGadgetStruct"] = {}
 
     @staticmethod
-    @_require_valid
-    def GetAgentByID(agent_id: int) -> AgentStruct | None:
+    def _invalidate_property_cache() -> None:
+        Agent._agent_cache.clear()
+        Agent._living_cache.clear()
+        Agent._item_cache.clear()
+        Agent._gadget_cache.clear()
+
+    @staticmethod
+    def enable() -> None:
+        import PyCallback
+        PyCallback.PyCallback.Register(
+            "Agent.InvalidatePropertyCache",
+            PyCallback.Phase.PreUpdate,
+            Agent._invalidate_property_cache,
+            priority=7
+        )
+
+    @staticmethod
+    def GetAgentByID(agent_id: int):
         """
         Purpose: Retrieve an agent by its ID.
         Args:
@@ -70,88 +63,115 @@ class Agent:
         Returns: PyAgent
         """
         from .AgentArray import AgentArray
+        return AgentArray.GetAgentByID(agent_id)
+        
+        
+        cached = Agent._agent_cache.get(agent_id)
+        if cached is not None:
+            return cached
+        
         agent = AgentArray.GetAgentByID(agent_id)
-        if agent is None:
-            return None
+        if agent is not None:
+            Agent._agent_cache[agent_id] = agent
         return agent
     
+
     @staticmethod
-    @_require_valid
-    def GetLivingAgentByID(agent_id: int) -> AgentLivingStruct | None:
+    def GetLivingAgentByID(agent_id: int):
         """
         Purpose: Retrieve a living agent by its ID.
         Args:
             agent_id (int): The ID of the agent to retrieve.
         Returns: PyAgent
         """
+        cached = Agent._living_cache.get(agent_id)
+        if cached is not None:
+            return cached
         agent = Agent.GetAgentByID(agent_id)
         if agent is None:
             return None
-        return agent.GetAsAgentLiving()
-    
+        living = agent.GetAsAgentLiving()
+        if living is not None:
+            Agent._living_cache[agent_id] = living
+        return living
+
     @staticmethod
-    @_require_valid
-    def GetItemAgentByID(agent_id: int) -> AgentItemStruct | None:
+    def GetItemAgentByID(agent_id: int):
         """
         Purpose: Retrieve an item agent by its ID.
         Args:
             agent_id (int): The ID of the agent to retrieve.
         Returns: PyAgent
         """
+        cached = Agent._item_cache.get(agent_id)
+        if cached is not None:
+            return cached
         agent = Agent.GetAgentByID(agent_id)
         if agent is None:
             return None
-        return agent.GetAsAgentItem()
-    
+        item = agent.GetAsAgentItem()
+        if item is not None:
+            Agent._item_cache[agent_id] = item
+        return item
+
     @staticmethod
-    @_require_valid
-    def GetGadgetAgentByID(agent_id: int) -> AgentGadgetStruct | None:
+    def GetGadgetAgentByID(agent_id: int):
         """
         Purpose: Retrieve a gadget agent by its ID.
         Args:
             agent_id (int): The ID of the agent to retrieve.
         Returns: PyAgent
         """
+        cached = Agent._gadget_cache.get(agent_id)
+        if cached is not None:
+            return cached
         agent = Agent.GetAgentByID(agent_id)
         if agent is None:
             return None
-        return agent.GetAsAgentGadget()
+        gadget = agent.GetAsAgentGadget()
+        if gadget is not None:
+            Agent._gadget_cache[agent_id] = gadget
+        return gadget
     
     @staticmethod
-    def GetNameByID(agent_id : int) -> str:
-        import PyAgent
-        return "FEATURE DISABLED"
-        """Purpose: Get the native name of an agent by its ID."""
-        now = time.time() * 1000  # current time in ms
-        # Cached and still valid
-        if agent_id in Agent.name_cache:
-            name, timestamp = Agent.name_cache[agent_id]
-            if now - timestamp < Agent.name_timeout_ms:
-                return name
-            else:
-                # Expired; refresh
-                if agent_id not in Agent.name_requested:    
-                    PyAgent.PyAgent.GetNameByID(agent_id)
-                    Agent.name_requested.add(agent_id)
-                return name  # Still return old while waiting
-
-        # Already requested but not ready
-        if agent_id in Agent.name_requested:
+    def GetNameByID(agent_id: int) -> str:
+        """Get the decoded display name of an agent by its ID."""
+        enc_bytes = PyAgent.PyAgent.GetAgentEncName(agent_id)
+        if not enc_bytes:
             return ""
+        return decode_raw(bytes(enc_bytes))
 
-        PyAgent.PyAgent.GetNameByID(agent_id)
-        Agent.name_requested.add(agent_id)
-        return ""
-
-    #aliases for retro compatibility
     RequestName = GetNameByID
-        
+
     @staticmethod
     def IsNameReady(agent_id: int) -> bool:
-        """Purpose: Check if the agent name is ready."""
         return Agent.GetNameByID(agent_id) != ""
- 
     
+    @staticmethod
+    def GetEncNameByID(agent_id: int) -> list[int]:
+        """Get the encoded name of an agent by its ID."""
+        enc_bytes = PyAgent.PyAgent.GetAgentEncName(agent_id)
+        return enc_bytes
+    
+    @staticmethod
+    def GetEncNameStrByID(agent_id: int, literal: bool = False) -> str:
+        """Get the encoded name of an agent by its ID as a readable debug string.
+
+        Args:
+            agent_id (int): Agent ID to inspect.
+            literal (bool): When True, return the exact runtime encoded string
+                (for example ``\x171C\x8FE8``). When False, return a Python-
+                literal-safe form with escaped backslashes
+                (for example ``\\x171C\\x8FE8``).
+        """
+        enc_bytes = PyAgent.PyAgent.GetAgentEncName(agent_id)
+        if not enc_bytes:
+            return ""
+        enc_wstr = Agent._enc_name_bytes_to_wstr(enc_bytes)
+        encoded = encoded_wstr_to_str(enc_wstr) or ""
+        if literal:
+            return encoded
+        return encoded.replace("\\", "\\\\")
     
     @staticmethod
     def GetAgentIDByName(name:str) -> int:
@@ -171,6 +191,48 @@ class Agent:
                 if Agent.IsValid(agent_id):
                     return agent_id
         return 0
+
+    @staticmethod
+    def GetAgentIDByEncString(enc_string: str) -> int:
+        from .AgentArray import AgentArray
+        """
+        Purpose: Retrieve the first agent whose readable encoded-name string matches.
+        Args:
+            enc_string (str): The encoded-name string in the exact runtime format,
+                matching GetEncNameStrByID(..., literal=True).
+        Returns:
+            int: The AgentID of the matching agent, or 0 if no match is found.
+        """
+        if not enc_string:
+            return 0
+
+        agent_array = AgentArray.GetAgentArray()
+        for agent_id in agent_array:
+            if not Agent.IsValid(agent_id):
+                continue
+            if Agent.GetEncNameStrByID(agent_id, literal=True) == enc_string:
+                return agent_id
+        return 0
+
+    @staticmethod
+    def GetModelIDByEncString(enc_string: str, log: bool = False) -> int:
+        """
+        Purpose: Retrieve an agent model ID by matching its readable encoded-name string.
+        Args:
+            enc_string (str): The encoded-name string in the exact runtime format,
+                matching GetEncNameStrByID(..., literal=True).
+        Returns:
+            int: The model ID of the matching agent, or 0 if no match is found.
+        """
+        agent_id = Agent.GetAgentIDByEncString(enc_string)
+        if log:
+            print(f"Debug: GetModelIDByEncString('{enc_string}') found agent_id={agent_id}")
+        if agent_id == 0:
+            return 0
+        model_id = Agent.GetModelID(agent_id)
+        if log:
+            print(f"Debug: GetModelIDByEncString('{enc_string}') found model_id={model_id}")
+        return model_id
     
     @staticmethod
     def GetAttributes(agent_id: int) -> list[AttributeStruct]:
@@ -322,7 +384,17 @@ class Agent:
         if living is None:
             return False
         allegiance = Allegiance(living.allegiance)
-        return allegiance == Allegiance.SpiritPet
+        return allegiance == Allegiance.SpiritPet and Agent.IsSpawned(agent_id)
+
+    @staticmethod
+    def IsPet(agent_id: int) -> bool:
+        """Check if the agent is a pet."""
+        from .enums_src.GameData_enums import Allegiance
+        living = Agent.GetLivingAgentByID(agent_id)
+        if living is None:
+            return False
+        allegiance = Allegiance(living.allegiance)
+        return allegiance == Allegiance.SpiritPet and not Agent.IsSpawned(agent_id)
 
     @staticmethod
     def IsMinion(agent_id : int) -> bool:
@@ -869,7 +941,12 @@ class Agent:
             return 0
         
         return Utils.calculate_health_pips(living.max_hp, living.hp_pips)
-
+    
+    @staticmethod
+    def CanAct(agent_id: int) -> bool:
+        return True
+        #return CombatEventHelpers._can_act(agent_id)
+    
     @staticmethod
     def IsMoving(agent_id: int) -> bool:
         living  = Agent.GetLivingAgentByID(agent_id)
@@ -882,8 +959,15 @@ class Agent:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return False
-        return living.is_knocked_down
-
+        return living.is_knocked_down 
+        #or CombatEventHelpers._is_knocked_down(agent_id)  
+    
+    @staticmethod
+    def GetKnockDownTimeRemaining(agent_id: int) -> int:
+        return 0
+        return CombatEventHelpers._get_knockdown_time_remaining(agent_id)
+    
+    
     @staticmethod
     def IsBleeding(agent_id: int) -> bool:
         living = Agent.GetLivingAgentByID(agent_id)
@@ -948,7 +1032,8 @@ class Agent:
             return False
         is_dead = living.is_dead
         dead_by_type_map = living.is_dead_by_type_map
-        return is_dead or dead_by_type_map
+        health = living.hp
+        return is_dead or dead_by_type_map or health <= Agent.DEAD_HEALTH_EPSILON
 
     @staticmethod
     def IsAlive(agent_id: int) -> bool:
@@ -956,7 +1041,7 @@ class Agent:
         if living is None:
             return False
         health = living.hp
-        return not Agent.IsDead(agent_id) and health > 0.0
+        return not Agent.IsDead(agent_id) and health > Agent.DEAD_HEALTH_EPSILON
 
     @staticmethod
     def IsWeaponSpelled(agent_id: int) -> bool:
@@ -971,6 +1056,21 @@ class Agent:
         if living is None:
             return False
         return living.is_in_combat_stance
+    
+    @staticmethod
+    def HasStance(agent_id: int) -> bool:
+        return False
+        #return CombatEventHelpers._has_stance(agent_id)
+    
+    @staticmethod
+    def GetStanceID(agent_id: int) -> int:
+        return 0
+        #return CombatEventHelpers._get_stance(agent_id) 
+    
+    @staticmethod
+    def GetStanceCooldown(agent_id: int) -> int:
+        return 0
+        #return CombatEventHelpers._get_stance_cooldown(agent_id)
 
     @staticmethod
     def IsAggressive(agent_id: int) -> bool:
@@ -987,14 +1087,16 @@ class Agent:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return False
-        return living.is_attacking
+        return living.is_attacking 
+    #or CombatEventHelpers._is_attacking(agent_id)
 
     @staticmethod
     def IsCasting(agent_id: int) -> bool:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return False
-        return living.is_casting
+        return living.is_casting 
+    #or CombatEventHelpers._is_casting(agent_id)
     
     @staticmethod
     def GetCastingSkillID(agent_id: int) -> int:
@@ -1005,8 +1107,122 @@ class Agent:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return 0
+        
         return living.skill
+        #return CombatEventHelpers._casting_skill_id(agent_id) or living.skill
+    
+    @staticmethod
+    def GetTarget(agent_id: int) -> int:
+        return 0
+    
+        """
+        from .Player import Player
+        from .Party import Party
+        
+        if not Agent.IsValid(agent_id):
+            return 0
 
+        if agent_id == Player.GetAgentID():
+            return Player.GetTargetID()
+
+        hero_target_id = int(Party.Heroes.GetTargetIDByAgentID(agent_id) or 0)
+        if hero_target_id:
+            return hero_target_id
+
+        # Pets should use the dedicated pet helpers first for the local player's pet.
+        if Agent.IsPet(agent_id):
+            player_agent_id = Player.GetAgentID()
+            own_pet_id = int(Party.Pets.GetPetID(player_agent_id) or 0)
+            if own_pet_id != 0 and agent_id == own_pet_id:
+                pet_info = Party.Pets.GetPetInfo(player_agent_id)
+                target_id = pet_info.locked_target_id
+                if target_id:
+                    return target_id
+
+        # Combat events provide the best transient target for active casts/attacks.
+        cast = CombatEventHelpers._find_cast(agent_id)
+        if cast:
+            target_id = int(cast[1] or 0)
+            if target_id:
+                return target_id
+
+        attack_target = CombatEventHelpers._find_attack(agent_id)
+        if attack_target:
+            return int(attack_target)
+
+        return 0
+        """
+    
+    @staticmethod
+    def GetCastingTarget(agent_id: int) -> int:
+        return 0
+        #return CombatEventHelpers._casting_target_id(agent_id)
+    
+    @staticmethod
+    def GetRemainingCastTime(agent_id: int) -> int:
+        return 0
+        #return CombatEventHelpers._get_remaining_cast_time(agent_id)
+    
+    @staticmethod
+    def GetRemainingRechargeTime(agent_id: int, skill_id: int) -> int:
+        return 0
+        #return CombatEventHelpers._get_remaining_recharge_time(agent_id, skill_id)
+    
+    @staticmethod
+    def IsTargeted(agent_id: int) -> bool:
+        return False
+        #return CombatEventHelpers._is_targeted(agent_id)
+    
+    @staticmethod
+    def GetAgetsTargeting(agent_id: int) -> List[int]:
+        return []
+        #return CombatEventHelpers._agets_targetting(agent_id)
+    
+    @staticmethod
+    def IsSkillOnCooldown(agent_id: int, skill_id: int) -> bool:
+        return False
+        #return CombatEventHelpers._is_skill_on_cooldown(agent_id, skill_id)
+    
+    @staticmethod
+    def IsCooldownEstimated(agent_id: int, skill_id: int) -> bool:
+        return False
+        #return CombatEventHelpers._is_cooldown_estimated(agent_id, skill_id)
+    
+    @staticmethod
+    def GetSkillsOnCooldown(agent_id: int) -> List[Tuple[int, int, bool]]:
+        return []
+        """Returns a list of (skill_id, remaining_ms, is_estimated) 
+        for all skills currently on cooldown for the agent.
+        returns (skill_id, remaining_ms, is_estimated)"""
+        return CombatEventHelpers._get_skills_on_cooldown(agent_id)
+
+    @staticmethod
+    def GetRecentHealingReceived(agent_id: int, count: int = 20) -> List[Tuple[int, int, float, int]]:
+        return []
+        """Returns (timestamp, source_id, healing_fraction, skill_id) for recent healing received."""
+        return CombatEventHelpers._get_recent_healing_received(agent_id, count)
+
+    @staticmethod
+    def GetRecentHealingDealt(agent_id: int, count: int = 20) -> List[Tuple[int, int, float, int]]:
+        return []
+        """Returns (timestamp, target_id, healing_fraction, skill_id) for recent healing dealt."""
+        return CombatEventHelpers._get_recent_healing_dealt(agent_id, count)
+
+    @staticmethod
+    def HasEffectRenewed(agent_id: int, effect_id: int, window_ms: int = 10000) -> bool:
+        return False
+        return CombatEventHelpers._has_effect_renewed(agent_id, effect_id, window_ms)
+    
+    @staticmethod
+    def GetObservedSkillbar(agent_id: int) -> List[int]:
+        return []
+        """Returns a list of skill IDs representing the observed skillbar for the agent."""
+        return list(CombatEventHelpers._get_observed_skillbar(agent_id))
+
+    @staticmethod
+    def GetAttackTarget(agent_id: int) -> int:
+        return 0
+        return CombatEventHelpers._attack_target(agent_id)
 
     @staticmethod
     def IsIdle(agent_id: int) -> bool:
@@ -1040,6 +1256,19 @@ class Agent:
         return living.weapon_type, name
 
     @staticmethod
+    def IsHoldingItem(agent_id: int) -> bool:
+        """
+        Purpose: Check if the agent is carrying a bundle / held item and cannot use a normal weapon attack.
+        Args: agent_id (int): The ID of the agent.
+        Returns: bool
+        """
+        living = Agent.GetLivingAgentByID(agent_id)
+        if living is None:
+            return False
+
+        return living.weapon_type == 0
+
+    @staticmethod
     def GetWeaponExtraData(agent_id: int) -> tuple[int, int, int, int]:
         """
         Purpose: Retrieve the weapon extra data of the agent.
@@ -1059,8 +1288,21 @@ class Agent:
         Args: agent_id (int): The ID of the agent.
         Returns: bool
         """
+        if Agent.ILLUSIONARY_WEAPONRY_ID == 0:
+            from .Skill import Skill
+            Agent.ILLUSIONARY_WEAPONRY_ID = Skill.GetID("Illusionary_Weaponry")
+            
+        if Agent.ILLUSIONARY_WEAPONRY_ID:
+            from .Effect import Effects
+            if Effects.HasEffect(agent_id, Agent.ILLUSIONARY_WEAPONRY_ID):
+                return False
+            
+        if Agent.IsPet(agent_id):
+            return True
         martial_weapon_types = ["Bow", "Axe", "Hammer", "Daggers", "Scythe", "Spear", "Sword"]
         weapon_type, weapon_name = Agent.GetWeaponType(agent_id)
+        if weapon_type == 0:
+            return False
         return weapon_name in martial_weapon_types
 
     @staticmethod
@@ -1070,7 +1312,15 @@ class Agent:
         Args: agent_id (int): The ID of the agent.
         Returns: bool
         """
-        return not Agent.IsMartial(agent_id)
+        if Agent.IsPet(agent_id):
+            return False
+
+        caster_weapon_types = {"Wand", "Staff", "Staff1", "Staff2", "Staff3", "Scepter", "Scepter2"}
+        weapon_type, weapon_name = Agent.GetWeaponType(agent_id)
+        if weapon_type == 0 or weapon_name == "Unknown":
+            return False
+
+        return weapon_name in caster_weapon_types
 
     @staticmethod
     def IsMelee(agent_id: int) -> bool:
@@ -1079,8 +1329,19 @@ class Agent:
         Args: agent_id (int): The ID of the agent.
         Returns: bool
         """
+        if Agent.ILLUSIONARY_WEAPONRY_ID == 0:
+            from .Skill import Skill
+            Agent.ILLUSIONARY_WEAPONRY_ID = Skill.GetID("Illusionary_Weaponry")
+        if Agent.ILLUSIONARY_WEAPONRY_ID:
+            from .Effect import Effects
+            if Effects.HasEffect(agent_id, Agent.ILLUSIONARY_WEAPONRY_ID):
+                return False
+        if Agent.IsPet(agent_id):
+            return True
         melee_weapon_types = ["Axe", "Hammer", "Daggers", "Scythe", "Sword"]
         weapon_type, weapon_name = Agent.GetWeaponType(agent_id)
+        if weapon_type == 0:
+            return False
         return weapon_name in melee_weapon_types
 
     @staticmethod
@@ -1090,7 +1351,13 @@ class Agent:
         Args: agent_id (int): The ID of the agent.
         Returns: bool
         """
-        return not Agent.IsMelee(agent_id)
+        if Agent.IsPet(agent_id):
+            return False
+        weapon_type, weapon_name = Agent.GetWeaponType(agent_id)
+        if weapon_type == 0:
+            return False
+        ranged_weapon_types = ["Bow", "Spear"]
+        return weapon_name in ranged_weapon_types
 
     @staticmethod
     def GetDaggerStatus(agent_id: int) -> int:
@@ -1292,6 +1559,7 @@ class Agent:
         return gadget.h00D4
 
 
+Agent.enable()
 
     
 

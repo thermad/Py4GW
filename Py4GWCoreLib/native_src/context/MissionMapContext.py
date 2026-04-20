@@ -65,7 +65,10 @@ class MissionMapContext:
     
     @staticmethod
     def _update_ptr():
-        ptr = PyPointers.PyPointers.GetMissionMapContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.MissionMapContext
+        #ptr = PyPointers.PyPointers.GetMissionMapContextPtr()
         MissionMapContext._ptr = ptr
         if not ptr:
             MissionMapContext._cached_ctx = None
@@ -82,7 +85,8 @@ class MissionMapContext:
             MissionMapContext._callback_name,
             PyCallback.Phase.PreUpdate,
             MissionMapContext._update_ptr,
-            priority=99
+            priority=99,
+            context=PyCallback.Context.Draw
         )
 
     @staticmethod

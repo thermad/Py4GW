@@ -87,10 +87,15 @@ from .Pathing import AutoPathing
 from .BuildMgr import BuildMgr
 from .Botting import BottingClass as Botting
 from .Context import GWContext
-from .CombatEvents import CombatEvents
+#from .CombatEvents import CombatEventQueue, CombatEvents, COMBAT_EVENTS
 from .IniManager import IniManager
+from .GWUI import GWUI
 
+from .py4gwcorelib_src.Profiling import ProfilingRegistry, SimpleProfiler
+from .py4gwcorelib_src.FrameCache import FRAME_CACHE, frame_cache
 from .py4gwcorelib_src.WidgetManager import WidgetHandler, Widget
+
+from .native_src.internals.types import Vec2f, Vec3f, GamePos
 
 traceback = traceback
 math = math
@@ -100,6 +105,10 @@ sleep = sleep
 inspect = inspect
 dataclass = dataclass
 field = field
+
+Vec2f = Vec2f
+Vec3f = Vec3f
+GamePos = GamePos
 
 Py4Gw = Py4GW
 Py4GW = Py4GW
@@ -126,9 +135,15 @@ GLOBAL_CACHE = GLOBAL_CACHE
 AutoPathing = AutoPathing
 IconsFontAwesome5 = IconsFontAwesome5
 IniManager = IniManager
+#CombatEvents = CombatEvents
+#COMBAT_EVENTS = COMBAT_EVENTS
+ProfilingRegistry = ProfilingRegistry
+SimpleProfiler = SimpleProfiler
+FRAME_CACHE = FRAME_CACHE
+frame_cache = frame_cache
 WidgetHandler = WidgetHandler
 Widget = Widget
-
+GWUI = GWUI
 
 
 #redirect print output to Py4GW Console

@@ -583,6 +583,7 @@ class RitualistSkills:
         skill.SkillType = SkillType.WeaponSpell.value
         skill.TargetAllegiance = Skilltarget.AllyCaster.value
         skill.Nature = SkillNature.CustomC.value
+        skill.Conditions.TargetingStrict = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -597,6 +598,7 @@ class RitualistSkills:
         skill.SkillType = SkillType.WeaponSpell.value
         skill.TargetAllegiance = Skilltarget.AllyCaster.value
         skill.Nature = SkillNature.Buff.value
+        skill.Conditions.TargetingStrict = True
         skill_data[skill.SkillID] = skill
 
         #region RESTORATION_MAGIC
@@ -723,6 +725,7 @@ class RitualistSkills:
         skill.TargetAllegiance = Skilltarget.Self.value
         skill.Nature = SkillNature.Healing.value
         skill.Conditions.IsOutOfCombat = False
+        skill.Conditions.MinSpiritHpFractionForRecast = 0.20
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -855,7 +858,7 @@ class RitualistSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Xinraes_Weapon")
         skill.SkillType = SkillType.WeaponSpell.value
-        skill.TargetAllegiance = Skilltarget.Ally.value
+        skill.TargetAllegiance = Skilltarget.AllyWeaponSpell.value
         skill.Nature = SkillNature.Buff.value
         skill_data[skill.SkillID] = skill
 

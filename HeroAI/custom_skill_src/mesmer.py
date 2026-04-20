@@ -40,7 +40,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Return")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -83,7 +83,6 @@ class MesmerSkills:
         skill.Nature = SkillNature.Offensive.value
         skill_data[skill.SkillID] = skill
 
-
         #region DOMINATION
 
         skill = CustomSkill()
@@ -112,7 +111,7 @@ class MesmerSkills:
         skill.SkillType = SkillType.Hex.value
         skill.TargetAllegiance = Skilltarget.EnemyCaster.value
         skill.Nature = SkillNature.Offensive.value
-        skill.Conditions.TargetingStrict = True
+        skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -244,7 +243,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Block")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -252,7 +251,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Flux")
         skill.SkillType = SkillType.Hex.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -260,7 +259,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Leak")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -268,7 +267,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Lock")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -276,7 +275,7 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Spike")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
@@ -523,13 +522,14 @@ class MesmerSkills:
         skill.SkillType = SkillType.Enchantment.value
         skill.TargetAllegiance = Skilltarget.Self.value
         skill.Nature = SkillNature.Buff.value
+        skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Illusionary_Weaponry")
         skill.SkillType = SkillType.Enchantment.value
         skill.TargetAllegiance = Skilltarget.Self.value
-        skill.Nature = SkillNature.Buff.value
+        skill.Nature = SkillNature.SelfTargeted.value
         skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
 
@@ -714,6 +714,8 @@ class MesmerSkills:
         skill.SkillType = SkillType.Spell.value
         skill.TargetAllegiance = Skilltarget.Enemy.value
         skill.Nature = SkillNature.Healing.value
+        skill.Conditions.LessLife = 0.7
+        skill.Conditions.UniqueProperty = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -761,6 +763,7 @@ class MesmerSkills:
         skill.TargetAllegiance = Skilltarget.Ally.value
         skill.Nature = SkillNature.Hex_Removal.value
         skill.Conditions.HasHex = True
+        skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -884,15 +887,16 @@ class MesmerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Drain")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
+        skill.Conditions.LessSelfEnergyPercentage = 0.70
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Power_Leech")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.EnemyCastingSpell.value
+        skill.TargetAllegiance = Skilltarget.EnemyCastingSpellOrChant.value
         skill.Nature = SkillNature.Interrupt.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill

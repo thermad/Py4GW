@@ -2,9 +2,10 @@
 accounts.json
 accounts - Copy.json
 Py4GW_Launcher.exe
-
+py4gw_accounts.json
 GodTools.py
 god_tools_src/*
+Py4GW.ini
 
 # 1. Ignore ALL .ini files in Settings and subfolders
 Settings/**/*.ini
@@ -21,6 +22,7 @@ AlcoholProc.ini
 alcohol_procs.json
 Widgets/Config/Travel.ini
 Widgets/Config/*
+Sources/modular_bot/configs/*
 Widgets/Data/Inventory/**
 Widgets/Data/InventoryModelIds/**
 Widgets/Data/InventoryModHash/**

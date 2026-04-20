@@ -4,7 +4,7 @@ from Py4GW import Console
 import PyImGui
 from Py4GWCoreLib import ImGui, Overlay
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 from Py4GWCoreLib.ImGui_src.Style import Style
 from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
 from Py4GWCoreLib.enums_src.GameData_enums import Profession, ProfessionShort
@@ -168,7 +168,7 @@ class GUI:
                         
                         PyImGui.table_next_row()
                         PyImGui.table_next_column()
-                        card_background = style.WindowBg.opacify(0.6).to_tuple()
+                        card_background = style.WindowBg.opacity(0.6).to_tuple()
                         
                         def draw_configs():                    
                             style.ChildBg.push_color(card_background)
@@ -354,7 +354,7 @@ class GUI:
                                 
                                 for region in self.settings.regions:
                                     if region == self.settings.active_region:       
-                                        style.ChildBg.push_color(region.color.opacify(0.15).to_tuple())
+                                        style.ChildBg.push_color(region.color.opacity(0.15).to_tuple())
                                         style.Border.push_color(region.color.to_tuple())
                                         if ImGui.begin_child("active_region_edit", (0, 285), border=True, flags=PyImGui.WindowFlags.NoScrollbar):
                                             style.Border.pop_color()
@@ -699,7 +699,7 @@ class GUI:
             border_thickness = 3
             PyImGui.draw_list_add_rect(drawing_area_screen_pos[0] - (border_thickness / 2), drawing_area_screen_pos[1] - (border_thickness / 2), drawing_area_screen_pos[0] + drawing_area_size[0] + (border_thickness / 2), drawing_area_screen_pos[1] + drawing_area_size[1] + (border_thickness / 2), border.color_int, 0, 0, border_thickness)
 
-    def draw_account_button(self, style : Style, account : AccountData, size : tuple[float, float] = (0, 0), is_current_account: bool = False, index: int = 0) -> bool:
+    def draw_account_button(self, style : Style, account : AccountStruct, size : tuple[float, float] = (0, 0), is_current_account: bool = False, index: int = 0) -> bool:
         profession_colors ={
             Profession.Warrior: ColorPalette.GetColor("gw_warrior"),
             Profession.Ranger: ColorPalette.GetColor("gw_ranger"),
@@ -714,14 +714,14 @@ class GUI:
         }
         
         cursor_pos = PyImGui.get_cursor_screen_pos()
-        profession = Profession(account.PlayerProfession[0]) if account.PlayerProfession else Profession._None
-        secondary_profession = Profession(account.PlayerProfession[1]) if account.PlayerProfession else Profession._None
+        profession = Profession(account.AgentData.Profession[0]) if account.AgentData.Profession else Profession._None
+        secondary_profession = Profession(account.AgentData.Profession[1]) if account.AgentData.Profession else Profession._None
         
         profession_color = profession_colors.get(profession, ColorPalette.GetColor("gw_disabled"))
         is_hovered = ImGui.is_mouse_in_rect((cursor_pos[0], cursor_pos[1], size[0], size[1]))
-        background = profession_color.opacify(0.6).rgb_tuple if is_hovered else profession_color.opacify(0.6).desaturate(0.25).rgb_tuple
+        background = profession_color.opacity(0.6).rgb_tuple if is_hovered else profession_color.opacity(0.6).desaturate(0.25).rgb_tuple
         if is_current_account:
-            background = profession_color.opacify(0.6).desaturate(0.75).rgb_tuple
+            background = profession_color.opacity(0.6).desaturate(0.75).rgb_tuple
             
         border = profession_color.rgb_tuple if is_hovered else profession_color.desaturate(0.25).rgb_tuple
         if is_current_account:
@@ -744,13 +744,13 @@ class GUI:
             if profession_text:                
                 ImGui.text_centered(profession_text, -1, avail[1] + 6)
                 
-            level_text = f" {account.PlayerLevel}" if account.PlayerLevel else ""
+            level_text = f" {account.AgentData.Level}" if account.AgentData.Level else ""
             
             if level_text:
                 PyImGui.same_line(38, 0)
                 ImGui.text_centered(level_text, -1, avail[1] + 6)
                 
-            name_text = f"{account.CharacterName}" if account.CharacterName else ""
+            name_text = f"{account.AgentData.CharacterName}" if account.AgentData.CharacterName else ""
             # name_text = f" frenkey {account.SlotNumber}"
             name_text = name_text if name_text else f"Pending ..."
             if name_text:

@@ -293,7 +293,10 @@ class GuildContext:
         return GuildContext._ptr
     @staticmethod
     def _update_ptr():
-        ptr = PyPointers.PyPointers.GetGuildContextPtr()
+        from ..ShMem.SysShaMem import SystemShaMemMgr
+        if (SSM := SystemShaMemMgr.get_pointers_struct()) is None: return
+        ptr = SSM.GuildContext
+        #ptr = PyPointers.PyPointers.GetGuildContextPtr()
         GuildContext._ptr = ptr
         if not ptr:
             GuildContext._cached_ctx = None
@@ -310,7 +313,8 @@ class GuildContext:
             GuildContext._callback_name,
             PyCallback.Phase.PreUpdate,
             GuildContext._update_ptr,
-            priority=99
+            priority=99,
+            context=PyCallback.Context.Draw
         )
 
     @staticmethod

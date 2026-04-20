@@ -16,6 +16,9 @@ from Sources.oazix.CustomBehaviors.primitives.scores.score_static_definition imp
 from Sources.oazix.CustomBehaviors.primitives.skills.utility_skill_typology import UtilitySkillTypology
 
 class MoveToPartyMemberIfInAggroUtility(CustomSkillUtilityBase):
+
+    Name = "move_to_party_member_if_in_aggro"
+
     def __init__(
             self,
             event_bus: EventBus,
@@ -25,7 +28,7 @@ class MoveToPartyMemberIfInAggroUtility(CustomSkillUtilityBase):
 
         super().__init__(
             event_bus=event_bus,
-            skill=CustomSkill("move_to_party_member_if_in_aggro"),
+            skill=CustomSkill(MoveToPartyMemberIfInAggroUtility.Name),
             in_game_build=current_build,
             score_definition=ScoreStaticDefinition(CommonScore.BOTTING.value),
             allowed_states=allowed_states,
@@ -41,7 +44,7 @@ class MoveToPartyMemberIfInAggroUtility(CustomSkillUtilityBase):
             if custom_behavior_helpers.Targets.is_party_member_in_aggro(agent_id):
                 agent_id_position: tuple[float, float] = Agent.GetXY(agent_id)
                 player_agent_id_position: tuple[float, float] = Agent.GetXY(Player.GetAgentID())
-                if Utils.Distance(player_agent_id_position , agent_id_position) < 2500: #todo constant
+                if Utils.Distance(player_agent_id_position , agent_id_position) < 3000: #todo constant
                     return agent_id
         return None
         
@@ -57,9 +60,11 @@ class MoveToPartyMemberIfInAggroUtility(CustomSkillUtilityBase):
 
         agent_id_in_aggro = self._get_first_party_member_in_aggro()
 
-        if agent_id_in_aggro is None: return None
+        if agent_id_in_aggro is None:
+            self.throttle_timer.Reset()  # Don't re-scan for 1.5s when nobody is in aggro
+            return None
         if agent_id_in_aggro == Player.GetAgentID(): return None
-        
+
         return self.score_definition.get_score()
 
     @override

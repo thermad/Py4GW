@@ -26,6 +26,7 @@ from Sources.oazix.CustomBehaviors.skills.paragon.fall_back_utility import FallB
 from Sources.oazix.CustomBehaviors.skills.paragon.heroic_refrain_utility import HeroicRefrainUtility
 from Sources.oazix.CustomBehaviors.skills.ranger.distracting_shot_utility import DistractingShotUtility
 from Sources.oazix.CustomBehaviors.skills.ranger.savage_shot_utility import SavageShotUtility
+from Sources.oazix.CustomBehaviors.skills.ranger.comfort_animal_utility import ComfortAnimalUtility
 from Sources.oazix.CustomBehaviors.skills.ranger.together_as_one import TogetherAsOneUtility
 
 class RangerTaoVolley_UtilitySkillBar(CustomBehaviorBaseUtility):
@@ -46,19 +47,20 @@ class RangerTaoVolley_UtilitySkillBar(CustomBehaviorBaseUtility):
         self.never_rampage_alone_utility: CustomSkillUtilityBase = KeepSelfEffectUpUtility(event_bus=self.event_bus, skill=CustomSkill("Never_Rampage_Alone"), current_build=in_game_build, score_definition=ScoreStaticDefinition(80), allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO])
         self.triple_shot_utility: CustomSkillUtilityBase = RawSimpleAttackUtility(event_bus=self.event_bus, skill=CustomSkill("Triple_Shot_luxon"), current_build=in_game_build, mana_required_to_cast=10, score_definition=ScoreStaticDefinition(70))
         self.sundering_attack_utility: CustomSkillUtilityBase = RawSimpleAttackUtility(event_bus=self.event_bus, skill=CustomSkill("Sundering_Attack"), current_build=in_game_build, mana_required_to_cast=10, score_definition=ScoreStaticDefinition(60))
+        self.lightning_reflexes_utility: CustomSkillUtilityBase = KeepSelfEffectUpUtility(event_bus=self.event_bus, skill=CustomSkill("Lightning_Reflexes"), current_build=in_game_build, score_definition=ScoreStaticDefinition(85), allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO])
+        self.whirling_defense_utility: CustomSkillUtilityBase = KeepSelfEffectUpUtility(event_bus=self.event_bus, skill=CustomSkill("Whirling_Defense"), current_build=in_game_build, score_definition=ScoreStaticDefinition(85), allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO])
+        self.otyughs_cry_utility: CustomSkillUtilityBase = KeepSelfEffectUpUtility(event_bus=self.event_bus, skill=CustomSkill("Otyughs_Cry"), current_build=in_game_build, score_definition=ScoreStaticDefinition(85), allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO])
 
         self.jagged_strike_utility: CustomSkillUtilityBase = RawCombotAttackUtility(event_bus=self.event_bus, skill=CustomSkill("Jagged_Strike"), current_build=in_game_build, score_definition=ScoreCombotDefinition(40))
         self.fox_fangs_utility: CustomSkillUtilityBase = RawCombotAttackUtility(event_bus=self.event_bus, skill=CustomSkill("Fox_Fangs"), current_build=in_game_build, score_definition=ScoreCombotDefinition(40))
         self.death_blossom_utility: CustomSkillUtilityBase = RawCombotAttackUtility(event_bus=self.event_bus, skill=CustomSkill("Death_Blossom"), current_build=in_game_build, score_definition=ScoreCombotDefinition(40))
 
+        self.comfort_animal_utility: CustomSkillUtilityBase = ComfortAnimalUtility(event_bus=self.event_bus, current_build=in_game_build, score_definition=ScoreStaticDefinition(45))
+
         #common
         self.ebon_battle_standard_of_honor_utility: CustomSkillUtilityBase = EbonBattleStandardOfHonorUtility(event_bus=self.event_bus, score_definition=ScorePerAgentQuantityDefinition(lambda enemy_qte: 68 if enemy_qte >= 3 else 50 if enemy_qte <= 2 else 25), current_build=in_game_build,  mana_required_to_cast=15)
         self.ebon_vanguard_assassin_support: CustomSkillUtilityBase = EbonVanguardAssassinSupportUtility(event_bus=self.event_bus, score_definition=ScoreStaticDefinition(71), current_build=in_game_build, mana_required_to_cast=15)
-        self.i_am_unstopabble: CustomSkillUtilityBase = IAmUnstoppableUtility(event_bus=self.event_bus, current_build=in_game_build, score_definition=ScoreStaticDefinition(99))
-        self.fall_back_utility: CustomSkillUtilityBase = FallBackUtility(event_bus=self.event_bus, current_build=in_game_build)
-        self.breath_of_the_great_dwarf_utility: CustomSkillUtilityBase = BreathOfTheGreatDwarfUtility(event_bus=self.event_bus, current_build=in_game_build, score_definition=ScorePerHealthGravityDefinition(9))
-        self.by_urals_hammer_utility: CustomSkillUtilityBase = ByUralsHammerUtility(event_bus=self.event_bus, current_build=in_game_build)
-
+        self.call_of_protection_utility: CustomSkillUtilityBase = KeepSelfEffectUpUtility( event_bus=self.event_bus, skill=CustomSkill("Call_of_Protection"), current_build=in_game_build, score_definition=ScoreStaticDefinition(65), allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO])
     
     @property
     @override
@@ -73,11 +75,14 @@ class RangerTaoVolley_UtilitySkillBar(CustomBehaviorBaseUtility):
             self.ebon_vanguard_assassin_support,
             self.triple_shot_utility,
             self.sundering_attack_utility,
-            self.breath_of_the_great_dwarf_utility,
+            self.lightning_reflexes_utility,
+            self.whirling_defense_utility,
             self.jagged_strike_utility,
             self.fox_fangs_utility,
             self.death_blossom_utility,
-            self.by_urals_hammer_utility,
+            self.comfort_animal_utility,
+            self.call_of_protection_utility,
+            self.otyughs_cry_utility
         ]
 
     @property

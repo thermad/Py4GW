@@ -8,6 +8,8 @@ from threading import Lock
 from typing import Generator
 
 
+from Py4GWCoreLib.enums_src.GameData_enums import Range
+from Sources.oazix.CustomBehaviors.primitives.following_behavior_priority import FollowingBehaviorPriority
 from Sources.oazix.CustomBehaviors.primitives.parties.shared_lock_manager import (
     SharedLockEntry,
     SharedLockEntryStruct,
@@ -49,6 +51,16 @@ class PartyFollowingConfigStruct(Structure):
         # Movement parameters (spread_during_combat_utility)
         ("MinMoveThreshold", c_float),  # Minimum vector magnitude to trigger movement
         ("MaxMoveDistance", c_float),  # Maximum distance to move in one step
+
+        # Following behavior mode (BehaviorStateFollowing enum value)
+        ("PartyFollowingBehavior", c_uint),  # 0 = not set, 1 = DONT_SPREAD, 2 = SPREAD_IF_NOTHING_ELSE_TO_DO, 3 = FORCE_SPREADING
+
+        # Per-account force activation flags (indexed by account email)
+        # Each account can have different force settings
+        ("AccountEmails", (c_wchar * MAX_EMAIL_LEN) * MAX_FLAG_POSITIONS),  # Account emails for force settings
+        ("IsRepulsionAlliesActive", c_bool * MAX_FLAG_POSITIONS),  # Per-account allies repulsion activation
+        ("IsAttractionLeaderActive", c_bool * MAX_FLAG_POSITIONS),  # Per-account leader attraction activation
+        ("IsRepulsionEnemiesActive", c_bool * MAX_FLAG_POSITIONS),  # Per-account enemies repulsion activation
 
         # Debug
         ("EnableDebugOverlay", c_bool),
@@ -142,6 +154,7 @@ class CustomBehaviorWidgetMemoryManager:
         return cls._instance
 
     def __init__(self, name=SHMEM_SHARED_MEMORY_FILE_NAME):
+        
         if not self._initialized:
             self.shm_name = name
             self.size = sizeof(CustomBehaviorWidgetStruct)
@@ -178,17 +191,29 @@ class CustomBehaviorWidgetMemoryManager:
 
         # Initialize following config with defaults
         mem.FollowingConfig.FollowDistance = 100.0
-        mem.FollowingConfig.EnableDebugOverlay = True
+        mem.FollowingConfig.EnableDebugOverlay = False
 
         # Initialize spread_during_combat_utility config with defaults
-        mem.FollowingConfig.EnemyRepulsionThreshold = 250.0
+        mem.FollowingConfig.EnemyRepulsionThreshold = Range.Adjacent.value
         mem.FollowingConfig.EnemyRepulsionWeight = 100.0
-        mem.FollowingConfig.LeaderAttractionThreshold = 550.0
+        mem.FollowingConfig.LeaderAttractionThreshold = Range.Earshot.value
         mem.FollowingConfig.LeaderAttractionWeight = 150.0
-        mem.FollowingConfig.AlliesRepulsionThreshold = 130.0
+        mem.FollowingConfig.AlliesRepulsionThreshold = Range.Adjacent.value
         mem.FollowingConfig.AlliesRepulsionWeight = 180.0
         mem.FollowingConfig.MinMoveThreshold = 0.5
         mem.FollowingConfig.MaxMoveDistance = 300.0
+
+        # Initialize following behavior mode
+        mem.FollowingConfig.PartyFollowingBehavior = FollowingBehaviorPriority.LOW_PRIORITY.value
+
+        # Initialize per-account force activation flags
+        for i in range(MAX_FLAG_POSITIONS):
+            # Clear email by setting first character to null terminator
+            mem.FollowingConfig.AccountEmails[i][0] = '\0'
+            # Default values (will be set properly when account initializes)
+            mem.FollowingConfig.IsRepulsionAlliesActive[i] = False
+            mem.FollowingConfig.IsAttractionLeaderActive[i] = True
+            mem.FollowingConfig.IsRepulsionEnemiesActive[i] = False
 
         # Initialize flagging config with defaults
         for i in range(MAX_FLAG_POSITIONS):

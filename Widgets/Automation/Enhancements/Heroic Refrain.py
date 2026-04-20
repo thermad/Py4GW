@@ -8,12 +8,15 @@ import configparser
 from Py4GWCoreLib import *
 from typing import Set
 
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
+from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct
 
 '''
 This widget draws a floating window with every HeroAI player and hero in the party and tracks their HR buff status.
 Players/heroes without HR have a clickable blue button to apply HR to them.
 '''
+
+MODULE_NAME = "Heroic Refrain Manager"
+MODULE_ICON = "Textures\\Skill_Icons\\[3431] - Heroic Refrain.jpg"
 
 # global cached data singleton
 cached_data = CacheData()
@@ -208,7 +211,7 @@ def update_buff_cache():
     for index, player_data in player_data_cache.items():
         try:
             account = GLOBAL_CACHE.ShMem.GetAccountDataFromPartyNumber(index)
-            player_data['has_heroic_refrain'] = any(buff.SkillId == 3431 and buff.Remaining > 0 for buff in account.PlayerBuffs) if account else False
+            player_data['has_heroic_refrain'] = any(buff.SkillId == 3431 and buff.Remaining > 0 for buff in account.AgentData.Buffs.Buffs) if account else False
         except:
             player_data['has_heroic_refrain'] = False
 
@@ -227,26 +230,26 @@ def render_heroic_refrain_ui():
     acc_heroes = [
         hero
         for account in accounts
-        for hero in GLOBAL_CACHE.ShMem.GetHeroesFromPlayers(account.PlayerID)
+        for hero in GLOBAL_CACHE.ShMem.GetHeroesFromPlayers(account.AgentData.AgentID)
         if hero is not None
     ]
     
     # render players first
     for data in [accounts, acc_heroes]:
         for account in data:
-            has_heroic_refrain = any(buff.SkillId == 3431 and buff.Remaining > 0 for buff in account.PlayerBuffs) if account else False 
+            has_heroic_refrain = any(buff.SkillId == 3431 and buff.Remaining > 0 for buff in account.AgentData.Buffs.Buffs) if account else False 
             
             if not has_heroic_refrain:
-                if PyImGui.button(f"{account.CharacterName}##hr_cast_{account.PlayerID}"):
+                if PyImGui.button(f"{account.AgentData.CharacterName}##hr_cast_{account.AgentData.AgentID}"):
                     if account.IsHero:
-                        cast_heroic_refrain_on_hero(account.PlayerID)
+                        cast_heroic_refrain_on_hero(account.AgentData.AgentID)
                     else:
-                        cast_heroic_refrain_on_player(account.PlayerID)
+                        cast_heroic_refrain_on_player(account.AgentData.AgentID)
             else:
                 PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.3, 0.3, 0.3, 1.0))
                 PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, (0.35, 0.35, 0.35, 1.0))
                 PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, (0.25, 0.25, 0.25, 1.0))
-                PyImGui.button(f"{account.CharacterName} ##hr_disabled_{account.PlayerID}")
+                PyImGui.button(f"{account.AgentData.CharacterName} ##hr_disabled_{account.AgentData.AgentID}")
                 PyImGui.pop_style_color(3)
                 
 

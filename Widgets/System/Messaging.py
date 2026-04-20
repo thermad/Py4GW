@@ -3,10 +3,10 @@ from datetime import datetime
 from datetime import timezone
 
 import Py4GW
-import PyUIManager
+import ctypes
 
 from HeroAI.cache_data import CacheData
-from Py4GWCoreLib import GLOBAL_CACHE, Player, Map, Agent, Effects
+from Py4GWCoreLib import GLOBAL_CACHE, Player, Map, Agent, Effects, Inventory, Party
 from Py4GWCoreLib import ActionQueueManager
 from Py4GWCoreLib import CombatPrepSkillsType
 from Py4GWCoreLib import Console
@@ -20,15 +20,19 @@ from Py4GWCoreLib import SharedCommandType
 from Py4GWCoreLib import UIManager
 from Py4GWCoreLib import AutoPathing
 from Py4GWCoreLib import IniHandler
-from Py4GWCoreLib.GlobalCache.SharedMemory import AccountData
 from Py4GWCoreLib.Py4GWcorelib import Keystroke
+from Py4GWCoreLib.Quest import Quest
 from Py4GWCoreLib.enums_src.Model_enums import ModelID
+from Widgets.Automation.Helpers import Pycons as PyconsHelper
+from Widgets.Automation.Helpers.Pycons import resolve_pycons_account_ini_path
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
+from Py4GWCoreLib.GlobalCache.shared_memory_src.SharedMessageStruct import SharedMessageStruct
 
 cached_data = CacheData()
 
 
 MODULE_NAME = "Messaging"
+MODULE_ICON = "Textures/Module_Icons/Messaging.png"
 OPTIONAL = False
 
 SUMMON_SPIRITS_LUXON = "Summon_Spirits_luxon"
@@ -36,6 +40,27 @@ SUMMON_SPIRITS_KURZICK = "Summon_Spirits_kurzick"
 ARMOR_OF_UNFEELING = "Armor_of_Unfeeling"
 
 width, height = 0, 0
+
+# Merchant serialization lock: prevents concurrent merchant coroutines from
+# issuing conflicting movement/interaction packets that crash the GW client.
+# ProcessMessages() dispatches a new coroutine every frame, so without this
+# lock, rapid ShMem dispatches create multiple simultaneous coroutines.
+_merchant_busy: bool = False
+MERCHANT_RULES_WIDGET_NAME = "Merchant Rules"
+PYCONS_WIDGET_NAME = "Pycons"
+
+
+def _extra_data(message: SharedMessageStruct) -> tuple[str, str, str, str]:
+    """Extract the four ExtraData fields from a SharedMessageStruct as plain strings."""
+    values: list[str] = []
+    for raw in message.ExtraData:
+        try:
+            values.append(_c_wchar_array_to_str(raw))
+        except Exception:
+            values.append("")
+    while len(values) < 4:
+        values.append("")
+    return values[0], values[1], values[2], values[3]
 
 
 class HeroAIoptions:
@@ -48,12 +73,37 @@ class HeroAIoptions:
         self.Skills: list[bool] = [False] * 8
 
 
-hero_ai_snapshots: list[HeroAIoptions] = []
+hero_ai_snapshots: dict[str, list[HeroAIoptions]] = {}
 
 combat_prep_first_skills_check = True
 hero_ai_has_ritualist_skills = False
 hero_ai_has_paragon_skills = False
 
+def _c_wchar_array_to_str(arr: ctypes.Array) -> str:
+        """Convert c_wchar array back to Python str, stopping at null terminator."""
+        return "".join(ch for ch in arr if ch != '\0').rstrip()
+
+
+def _get_merchant_rules_widget():
+    widget_handler = get_widget_handler()
+    for widget_name in ("MerchantRules", MERCHANT_RULES_WIDGET_NAME):
+        widget_info = widget_handler.get_widget_info(widget_name)
+        if not widget_info or not getattr(widget_info, "module", None):
+            continue
+        widget_instance = getattr(widget_info.module, "WIDGET_INSTANCE", None)
+        if widget_instance is not None:
+            return widget_instance
+    return None
+
+
+def _get_pycons_widget_module():
+    widget_handler = get_widget_handler()
+    widget_info = widget_handler.get_widget_info(PYCONS_WIDGET_NAME)
+    if not widget_info:
+        return None
+    if not bool(getattr(widget_info, "enabled", False)):
+        return None
+    return getattr(widget_info, "module", None)
 
 # region ImGui
 def configure():
@@ -172,9 +222,11 @@ def DrawWindow():
 
 # endregion
 # region HeroAI Snapshot
-def SnapshotHeroAIOptions(account_email):
+def SnapshotHeroAIOptions(account_email: str):
     global hero_ai_snapshots
-    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account_email)
+    if not account_email:
+        return
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
     if hero_ai_options is None:
         return
     
@@ -185,23 +237,28 @@ def SnapshotHeroAIOptions(account_email):
     data.Targeting = hero_ai_options.Targeting
     data.Combat = hero_ai_options.Combat
 
-    hero_ai_snapshots.append(data)
+    hero_ai_snapshots.setdefault(account_email, []).append(data)
 
 
 
-def RestoreHeroAISnapshot(account_email):
+def RestoreHeroAISnapshot(account_email: str):
     global hero_ai_snapshots
+    if not account_email:
+        return
+    account_snapshots = hero_ai_snapshots.get(account_email, [])
     
-    if not hero_ai_snapshots:
+    if not account_snapshots:
         EnableHeroAIOptions(account_email)  # If no snapshot, just enable everything to be safe
         ConsoleLog(MODULE_NAME, "No Hero AI snapshot found, enabling all options as fallback.", Console.MessageType.Warning, True)
         return
     
-    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account_email)
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
     if hero_ai_options is None:
         return
     
-    last_state = hero_ai_snapshots.pop()
+    last_state = account_snapshots.pop()
+    if not account_snapshots:
+        hero_ai_snapshots.pop(account_email, None)
 
     hero_ai_options.Following = last_state.Following
     hero_ai_options.Avoidance = last_state.Avoidance
@@ -210,9 +267,81 @@ def RestoreHeroAISnapshot(account_email):
     hero_ai_options.Combat = last_state.Combat
 
 
+_HERO_AI_SUSPENDING_COMMANDS = {
+    SharedCommandType.PixelStack,
+    SharedCommandType.BruteForceUnstuck,
+    SharedCommandType.InteractWithTarget,
+    SharedCommandType.TakeDialogWithTarget,
+    SharedCommandType.SendDialogToTarget,
+    SharedCommandType.GetBlessing,
+    SharedCommandType.MerchantItems,
+    SharedCommandType.MerchantMaterials,
+    SharedCommandType.OpenChest,
+    SharedCommandType.PickUpLoot,
+    SharedCommandType.UseSkill,
+    SharedCommandType.DisableHeroAI,
+    SharedCommandType.UseSkillCombatPrep,
+}
 
-def DisableHeroAIOptions(account_email):
-    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account_email)
+
+def _hero_ai_options_all_disabled(account_email: str) -> bool:
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
+    if hero_ai_options is None:
+        return False
+    return not any([
+        bool(hero_ai_options.Following),
+        bool(hero_ai_options.Avoidance),
+        bool(hero_ai_options.Looting),
+        bool(hero_ai_options.Targeting),
+        bool(hero_ai_options.Combat),
+    ])
+
+
+def _has_active_hero_ai_suspending_message(account_email: str) -> bool:
+    for _, message in GLOBAL_CACHE.ShMem.GetAllMessages():
+        if message is None:
+            continue
+        if not getattr(message, "Active", False):
+            continue
+        if getattr(message, "ReceiverEmail", "") != account_email:
+            continue
+        if getattr(message, "Command", None) in _HERO_AI_SUSPENDING_COMMANDS:
+            return True
+    return False
+
+
+def HealStaleHeroAISnapshot(account_email: str) -> None:
+    global hero_ai_snapshots
+    if not account_email:
+        return
+
+    account_snapshots = hero_ai_snapshots.get(account_email, [])
+    if not account_snapshots:
+        return
+
+    if _has_active_hero_ai_suspending_message(account_email):
+        return
+
+    restored = False
+    while hero_ai_snapshots.get(account_email) and _hero_ai_options_all_disabled(account_email):
+        RestoreHeroAISnapshot(account_email)
+        restored = True
+
+    if restored:
+        ConsoleLog(
+            MODULE_NAME,
+            "Restored Hero AI options after detecting stale suspended-message state.",
+            Console.MessageType.Warning,
+            True,
+        )
+
+    if hero_ai_snapshots.get(account_email):
+        hero_ai_snapshots.pop(account_email, None)
+
+
+
+def DisableHeroAIOptions(account_email: str):
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
     if hero_ai_options is None:
         return
 
@@ -224,8 +353,8 @@ def DisableHeroAIOptions(account_email):
 
 
 
-def EnableHeroAIOptions(account_email):
-    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptions(account_email)
+def EnableHeroAIOptions(account_email: str):
+    hero_ai_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
     if hero_ai_options is None:
         return
 
@@ -242,7 +371,7 @@ def EnableHeroAIOptions(account_email):
 # region InviteToParty
 
 
-def InviteToParty(index, message):
+def InviteToParty(index :int, message: SharedMessageStruct):
     # ConsoleLog(MODULE_NAME, f"Processing InviteToParty message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -250,7 +379,7 @@ def InviteToParty(index, message):
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
     yield from Routines.Yield.wait(100)
-    GLOBAL_CACHE.Party.Players.InvitePlayer(sender_data.CharacterName)
+    GLOBAL_CACHE.Party.Players.InvitePlayer(sender_data.AgentData.CharacterName)
     yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "InviteToParty message processed and finished.", Console.MessageType.Info, False)
@@ -260,7 +389,7 @@ def InviteToParty(index, message):
 
 
 # region LeaveParty
-def LeaveParty(index, message):
+def LeaveParty(index: int, message: SharedMessageStruct):
     # ConsoleLog(MODULE_NAME, f"Processing LeaveParty message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -278,7 +407,7 @@ def LeaveParty(index, message):
 # region TravelToMap
 
 
-def TravelToMap(index, message):
+def TravelToMap(index: int, message: SharedMessageStruct):
     # ConsoleLog(MODULE_NAME, f"Processing TravelToMap message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -300,7 +429,7 @@ def TravelToMap(index, message):
 # endregion
 
 # region Resign
-def Resign(index, message):
+def Resign(index: int, message: SharedMessageStruct):
     if not Routines.Checks.Map.MapValid():
         ConsoleLog(MODULE_NAME, "Map is not valid, cannot process resign message.", Console.MessageType.Warning)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
@@ -316,7 +445,7 @@ def Resign(index, message):
 # endregion
 
 # region PixelStack
-def PixelStack(index, message):
+def PixelStack(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing PixelStack message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -366,7 +495,7 @@ def PixelStack(index, message):
 
 
 # region BruteForceUnstuck
-def BruteForceUnstuck(index, message):
+def BruteForceUnstuck(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing BruteForceUnstuck message: {message}", Console.MessageType.Info)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -426,7 +555,7 @@ def BruteForceUnstuck(index, message):
 # region InteractWithTarget
 
 
-def InteractWithTarget(index, message):
+def InteractWithTarget(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing InteractWithTarget message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -457,7 +586,7 @@ def InteractWithTarget(index, message):
 
 # endregion
 # region TakeDialogWithTarget
-def TakeDialogWithTarget(index, message):
+def TakeDialogWithTarget(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing TakeDialogWithTarget message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -491,7 +620,7 @@ def TakeDialogWithTarget(index, message):
 # endregion
 
 # region SendDialogToTarget
-def SendDialogToTarget(index, message):
+def SendDialogToTarget(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing SendDialogToTarget message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -526,7 +655,7 @@ def SendDialogToTarget(index, message):
 # endregion
 
 # region SendDialog
-def SendDialog(index, message):
+def SendDialog(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing SendDialog message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -542,7 +671,7 @@ def SendDialog(index, message):
 # endregion
 
 # region GetBlessing
-def GetBlessing(index, message):
+def GetBlessing(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -575,10 +704,375 @@ def GetBlessing(index, message):
 
 
 # endregion
+# region MerchantItems
+def MerchantItems(index: int, message: SharedMessageStruct):
+    global _merchant_busy
+    ConsoleLog(MODULE_NAME, f"Processing MerchantItems message: {message}", Console.MessageType.Info, False)
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    # Serialize with MerchantMaterials to prevent concurrent NPC interaction conflicts
+    wait_ms = 0
+    while _merchant_busy and wait_ms < 120000:
+        yield from Routines.Yield.wait(250)
+        wait_ms += 250
+    _merchant_busy = True
+
+    def _extra_data(message: SharedMessageStruct) -> tuple[str, str, str, str]:
+        values: list[str] = []
+        for raw in message.ExtraData:
+            try:
+                values.append(_c_wchar_array_to_str(raw))
+            except Exception:
+                values.append("")
+        while len(values) < 4:
+            values.append("")
+        return tuple(values[:4])
+
+    extra0, extra1, extra2, extra3 = _extra_data(message)
+    mode = extra0.strip().lower()
+
+    if mode == "report_salvage_kits":
+        try:
+            salvage_kits_in_inv = int(GLOBAL_CACHE.Inventory.GetModelCount(ModelID.Salvage_Kit.value))
+            ini_path = str(extra1 or "").strip()
+            ini_section = str(extra2 or "").strip()
+            ini_key = str(extra3 or "").strip()
+            if ini_path and ini_section and ini_key:
+                import os as _os
+                if not _os.path.isabs(ini_path):
+                    ini_path = _os.path.join(Py4GW.Console.get_projects_path(), ini_path)
+                IniHandler(ini_path).write_key(ini_section, ini_key, str(salvage_kits_in_inv))
+        finally:
+            _merchant_busy = False
+            GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    try:
+        x = float(message.Params[0])
+        y = float(message.Params[1])
+        id_kits_target = int(message.Params[2])
+        salvage_kits_target = int(message.Params[3])
+    except Exception:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    if id_kits_target < 0:
+        id_kits_target = 0
+    if salvage_kits_target < 0:
+        salvage_kits_target = 0
+
+    SnapshotHeroAIOptions(message.ReceiverEmail)
+    _inv_widget_mi = get_widget_handler().get_widget_info("Inventory Plus")
+    if _inv_widget_mi:
+        _inv_widget_mi.pause()
+    try:
+        DisableHeroAIOptions(message.ReceiverEmail)
+        yield from Routines.Yield.wait(100)
+        yield from Routines.Yield.Movement.FollowPath([(x, y)])
+        yield from Routines.Yield.wait(100)
+        ok = yield from Routines.Yield.Agents.InteractWithAgentXY(x, y)
+        if not ok:
+            ConsoleLog(MODULE_NAME, "MerchantItems: merchant NPC not found, skipping kit buy", Console.MessageType.Warning, False)
+            return
+        yield from Routines.Yield.wait(1200)
+
+        yield from Routines.Yield.Merchant.RestockKitsToTarget(
+            id_kits_target,
+            salvage_kits_target,
+            max_passes=2,
+            pass_wait_ms=150,
+        )
+    finally:
+        _merchant_busy = False
+        if _inv_widget_mi:
+            _inv_widget_mi.resume()
+        RestoreHeroAISnapshot(message.ReceiverEmail)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
+# region MerchantMaterials
+def MerchantMaterials(index: int, message: SharedMessageStruct):
+    global _merchant_busy
+    ConsoleLog(MODULE_NAME, f"Processing MerchantMaterials message: {message}", Console.MessageType.Info, False)
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    # Serialize: wait for any concurrent merchant coroutine to finish first
+    wait_ms = 0
+    while _merchant_busy and wait_ms < 120000:
+        yield from Routines.Yield.wait(250)
+        wait_ms += 250
+    _merchant_busy = True
+
+    def _extra_data(message: SharedMessageStruct) -> tuple[str, str, str, str]:
+        values: list[str] = []
+        for raw in message.ExtraData:
+            try:
+                values.append(_c_wchar_array_to_str(raw))
+            except Exception:
+                values.append("")
+        while len(values) < 4:
+            values.append("")
+        return tuple(values[:4])
+
+    def _parse_selected_models(raw: str) -> set[int] | None:
+        if not raw.strip():
+            return None
+        selected: set[int] = set()
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                selected.add(int(part))
+            except ValueError:
+                continue
+        return selected or None
+
+    def _parse_positive_int(raw: str) -> int | None:
+        try:
+            parsed = int(str(raw).strip())
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+
+    extra0, extra1, extra2, extra3 = _extra_data(message)
+    mode = extra0.strip().lower()
+    selected_models = _parse_selected_models(extra1)
+
+    def _parse_exact_quantity(raw: str, default: int = 250) -> int | None:
+        value = str(raw).strip()
+        if value == "":
+            return int(default)
+        try:
+            parsed = int(value)
+        except Exception:
+            return int(default)
+        return parsed if parsed > 0 else None
+
+    try:
+        x = float(message.Params[0])
+        y = float(message.Params[1])
+        start_threshold = int(message.Params[2])
+        stop_threshold = int(message.Params[3])
+    except Exception:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    SnapshotHeroAIOptions(message.ReceiverEmail)
+    _inv_widget = get_widget_handler().get_widget_info("Inventory Plus")
+    if _inv_widget:
+        _inv_widget.pause()
+    try:
+        DisableHeroAIOptions(message.ReceiverEmail)
+        yield from Routines.Yield.wait(100)
+        ConsoleLog(
+            MODULE_NAME,
+            (
+                f"MerchantMaterials dispatch: mode={mode!r}, map_id={Map.GetMapID()}, "
+                f"xy=({x:.2f}, {y:.2f}), selected_models_count={0 if selected_models is None else len(selected_models)}, "
+                "max_per_item=disabled"
+            ),
+            Console.MessageType.Info,
+            False,
+        )
+
+        if mode == "sell":
+            sell_metrics = yield from Routines.Yield.Merchant.SellMaterialsAtTrader(
+                x,
+                y,
+                selected_models=selected_models,
+            )
+            ConsoleLog(MODULE_NAME, f"MerchantMaterials sell metrics: {sell_metrics}", Console.MessageType.Info, False)
+
+        elif mode == "deposit":
+            deposit_metrics = yield from Routines.Yield.Merchant.DepositMaterials(
+                selected_models=selected_models,
+                exact_quantity=_parse_exact_quantity(extra3, default=250),
+                max_deposit_items=_parse_positive_int(extra2),
+            )
+            ConsoleLog(MODULE_NAME, f"MerchantMaterials deposit metrics: {deposit_metrics}", Console.MessageType.Info, False)
+
+        elif mode == "buy_ectoplasm":
+            use_storage_gold = extra1.strip() == "1"
+            ecto_metrics = yield from Routines.Yield.Merchant.BuyEctoplasm(
+                x,
+                y,
+                use_storage_gold=use_storage_gold,
+                start_threshold=start_threshold,
+                stop_threshold=stop_threshold,
+                max_ecto_to_buy=_parse_positive_int(extra2),
+            )
+            ConsoleLog(MODULE_NAME, f"MerchantMaterials buy_ectoplasm metrics: {ecto_metrics}", Console.MessageType.Info, False)
+
+        elif mode == "sell_merchant_leftovers":
+            # Check inventory first — skip NPC interaction if nothing to sell
+            bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+            item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)
+            leftover_ids = []
+            for item_id in item_array:
+                if not GLOBAL_CACHE.Item.Type.IsMaterial(item_id):
+                    continue
+                if GLOBAL_CACHE.Item.Type.IsRareMaterial(item_id):
+                    continue
+                qty = int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id))
+                if 0 < qty < 10:
+                    leftover_ids.append(int(item_id))
+            if leftover_ids:
+                yield from Routines.Yield.Movement.FollowPath([(x, y)])
+                yield from Routines.Yield.wait(100)
+                ok = yield from Routines.Yield.Agents.InteractWithAgentXY(x, y)
+                if not ok:
+                    ConsoleLog(MODULE_NAME, "MerchantMaterials sell_merchant_leftovers: merchant NPC not found, skipping sell", Console.MessageType.Warning, False)
+                else:
+                    yield from Routines.Yield.wait(1200)
+                    yield from Routines.Yield.Merchant.SellItems(leftover_ids)
+                    yield from Routines.Yield.wait(300)
+                    ConsoleLog(MODULE_NAME, f"MerchantMaterials sell_merchant_leftovers: sold {len(leftover_ids)} stacks", Console.MessageType.Info, False)
+            else:
+                ConsoleLog(MODULE_NAME, "MerchantMaterials sell_merchant_leftovers: no leftover stacks, skipping", Console.MessageType.Info, False)
+
+        elif mode == "sell_rare_mats":
+            # Parse comma-separated model IDs from extra1
+            rare_model_ids: set[int] = set()
+            for part in extra1.split(","):
+                part = part.strip()
+                if part:
+                    try:
+                        rare_model_ids.add(int(part))
+                    except ValueError:
+                        pass
+            if rare_model_ids:
+                yield from Routines.Yield.Movement.FollowPath([(x, y)])
+                yield from Routines.Yield.wait(100)
+                yield from Routines.Yield.Agents.InteractWithAgentXY(x, y)
+                yield from Routines.Yield.wait(1000)
+                bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+                item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)
+                sold_total = 0
+                for item_id in item_array:
+                    if int(GLOBAL_CACHE.Item.GetModelID(item_id)) not in rare_model_ids:
+                        continue
+                    stack_qty = int(GLOBAL_CACHE.Item.Properties.GetQuantity(item_id))
+                    while stack_qty > 0:
+                        quoted = yield from Routines.Yield.Merchant._wait_for_quote(
+                            GLOBAL_CACHE.Trading.Trader.RequestSellQuote, item_id,
+                            timeout_ms=750, step_ms=10)
+                        if quoted <= 0:
+                            break
+                        GLOBAL_CACHE.Trading.Trader.SellItem(item_id, quoted)
+                        new_qty = yield from Routines.Yield.Merchant._wait_for_stack_quantity_drop(
+                            item_id, stack_qty, timeout_ms=750, step_ms=10)
+                        if new_qty >= stack_qty:
+                            break
+                        sold_total += stack_qty - new_qty
+                        stack_qty = new_qty
+                ConsoleLog(MODULE_NAME, f"MerchantMaterials sell_rare_mats: sold {sold_total} unit(s)", Console.MessageType.Info, False)
+        elif mode == "sell_scrolls":
+            scroll_model_ids: set[int] = set()
+            for part in extra1.split(","):
+                part = part.strip()
+                if part:
+                    try:
+                        scroll_model_ids.add(int(part))
+                    except ValueError:
+                        pass
+            if scroll_model_ids:
+                # Check inventory first — skip NPC interaction if nothing to sell
+                bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+                item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)
+                sell_ids = [int(item_id) for item_id in item_array
+                            if int(GLOBAL_CACHE.Item.GetModelID(item_id)) in scroll_model_ids]
+                if sell_ids:
+                    yield from Routines.Yield.Movement.FollowPath([(x, y)])
+                    yield from Routines.Yield.wait(100)
+                    ok = yield from Routines.Yield.Agents.InteractWithAgentXY(x, y)
+                    if not ok:
+                        ConsoleLog(MODULE_NAME, "MerchantMaterials sell_scrolls: merchant NPC not found, skipping sell", Console.MessageType.Warning, False)
+                    else:
+                        yield from Routines.Yield.wait(1200)
+                        yield from Routines.Yield.Merchant.SellItems(sell_ids)
+                        yield from Routines.Yield.wait(300)
+                        ConsoleLog(MODULE_NAME, f"MerchantMaterials sell_scrolls: sold {len(sell_ids)} scroll(s)", Console.MessageType.Info, False)
+                else:
+                    ConsoleLog(MODULE_NAME, "MerchantMaterials sell_scrolls: no scrolls in inventory, skipping", Console.MessageType.Info, False)
+
+        elif mode == "sell_nonsalvageable_golds":
+            # Check inventory first — skip NPC interaction if nothing to sell
+            bag_list = GLOBAL_CACHE.ItemArray.CreateBagList(1, 2, 3, 4)
+            item_array = GLOBAL_CACHE.ItemArray.GetItemArray(bag_list)
+            sell_ids = []
+            for item_id in item_array:
+                _, rarity = GLOBAL_CACHE.Item.Rarity.GetRarity(item_id)
+                if rarity != "Gold":
+                    continue
+                if not GLOBAL_CACHE.Item.Usage.IsIdentified(item_id):
+                    continue
+                if GLOBAL_CACHE.Item.Usage.IsSalvageable(item_id):
+                    continue
+                sell_ids.append(int(item_id))
+            if sell_ids:
+                yield from Routines.Yield.Movement.FollowPath([(x, y)])
+                yield from Routines.Yield.wait(100)
+                ok = yield from Routines.Yield.Agents.InteractWithAgentXY(x, y)
+                if not ok:
+                    ConsoleLog(MODULE_NAME, "MerchantMaterials sell_nonsalvageable_golds: merchant NPC not found, skipping sell", Console.MessageType.Warning, False)
+                else:
+                    yield from Routines.Yield.wait(1200)
+                    yield from Routines.Yield.Merchant.SellItems(sell_ids)
+                    yield from Routines.Yield.wait(300)
+                    ConsoleLog(MODULE_NAME, f"MerchantMaterials sell_nonsalvageable_golds: sold {len(sell_ids)} item(s)", Console.MessageType.Info, False)
+            else:
+                ConsoleLog(MODULE_NAME, "MerchantMaterials sell_nonsalvageable_golds: no items in inventory, skipping", Console.MessageType.Info, False)
+        else:
+            ConsoleLog(
+                MODULE_NAME,
+                f"MerchantMaterials ignored unknown mode={mode!r}. Raw extra_data={_extra_data(message)!r}",
+                Console.MessageType.Warning,
+                False,
+            )
+    finally:
+        _merchant_busy = False
+        if _inv_widget:
+            _inv_widget.resume()
+        RestoreHeroAISnapshot(message.ReceiverEmail)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
+# region MerchantRules
+def MerchantRules(index: int, message: SharedMessageStruct):
+    global _merchant_busy
+    widget = _get_merchant_rules_widget()
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    if widget is None:
+        ConsoleLog(MODULE_NAME, "Merchant Rules widget is not available for shared message handling.", Console.MessageType.Warning, False)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    needs_merchant_lock = bool(widget._multibox_message_requires_merchant_lock(message))
+    try:
+        if not needs_merchant_lock:
+            yield from widget.handle_shared_multibox_message(message)
+            return
+
+        ready_to_execute = yield from widget._wait_for_remote_execute_start(
+            message,
+            is_merchant_busy=lambda: _merchant_busy,
+        )
+        if not ready_to_execute:
+            return
+        _merchant_busy = True
+        try:
+            yield from widget.handle_shared_multibox_message(message)
+        finally:
+            _merchant_busy = False
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+# endregion
+
 # region UsePcon
 
 
-def UsePcon(index, message):
+def UsePcon(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing UsePcon message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
 
@@ -587,10 +1081,14 @@ def UsePcon(index, message):
     pcon_model_id2 = int(message.Params[2])
     pcon_skill_id2 = int(message.Params[3])
 
-    # Halt if any of the effects is already active
-    if GLOBAL_CACHE.ShMem.HasEffect(message.ReceiverEmail, pcon_skill_id) or GLOBAL_CACHE.ShMem.HasEffect(
-        message.ReceiverEmail, pcon_skill_id2
-    ):
+    # Halt if any of the effects is already active.
+    # Use live game-state check (Effects.HasEffect) rather than shared-memory
+    # (AccountHasEffect) because ShMem data can be stale (e.g. during map
+    # transitions), which previously caused consets to be consumed again even
+    # when the effect was still active on the character.
+    agent_id = Player.GetAgentID()
+    if (pcon_skill_id != 0 and GLOBAL_CACHE.Effects.HasEffect(agent_id, pcon_skill_id)) or \
+       (pcon_skill_id2 != 0 and GLOBAL_CACHE.Effects.HasEffect(agent_id, pcon_skill_id2)):
         # ConsoleLog(MODULE_NAME, "Player already has the effect of one of the PCon skills.", Console.MessageType.Warning)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
@@ -624,7 +1122,7 @@ def UsePcon(index, message):
 
 
 # region PressKey
-def PressKey(index, message):
+def PressKey(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing PressKey message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
 
@@ -642,7 +1140,7 @@ def PressKey(index, message):
 
 # endregion
 # region DonateToGuild
-def DonateToGuild(index, message):
+def DonateToGuild(index: int, message: SharedMessageStruct):
     MODULE = "DonateFaction"
     CHUNK = 5000
 
@@ -722,7 +1220,7 @@ def DonateToGuild(index, message):
 # endregion
 
 #region Open Chest
-def OpenChest(index, message):
+def OpenChest(index: int, message: SharedMessageStruct):
     start_time = time.time()
     
     cascade = int(message.Params[1]) == 1
@@ -783,31 +1281,31 @@ def OpenChest(index, message):
             account_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(email_owner)     
                    
             if account_data is not None:
-                ConsoleLog(MODULE_NAME, f"Current account party position: {account_data.PartyPosition}", Console.MessageType.Info)
+                ConsoleLog(MODULE_NAME, f"Current account party position: {account_data.AgentPartyData.PartyPosition}", Console.MessageType.Info)
                 
-                party_id = account_data.PartyID
+                party_id = account_data.AgentPartyData.PartyID
                 map_id = Map.GetMapID()
                 map_region = Map.GetRegion()[0]
                 map_district = Map.GetDistrict()
                 map_language = Map.GetLanguage()[0]
 
-                def on_same_map_and_party(account : AccountData) -> bool:                    
-                    return (account.PartyID == party_id and
+                def on_same_map_and_party(account) -> bool:                    
+                    return (account.AgentPartyData.PartyID == party_id and
                             account.MapID == map_id and
                             account.MapRegion == map_region and
                             account.MapDistrict == map_district and
                             account.MapLanguage == map_language)
                 
-                all_accounts = [account for account in GLOBAL_CACHE.ShMem.GetAllAccountData() if on_same_map_and_party(account) and account.PartyPosition > account_data.PartyPosition]
+                all_accounts = [account for account in GLOBAL_CACHE.ShMem.GetAllAccountData() if on_same_map_and_party(account) and account.AgentPartyData.PartyPosition > account_data.AgentPartyData.PartyPosition]
                 chest_pos = Agent.GetXY(chest_id)
                                 
                 sorted_by_party_index = sorted(
-                    [acc for acc in all_accounts if Utils.Distance((acc.PlayerPosX, acc.PlayerPosY), chest_pos) < 2500.0], 
-                key=lambda acc: acc.PartyPosition ) if all_accounts else []
+                    [acc for acc in all_accounts if Utils.Distance((acc.AgentData.Pos.x, acc.AgentData.Pos.y), chest_pos) < 2500.0], 
+                key=lambda acc: acc.AgentPartyData.PartyPosition ) if all_accounts else []
                 
                 if sorted_by_party_index:
                     next_account = sorted_by_party_index[0]
-                    ConsoleLog(MODULE_NAME, f"Cascading OpenChest to next party member: {next_account.CharacterName} ({next_account.AccountEmail})", Console.MessageType.Info)
+                    ConsoleLog(MODULE_NAME, f"Cascading OpenChest to next party member: {next_account.AgentData.CharacterName} ({next_account.AccountEmail})", Console.MessageType.Info)
                     GLOBAL_CACHE.ShMem.SendMessage(
                         sender_email=email_owner,
                         receiver_email=next_account.AccountEmail,
@@ -822,13 +1320,13 @@ def OpenChest(index, message):
     
 
 # region PickUpLoot
-def PickUpLoot(index, message):
-    def _exit_if_not_map_valid():
+def PickUpLoot(index:int , message: SharedMessageStruct):
+    def _get_loot_exit_reason() -> str:
         if not Routines.Checks.Map.MapValid():
             RestoreHeroAISnapshot(message.ReceiverEmail)
             GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
             ActionQueueManager().ResetAllQueues()
-            return True  # Signal that we must exit
+            return "map_invalid"
 
         if GLOBAL_CACHE.Inventory.GetFreeSlotCount() < 1:
             ConsoleLog(
@@ -839,9 +1337,9 @@ def PickUpLoot(index, message):
             RestoreHeroAISnapshot(message.ReceiverEmail)
             GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
             ActionQueueManager().ResetAllQueues()
-            return True
+            return "inventory_full"
 
-        return False
+        return ""
 
     def _GetBaseTimestamp():
         SHMEM_ZERO_EPOCH = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -869,9 +1367,13 @@ def PickUpLoot(index, message):
             if item_id is None or item_id == 0:
                 continue
 
-            if ( _exit_if_not_map_valid()):
+            exit_reason = _get_loot_exit_reason()
+            if exit_reason:
                 LootConfig().AddItemIDToBlacklist(item_id)
-                ConsoleLog("PickUp Loot", "Map is not valid, halting.", Console.MessageType.Warning)
+                if exit_reason == "map_invalid":
+                    ConsoleLog("PickUp Loot", "Map is not valid, halting.", Console.MessageType.Warning)
+                elif exit_reason == "inventory_full":
+                    ConsoleLog("PickUp Loot", "No free slots in inventory, halting.", Console.MessageType.Warning)
                 ActionQueueManager().ResetAllQueues()
                 return
 
@@ -892,7 +1394,8 @@ def PickUpLoot(index, message):
                 return
 
             yield from Routines.Yield.wait(100)
-            if (_exit_if_not_map_valid()):
+            exit_reason = _get_loot_exit_reason()
+            if exit_reason:
                 RestoreHeroAISnapshot(message.ReceiverEmail)
                 return
             yield from Routines.Yield.Player.InteractAgent(item_id)
@@ -913,13 +1416,21 @@ def PickUpLoot(index, message):
                     ActionQueueManager().ResetAllQueues()
                     return
 
-                if (_exit_if_not_map_valid()):
+                exit_reason = _get_loot_exit_reason()
+                if exit_reason:
                     LootConfig().AddItemIDToBlacklist(item_id)
-                    ConsoleLog(
-                        "PickUp Loot",
-                        "Map is not valid, halting.",
-                        Console.MessageType.Warning,
-                    )
+                    if exit_reason == "map_invalid":
+                        ConsoleLog(
+                            "PickUp Loot",
+                            "Map is not valid, halting.",
+                            Console.MessageType.Warning,
+                        )
+                    elif exit_reason == "inventory_full":
+                        ConsoleLog(
+                            "PickUp Loot",
+                            "No free slots in inventory, halting.",
+                            Console.MessageType.Warning,
+                        )
                     ActionQueueManager().ResetAllQueues()
                     return
 
@@ -936,7 +1447,7 @@ def PickUpLoot(index, message):
 #endregion
 
 # region DisableHeroAI / EnableHeroAI
-def MessageDisableHeroAI(index, message):
+def MessageDisableHeroAI(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing DisableHeroAI message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     account_email = message.ReceiverEmail
@@ -947,7 +1458,7 @@ def MessageDisableHeroAI(index, message):
     yield
 
 
-def MessageEnableHeroAI(index, message):
+def MessageEnableHeroAI(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing EnableHeroAI message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     account_email = message.ReceiverEmail
@@ -962,7 +1473,7 @@ def MessageEnableHeroAI(index, message):
 # endregion
 
 # region SetWindowGeometry
-def SetWindowGeometry(index, message):
+def SetWindowGeometry(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -974,7 +1485,7 @@ def SetWindowGeometry(index, message):
     ConsoleLog(MODULE_NAME, "SetWindowGeometry message processed and finished.", Console.MessageType.Info, False)
 # endregion
 #region SetWindowActive
-def SetWindowActive(index, message):
+def SetWindowActive(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -988,7 +1499,7 @@ def SetWindowActive(index, message):
     ConsoleLog(MODULE_NAME, "SetWindowActive message processed and finished.", Console.MessageType.Info, False)
 # endregion
 #region SetWindowTitle
-def SetWindowTitle(index, message):
+def SetWindowTitle(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
 
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -996,7 +1507,7 @@ def SetWindowTitle(index, message):
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
 
-    extra = tuple(GLOBAL_CACHE.ShMem._c_wchar_array_to_str(arr) for arr in message.ExtraData)
+    extra = tuple(_c_wchar_array_to_str(arr) for arr in message.ExtraData)
     title = extra[0] if extra else ""
 
     Py4GW.Console.set_window_title(title)
@@ -1008,7 +1519,7 @@ def SetWindowTitle(index, message):
 
 # endregion
 #region SetBorderless
-def SetBorderless(index, message):
+def SetBorderless(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1020,7 +1531,7 @@ def SetBorderless(index, message):
     ConsoleLog(MODULE_NAME, "SetBorderless message processed and finished.", Console.MessageType.Info, False)
 # endregion
 #region SetAlwaysOnTop
-def SetAlwaysOnTop(index, message):
+def SetAlwaysOnTop(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1032,7 +1543,7 @@ def SetAlwaysOnTop(index, message):
     ConsoleLog(MODULE_NAME, "SetAlwaysOnTop message processed and finished.", Console.MessageType.Info, False)
 # endregion
 #region FlashWindow
-def FlashWindow(index, message):
+def FlashWindow(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1044,7 +1555,7 @@ def FlashWindow(index, message):
     ConsoleLog(MODULE_NAME, "FlashWindow message processed and finished.", Console.MessageType.Info, False)
 # endregion
 #region RequestAttention
-def RequestAttention(index, message):
+def RequestAttention(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1056,7 +1567,7 @@ def RequestAttention(index, message):
     ConsoleLog(MODULE_NAME, "RequestAttention message processed and finished.", Console.MessageType.Info, False)
 # endregion
 # region SetTransparentClickThrough
-def SetTransparentClickThrough(index, message):
+def SetTransparentClickThrough(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1068,7 +1579,7 @@ def SetTransparentClickThrough(index, message):
     ConsoleLog(MODULE_NAME, "SetTransparentClickThrough message processed and finished.", Console.MessageType.Info, False)
 # endregion
 # region SetTransparency
-def SetOpacity(index, message):
+def SetOpacity(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1081,7 +1592,7 @@ def SetOpacity(index, message):
 #endregion
 
 #region UseSkill
-def UseSkill(index, message):
+def UseSkill(index: int, message: SharedMessageStruct):
     ConsoleLog(MODULE_NAME, f"Processing UseSkill message: {message}", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
@@ -1168,37 +1679,34 @@ def _should_block_item_use() -> bool:
     if not _inventory_ready():
         return True
     return False
-
-def UseItem(index, message):
-    ConsoleLog(MODULE_NAME, f"Processing UseItem message: {message}", Console.MessageType.Info, False)
+def UseItem(index: int, message: SharedMessageStruct):
+    ConsoleLog(MODULE_NAME, "UseItem: received broadcast.", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
 
     # Check if the user has opted in to team broadcasts (Pycons setting)
     # Use Player.GetAccountEmail() to match the hash used by Pycons.py
     try:
-        # Get the current account's email (must match how Pycons computes the hash)
         account_email = Player.GetAccountEmail()
-        # Create account-specific INI path by using email hash to avoid special chars
-        import hashlib
-        email_hash = hashlib.md5(account_email.encode()).hexdigest()[:8]
-        ini_path = f"Widgets/Config/Pycons_{email_hash}.ini"
-        
-        ConsoleLog(MODULE_NAME, f"UseItem: Reading opt-in from {ini_path} (account: {account_email})", Console.MessageType.Info)
-        
+        ini_path = resolve_pycons_account_ini_path(account_email)
         ini_handler = IniHandler(ini_path)
         opt_in = ini_handler.read_bool("Pycons", "team_consume_opt_in", False)
-        ConsoleLog(MODULE_NAME, f"UseItem: team_consume_opt_in setting read as: {opt_in}", Console.MessageType.Info)
+        receiver_require_enabled = ini_handler.read_bool("Pycons", "mbdp_receiver_require_enabled", True)
         if not opt_in:
-            ConsoleLog(MODULE_NAME, "UseItem: team_consume_opt_in is disabled, ignoring broadcast.", Console.MessageType.Info)
+            ConsoleLog(MODULE_NAME, "UseItem: blocked (opt-in disabled).", Console.MessageType.Info, False)
             GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
             return
     except Exception as e:
-        ConsoleLog(MODULE_NAME, f"UseItem: failed to read team_consume_opt_in setting: {e}", Console.MessageType.Warning)
+        ConsoleLog(MODULE_NAME, f"UseItem: blocked (failed to read opt-in: {e}).", Console.MessageType.Warning)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    if str(message.SenderEmail or "") == str(message.ReceiverEmail or ""):
+        ConsoleLog(MODULE_NAME, "UseItem: blocked (self-message loop guard).", Console.MessageType.Info, False)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
 
     if _should_block_item_use():
-        ConsoleLog(MODULE_NAME, "UseItem: blocked by safety checks (dead/loading/inventory not ready/map invalid).", Console.MessageType.Info, False)
+        ConsoleLog(MODULE_NAME, "UseItem: blocked (safety checks).", Console.MessageType.Info, False)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
 
@@ -1213,6 +1721,41 @@ def UseItem(index, message):
         ConsoleLog(MODULE_NAME, "UseItem: invalid model_id.", Console.MessageType.Warning)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
+
+    # Optional local safety: for MB/DP items, require local selected+enabled in Pycons settings.
+    if bool(receiver_require_enabled):
+        try:
+            def _model_id_value(name: str, default: int = 0) -> int:
+                obj = getattr(ModelID, name, None)
+                if obj is None:
+                    return int(default)
+                return int(getattr(obj, "value", obj))
+
+            mbdp_models = {
+                _model_id_value("Pumpkin_Cookie"): "pumpkin_cookie",
+                _model_id_value("Seal_Of_The_Dragon_Empire"): "seal_of_the_dragon_empire",
+                _model_id_value("Honeycomb", _model_id_value("Honeycomb", 0)): "honeycomb",
+                _model_id_value("Rainbow_Candy_Cane"): "rainbow_candy_cane",
+                _model_id_value("Elixir_Of_Valor"): "elixir_of_valor",
+                _model_id_value("Powerstone_Of_Courage"): "powerstone_of_courage",
+                _model_id_value("Refined_Jelly"): "refined_jelly",
+                _model_id_value("Shining_Blade_Rations"): "shining_blade_rations",
+                _model_id_value("Wintergreen_Candy_Cane"): "wintergreen_candy_cane",
+                _model_id_value("Peppermint_Candy_Cane"): "peppermint_candy_cane",
+                _model_id_value("Four_Leaf_Clover"): "four_leaf_clover",
+                _model_id_value("Oath_Of_Purity"): "oath_of_purity",
+            }
+            mbdp_models = {mid: key for mid, key in mbdp_models.items() if int(mid) > 0}
+            local_key = mbdp_models.get(int(model_id))
+            if local_key:
+                if not ini_handler.read_bool("Pycons", f"selected_{local_key}", False) or not ini_handler.read_bool("Pycons", f"enabled_{local_key}", False):
+                    ConsoleLog(MODULE_NAME, f"UseItem: local MB/DP item '{local_key}' is not selected+enabled, ignoring.", Console.MessageType.Info)
+                    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+                    return
+        except Exception as e:
+            ConsoleLog(MODULE_NAME, f"UseItem: local enabled-check failed: {e}", Console.MessageType.Warning)
+            GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+            return
 
     repeat = 1
     if len(message.Params) > 1:
@@ -1229,7 +1772,7 @@ def UseItem(index, message):
 
     count = GLOBAL_CACHE.Inventory.GetModelCount(model_id)
     if count < 1:
-        ConsoleLog(MODULE_NAME, f"UseItem: no items with model_id {model_id} in inventory.", Console.MessageType.Warning)
+        ConsoleLog(MODULE_NAME, f"UseItem: blocked (model_id {model_id} not in inventory).", Console.MessageType.Warning)
         GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
         return
     if effect_id > 0 and _local_has_effect(effect_id):
@@ -1257,12 +1800,12 @@ def UseItem(index, message):
 
         yield from Routines.Yield.wait(150)
 
-    ConsoleLog(MODULE_NAME, f"UseItem: finished. Requested {repeat}, actually used {used}.", Console.MessageType.Info)
+    ConsoleLog(MODULE_NAME, f"UseItem: executed (requested={repeat}, used={used}, model_id={model_id}).", Console.MessageType.Info, False)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
 
 # region UseSkillFromMessage
-def UseSkillCombatPrep(index, message):
+def UseSkillCombatPrep(index: int, message: SharedMessageStruct):
     global combat_prep_first_skills_check
     global hero_ai_has_paragon_skills
     global hero_ai_has_ritualist_skills
@@ -1297,7 +1840,7 @@ def UseSkillCombatPrep(index, message):
     ]
     full_ritualist_skills = skills_to_precast + spirit_skills_to_prep + skills_to_postcast
 
-    def curr_agent_has_ritualist_skills():
+    def curr_agent_has_ritualist_skills() -> bool:
         for skill in full_ritualist_skills:
             skill_id = GLOBAL_CACHE.Skill.GetID(skill)
             slot_number = GLOBAL_CACHE.SkillBar.GetSlotBySkillID(skill_id)
@@ -1306,7 +1849,7 @@ def UseSkillCombatPrep(index, message):
                 return True
         return False
 
-    def curr_agent_has_paragon_skills():
+    def curr_agent_has_paragon_skills() -> bool:
         for skill in paragon_skills:
             skill_id = GLOBAL_CACHE.Skill.GetID(skill)
             slot_number = GLOBAL_CACHE.SkillBar.GetSlotBySkillID(skill_id)
@@ -1405,7 +1948,27 @@ def UseSkillCombatPrep(index, message):
 #endregion
 
 # region Widget handling
-def PauseWidgets(index, message):
+def Pycons(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    try:
+        module = _get_pycons_widget_module()
+        handler = getattr(module, "pycons_handle_shared_message", None) if module is not None else None
+        if callable(handler):
+            handler(message)
+            return
+
+        fallback = getattr(PyconsHelper, "pycons_reply_reload_unavailable_for_message", None)
+        if callable(fallback):
+            fallback(message)
+    except Exception as exc:
+        ConsoleLog(MODULE_NAME, f"Pycons shared-message error: {exc}", Console.MessageType.Error, False)
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    if False:
+        yield None
+
+
+def PauseWidgets(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1413,12 +1976,12 @@ def PauseWidgets(index, message):
         return
     
     widget_handler = get_widget_handler()
-    widget_handler.pause_widgets()
+    widget_handler.pause_optional_widgets()
     yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "PauseWidgets message processed and finished.", Console.MessageType.Info, False)
 
-def ResumeWidgets(index, message):
+def ResumeWidgets(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1426,13 +1989,54 @@ def ResumeWidgets(index, message):
         return
     
     widget_handler = get_widget_handler()
+    widget_handler.resume_optional_widgets()
     yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "ResumeWidgets message processed and finished.", Console.MessageType.Info, False)
+
+def EnableWidget(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+    if sender_data is None:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    extra = tuple(_c_wchar_array_to_str(arr) for arr in message.ExtraData)
+    widget_name = extra[0].strip() if extra else ""
+    if not widget_name:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    widget_handler = get_widget_handler()
+    if not widget_handler.is_widget_enabled(widget_name):
+        widget_handler.enable_widget(widget_name)
+    yield from Routines.Yield.wait(100)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, f"EnableWidget('{widget_name}') message processed and finished.", Console.MessageType.Info, False)
+
+def DisableWidget(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+    if sender_data is None:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    extra = tuple(_c_wchar_array_to_str(arr) for arr in message.ExtraData)
+    widget_name = extra[0].strip() if extra else ""
+    if not widget_name:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    widget_handler = get_widget_handler()
+    if widget_handler.is_widget_enabled(widget_name):
+        widget_handler.disable_widget(widget_name)
+    yield from Routines.Yield.wait(100)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, f"DisableWidget('{widget_name}') message processed and finished.", Console.MessageType.Info, False)
 # endregion
 
 #region SwitchCharacter
-def SwitchCharacter(index, message):
+def SwitchCharacter(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1440,7 +2044,7 @@ def SwitchCharacter(index, message):
         return
     
 
-    extra = tuple(GLOBAL_CACHE.ShMem._c_wchar_array_to_str(arr) for arr in message.ExtraData)
+    extra = tuple(GLOBAL_CACHE.ShMem.GetAllAccounts()._c_wchar_array_to_str(arr) for arr in message.ExtraData)
     character_name = extra[0] if extra else ""
     
     if character_name and character_name != Player.GetName():
@@ -1451,7 +2055,7 @@ def SwitchCharacter(index, message):
 # endregion
 
 #region LoadSkillTemplate
-def LoadSkillTemplate(index, message):
+def LoadSkillTemplate(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     
@@ -1460,7 +2064,7 @@ def LoadSkillTemplate(index, message):
         return
     
     if Map.IsOutpost():
-        extra = tuple(GLOBAL_CACHE.ShMem._c_wchar_array_to_str(arr) for arr in message.ExtraData)
+        extra = tuple(GLOBAL_CACHE.ShMem.GetAllAccounts()._c_wchar_array_to_str(arr) for arr in message.ExtraData)
         template = extra[0] if extra else ""
             
         if template:
@@ -1472,7 +2076,7 @@ def LoadSkillTemplate(index, message):
 # endregion
 
 #region SkipCutscene
-def SkipCutscene(index, message):
+def SkipCutscene(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     
@@ -1489,7 +2093,7 @@ def SkipCutscene(index, message):
 # endregion
 
 #region TravelToGuildHall
-def TravelToGuildHall(index, message):
+def TravelToGuildHall(index: int, message: SharedMessageStruct):
     GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
     sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
     if sender_data is None:
@@ -1504,6 +2108,170 @@ def TravelToGuildHall(index, message):
     yield from Routines.Yield.wait(100)
     GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
     ConsoleLog(MODULE_NAME, "TravelToGuildHall message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+#region SetActiveQuest
+def SetActiveQuest(index : int, message : SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+    if sender_data is None:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+    
+    id = int(message.Params[0])
+    
+    if id:
+        Quest.SetActiveQuest(id)
+        yield from Routines.Yield.wait(100)
+    
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, "SetActiveQuest message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+#region AbandonQuest
+def AbandonQuest(index : int, message : SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    sender_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(message.SenderEmail)
+    if sender_data is None:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+    
+    id = int(message.Params[0])
+    
+    if id:
+        Quest.AbandonQuest(id)
+        yield from Routines.Yield.wait(100)
+    
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, "AbandonQuest message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+#region RestockAllPcons
+def RestockAllPcons(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    quantity = int(message.Params[0])
+    pcon_models = [
+        ModelID.Birthday_Cupcake.value,
+        ModelID.Candy_Apple.value,
+        ModelID.Golden_Egg.value,
+        ModelID.Candy_Corn.value,
+        ModelID.Honeycomb.value,
+        ModelID.War_Supplies.value,
+        ModelID.Slice_Of_Pumpkin_Pie.value,
+        ModelID.Drake_Kabob.value,
+        ModelID.Bowl_Of_Skalefin_Soup.value,
+        ModelID.Pahnai_Salad.value,
+        ModelID.Scroll_Of_Resurrection.value,
+    ]
+    for model_id in pcon_models:
+        yield from Routines.Yield.Items.RestockItems(model_id, quantity)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, "RestockAllPcons message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+#region RestockConset
+def RestockConset(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    quantity = int(message.Params[0])
+    conset_models = [
+        ModelID.Essence_Of_Celerity.value,
+        ModelID.Grail_Of_Might.value,
+        ModelID.Armor_Of_Salvation.value,
+    ]
+    for model_id in conset_models:
+        yield from Routines.Yield.Items.RestockItems(model_id, quantity)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, "RestockConset message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+#region RestockResurrectionScroll
+def RestockResurrectionScroll(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    quantity = int(message.Params[0])
+    yield from Routines.Yield.Items.RestockItems(ModelID.Scroll_Of_Resurrection.value, quantity)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    ConsoleLog(MODULE_NAME, "RestockResurrectionScroll message processed and finished.", Console.MessageType.Info, False)
+# endregion
+
+# region InventoryQuery
+def InventoryQuery(index: int, message: SharedMessageStruct):
+    """Generic inventory count query.
+
+    Sub-commands (extra0):
+        report_inventory_count
+            Counts all items whose model ID falls in the inclusive range
+            [Params[0], Params[1]] and writes the total to an INI file.
+            extra1 = ini_path
+            extra2 = ini_section
+            extra3 = ini_key
+
+    Note: only contiguous model-ID ranges are currently supported via Params.
+    Non-contiguous ID sets would require a comma-separated encoding in ExtraData,
+    which is limited to 64 characters per slot (~12 IDs). Extend this handler
+    if a real non-contiguous use case arises.
+    """
+    def _extra_data(msg: SharedMessageStruct) -> tuple[str, str, str, str]:
+        values: list[str] = []
+        for raw in msg.ExtraData:
+            try:
+                values.append(_c_wchar_array_to_str(raw))
+            except Exception:
+                values.append("")
+        while len(values) < 4:
+            values.append("")
+        return values[0], values[1], values[2], values[3]
+    
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+    extra0, extra1, extra2, extra3 = _extra_data(message)
+    mode = extra0.strip().lower()
+
+    try:
+        if mode == "report_inventory_count":
+            range_start = int(message.Params[0])
+            range_end   = int(message.Params[1])
+            ini_path    = str(extra1 or "").strip()
+            ini_section = str(extra2 or "").strip()
+            ini_key     = str(extra3 or "").strip()
+            if ini_path and ini_section and ini_key and range_start > 0 and range_end >= range_start:
+                import os as _os
+                if not _os.path.isabs(ini_path):
+                    ini_path = _os.path.join(Py4GW.Console.get_projects_path(), ini_path)
+                count = sum(int(GLOBAL_CACHE.Inventory.GetModelCount(mid))
+                            for mid in range(range_start, range_end + 1))
+                IniHandler(ini_path).write_key(ini_section, ini_key, str(count))
+    finally:
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+    yield
+
+# endregion
+
+# region EquipItem
+def EquipItem(index: int, message: SharedMessageStruct):
+    GLOBAL_CACHE.ShMem.MarkMessageAsRunning(message.ReceiverEmail, index)
+
+    if len(message.Params) < 1:
+        ConsoleLog(MODULE_NAME, "EquipItem: missing model_id param.", Console.MessageType.Warning)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    try:
+        model_id = int(message.Params[0])
+    except Exception:
+        ConsoleLog(MODULE_NAME, "EquipItem: invalid model_id.", Console.MessageType.Warning)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    item_id = GLOBAL_CACHE.Inventory.GetFirstModelID(model_id)
+    if not item_id:
+        ConsoleLog(MODULE_NAME, f"EquipItem: model_id {model_id} not found in inventory.", Console.MessageType.Warning)
+        GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
+        return
+
+    GLOBAL_CACHE.Inventory.EquipItem(item_id, Player.GetAgentID())
+    yield from Routines.Yield.wait(750)
+
+    ConsoleLog(MODULE_NAME, f"EquipItem: equipped item_id {item_id} (model {model_id}).", Console.MessageType.Info, False)
+    GLOBAL_CACHE.ShMem.MarkMessageAsFinished(message.ReceiverEmail, index)
 # endregion
 
 # region ProcessMessages
@@ -1551,9 +2319,13 @@ def ProcessMessages():
         case SharedCommandType.SalvageItems:
             pass
         case SharedCommandType.MerchantItems:
-            pass
+            GLOBAL_CACHE.Coroutines.append(MerchantItems(index, message))
         case SharedCommandType.MerchantMaterials:
-            pass
+            GLOBAL_CACHE.Coroutines.append(MerchantMaterials(index, message))
+        case SharedCommandType.MerchantRules:
+            GLOBAL_CACHE.Coroutines.append(MerchantRules(index, message))
+        case SharedCommandType.Pycons:
+            GLOBAL_CACHE.Coroutines.append(Pycons(index, message))
         case SharedCommandType.DisableHeroAI:
             GLOBAL_CACHE.Coroutines.append(MessageDisableHeroAI(index, message))
         case SharedCommandType.EnableHeroAI:
@@ -1586,6 +2358,10 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(PauseWidgets(index, message))
         case SharedCommandType.ResumeWidgets:
             GLOBAL_CACHE.Coroutines.append(ResumeWidgets(index, message))
+        case SharedCommandType.EnableWidget:
+            GLOBAL_CACHE.Coroutines.append(EnableWidget(index, message))
+        case SharedCommandType.DisableWidget:
+            GLOBAL_CACHE.Coroutines.append(DisableWidget(index, message))
         case SharedCommandType.SwitchCharacter:
             GLOBAL_CACHE.Coroutines.append(SwitchCharacter(index, message))
         case SharedCommandType.LoadSkillTemplate:
@@ -1596,6 +2372,20 @@ def ProcessMessages():
             GLOBAL_CACHE.Coroutines.append(TravelToGuildHall(index, message))
         case SharedCommandType.UseSkillCombatPrep:
             GLOBAL_CACHE.Coroutines.append(UseSkillCombatPrep(index, message))
+        case SharedCommandType.SetActiveQuest:
+            GLOBAL_CACHE.Coroutines.append(SetActiveQuest(index, message))
+        case SharedCommandType.AbandonQuest:
+            GLOBAL_CACHE.Coroutines.append(AbandonQuest(index, message))
+        case SharedCommandType.RestockAllPcons:
+            GLOBAL_CACHE.Coroutines.append(RestockAllPcons(index, message))
+        case SharedCommandType.RestockConset:
+            GLOBAL_CACHE.Coroutines.append(RestockConset(index, message))
+        case SharedCommandType.RestockResurrectionScroll:
+            GLOBAL_CACHE.Coroutines.append(RestockResurrectionScroll(index, message))
+        case SharedCommandType.InventoryQuery:
+            GLOBAL_CACHE.Coroutines.append(InventoryQuery(index, message))
+        case SharedCommandType.EquipItem:
+            GLOBAL_CACHE.Coroutines.append(EquipItem(index, message))
         case SharedCommandType.LootEx:
             # privately Handled Command, by frenkey
             pass
@@ -1611,6 +2401,7 @@ def ProcessMessages():
 
 
 def main():
+    HealStaleHeroAISnapshot(Player.GetAccountEmail())
     ProcessMessages()
 
 

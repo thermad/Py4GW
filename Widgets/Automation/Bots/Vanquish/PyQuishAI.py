@@ -23,6 +23,8 @@ blessed = whandler.get_widget_info("Blessed")
 
 module_name = "PyQuishAI "
 cache_data = CacheData()
+MODULE_NAME = "PyQuishAI"
+MODULE_ICON = "Textures\\Module_Icons\\PyQuishAI.png"
 
 RECHECK_INTERVAL_MS = 500 # Used for followpathandaggro 
 ARRIVAL_TOLERANCE = 250  # Used for path point arrival
@@ -456,7 +458,8 @@ def InitializeStateMachine():
     FSM_vars.state_machine.AddState(
         name="Check Current Map",
         execute_fn= lambda: Routines.Transition.TravelToOutpost(bot_vars.starting_map),
-        exit_condition= lambda: Routines.Transition.HasArrivedToOutpost(bot_vars.starting_map),
+        #exit_condition= lambda: Routines.Transition.HasArrivedToOutpost(bot_vars.starting_map),
+        exit_condition=lambda: Map.GetMapID() == bot_vars.starting_map and not Map.IsMapLoading(),
         transition_delay_ms=1000
     )
     FSM_vars.state_machine.AddState(

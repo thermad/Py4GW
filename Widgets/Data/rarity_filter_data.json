@@ -2,7 +2,7 @@
     "white": false,
     "blue": false,
     "purple": false,
-    "gold": true,
+    "gold": false,
     "green": true,
-    "gold_coins": true
+    "gold_coins": false
 }

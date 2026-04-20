@@ -58,6 +58,10 @@ class Utils:
         return inside
 
     @staticmethod
+    def IsPointInRect(px: float, py: float, rx: float, ry: float, rw: float, rh: float) -> bool:
+        return rx <= px <= rx + rw and ry <= py <= ry + rh
+
+    @staticmethod
     def format_bytes(num_bytes: int) -> str:
             """
             Convert a byte count to a human-readable string using
@@ -774,6 +778,38 @@ class Utils:
         """
         SKILL_DIALOG_MASK = 0x0A000000
         return skill_id | SKILL_DIALOG_MASK
+
+    @staticmethod
+    def BalthazarSkillIdToDialogId(skill_id: int, use_pvp_remap: bool = True) -> int:
+        """
+        Convert a skill ID to the raw dialog ID used by the Priest of Balthazar unlock vendor.
+
+        Args:
+            skill_id (int): The requested skill ID.
+            use_pvp_remap (bool): Whether to remap through Skill.ExtraData.GetIDPvP(...).
+
+        Returns:
+            int: The Balthazar unlock dialog ID.
+        """
+        BALTHAZAR_UNLOCK_DIALOG_MASK = 0x10000000
+        PVP_REMAP_SENTINEL = 0x0D6C
+
+        resolved = int(skill_id or 0)
+        if resolved <= 0:
+            return 0
+
+        if use_pvp_remap:
+            try:
+                from ..Skill import Skill
+
+                pvp_id = int(Skill.ExtraData.GetIDPvP(resolved) or 0)
+            except Exception:
+                pvp_id = 0
+
+            if pvp_id > 0 and pvp_id != resolved and pvp_id != PVP_REMAP_SENTINEL:
+                resolved = pvp_id
+
+        return BALTHAZAR_UNLOCK_DIALOG_MASK | (resolved & 0xFFFF)
 
     @staticmethod
     def ClearSubModules(module_name: str, log: bool = False):

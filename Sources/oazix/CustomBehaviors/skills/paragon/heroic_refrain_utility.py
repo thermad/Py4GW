@@ -1,20 +1,20 @@
 from typing import Any, Generator, override
 
 from Py4GWCoreLib.native_src.context.WorldContext import AttributeStruct
-import PyImGui
-from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.Agent import Agent
-from Py4GWCoreLib.enums import Profession, Range
+from Py4GWCoreLib.enums import Range
 from Py4GWCoreLib import Player
 from Sources.oazix.CustomBehaviors.primitives.behavior_state import BehaviorState
 from Sources.oazix.CustomBehaviors.primitives.bus.event_bus import EventBus
 from Sources.oazix.CustomBehaviors.primitives.helpers import custom_behavior_helpers
 from Sources.oazix.CustomBehaviors.primitives.helpers.behavior_result import BehaviorResult
 from Sources.oazix.CustomBehaviors.primitives.helpers.targeting_order import TargetingOrder
-from Sources.oazix.CustomBehaviors.primitives.scores.score_per_agent_quantity_definition import ScorePerAgentQuantityDefinition
 from Sources.oazix.CustomBehaviors.primitives.scores.score_static_definition import ScoreStaticDefinition
+from Sources.oazix.CustomBehaviors.primitives.skills.bonds.custom_buff_target_per_profession import BuffConfigurationPerProfession
 from Sources.oazix.CustomBehaviors.primitives.skills.custom_skill import CustomSkill
 from Sources.oazix.CustomBehaviors.primitives.skills.custom_skill_utility_base import CustomSkillUtilityBase
+from Sources.oazix.CustomBehaviors.skills.plugins.targeting_modifiers.buff_configurator import BuffConfigurator
+from Sources.oazix.CustomBehaviors.skills.plugins.watchdogs.should_lock_until_buff_completion import ShouldLockUntilBuffCompletion
 
 class HeroicRefrainUtility(CustomSkillUtilityBase):
     def __init__(
@@ -31,9 +31,13 @@ class HeroicRefrainUtility(CustomSkillUtilityBase):
             score_definition=score_definition,
             mana_required_to_cast=0,
             allowed_states=[BehaviorState.IN_AGGRO, BehaviorState.CLOSE_TO_AGGRO, BehaviorState.FAR_FROM_AGGRO])
-        
+
         self.score_definition: ScoreStaticDefinition = score_definition
+
+        # Load buff configuration from persistence or use default (ALL)
         self.should_reach_leadership_attribute_score_of_20 = True # it will cause issue if you don't have 16 leadership base. can be dactivated through UI(customized_debug_ui & detailled mode)
+        self.add_plugin_targetting_modifier(lambda x: BuffConfigurator(event_bus, self.custom_skill, buff_configuration_per_profession= BuffConfigurationPerProfession.BUFF_CONFIGURATION_ALL))
+        self.add_plugin_watchdog(lambda x: ShouldLockUntilBuffCompletion(x.custom_skill, is_buff_config_fulfilled= lambda: self._get_target_agent_id() is None, default_value= False))
 
     def _get_target_agent_id(self) -> int | None:
 
@@ -50,10 +54,16 @@ class HeroicRefrainUtility(CustomSkillUtilityBase):
 
         targets: list[custom_behavior_helpers.SortableAgentData] = custom_behavior_helpers.Targets.get_all_possible_allies_ordered_by_priority_raw(
                 within_range=Range.Spellcast.value * 1.2,
-                condition=lambda agent_id: not custom_behavior_helpers.Resources.is_ally_under_specific_effect(agent_id, self.custom_skill.skill_id),
+                condition=lambda agent_id:
+                    self.get_plugin_targeting_modifiers_filtering_predicate()(agent_id) 
+                    # and not custom_behavior_helpers.Resources.is_ally_under_specific_effect(agent_id, self.custom_skill.skill_id)
+                    ,
                 sort_key=(TargetingOrder.DISTANCE_ASC, TargetingOrder.CASTER_THEN_MELEE),
                 range_to_count_enemies=None,
                 range_to_count_allies=None)
+        
+        # sort by priority
+        targets.sort(key=lambda target: self.get_plugin_targeting_modifiers_ordering_predicate()(target.agent_id))
 
         if targets is None: return None
         if len(targets) <= 0: return None
@@ -78,9 +88,3 @@ class HeroicRefrainUtility(CustomSkillUtilityBase):
         if target_agent_id is None: return BehaviorResult.ACTION_SKIPPED
         result = yield from custom_behavior_helpers.Actions.cast_skill_to_target(self.custom_skill, target_agent_id=target_agent_id)
         return result
-
-    @override
-    def customized_debug_ui(self, current_state: BehaviorState) -> None:
-        PyImGui.bullet_text(f"should_reach_leadership_20 : {self.should_reach_leadership_attribute_score_of_20}")
-        self.should_reach_leadership_attribute_score_of_20 = PyImGui.checkbox("should_reach_leadership_attribute_score_of_20", self.should_reach_leadership_attribute_score_of_20)
-

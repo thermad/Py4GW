@@ -17,17 +17,16 @@ class _UI:
         self._Events = parent.Events  
         self.Keybinds = self._Keybinds(self) 
     
-    def _cancel_skill_reward_window(self):
+    def iter_cancel_skill_reward_window(self):
         from ...Routines import Routines
         import Py4GW
+        from ...GWUI import GWUI
         from ...UIManager import UIManager
         global bot  
         yield from Routines.Yield.wait(500)
         cancel_button_frame_id = UIManager.GetFrameIDByHash(784833442)  # Cancel button frame ID
         if not cancel_button_frame_id:
-            Py4GW.Console.Log("CancelSkillRewardWindow", "Cancel button frame ID not found.", Py4GW.Console.MessageType.Error)
-            self._Events.on_unmanaged_fail()
-            return
+            return  # No skill reward window open, nothing to cancel
         
         while not UIManager.FrameExists(cancel_button_frame_id):
             yield from Routines.Yield.wait(1000)
@@ -36,7 +35,7 @@ class _UI:
         UIManager.FrameClick(cancel_button_frame_id)
         yield from Routines.Yield.wait(1000)
         
-    def _open_all_bags(self):
+    def iter_open_all_bags(self):
         from ...GlobalCache import GLOBAL_CACHE
         from ...Routines import Routines
         
@@ -45,7 +44,7 @@ class _UI:
         
         yield from Routines.Yield.Keybinds.ToggleAllBags()
         
-    def _close_all_bags(self):
+    def iter_close_all_bags(self):
         from ...GlobalCache import GLOBAL_CACHE
         from ...Routines import Routines
         
@@ -55,8 +54,9 @@ class _UI:
         yield from Routines.Yield.Keybinds.ToggleAllBags()
         
         
-    def _frame_click(self, frame_id:int):
+    def iter_frame_click(self, frame_id:int):
         from ...Routines import Routines
+        from ...GWUI import GWUI
         from ...UIManager import UIManager
         from ...Py4GWcorelib import ConsoleLog, Console
         yield from Routines.Yield.wait(500)
@@ -67,8 +67,9 @@ class _UI:
         UIManager.FrameClick(frame_id)
         yield from Routines.Yield.wait(500)
         
-    def _frame_click_on_bag_slot(self, bag_id:int, slot:int):
+    def iter_frame_click_on_bag_slot(self, bag_id:int, slot:int):
         from ...Routines import Routines
+        from ...GWUI import GWUI
         from ...UIManager import UIManager
         from ...Py4GWcorelib import ConsoleLog, Console
         yield from Routines.Yield.wait(500)
@@ -89,8 +90,9 @@ class _UI:
         UIManager.FrameClick(frame_id)
         yield from Routines.Yield.wait(125)
         
-    def _bag_item_click(self, bag_id:int, slot:int):
+    def iter_bag_item_click(self, bag_id:int, slot:int):
         from ...Routines import Routines
+        from ...GWUI import GWUI
         from ...UIManager import UIManager
         from ...Py4GWcorelib import ConsoleLog, Console
         yield from Routines.Yield.wait(500)
@@ -112,8 +114,9 @@ class _UI:
         yield from Routines.Yield.wait(125)
 
         
-    def _bag_item_double_click(self, bag_id:int, slot:int):
+    def iter_bag_item_double_click(self, bag_id:int, slot:int):
         from ...Routines import Routines
+        from ...GWUI import GWUI
         from ...UIManager import UIManager
         from ...Py4GWcorelib import ConsoleLog, Console
         yield from Routines.Yield.wait(500)
@@ -130,15 +133,15 @@ class _UI:
             ConsoleLog("UI Helper", f"Frame does not exist for bag {bag_id} slot {slot}.", Console.MessageType.Error)
             self._Events.on_unmanaged_fail()
             return
-        
-        UIManager.TestMouseAction(frame_id=frame_id, current_state=8, wparam_value=0, lparam_value=0)
-        yield from Routines.Yield.wait(125)
-        UIManager.TestMouseAction(frame_id=frame_id, current_state=4, wparam_value=0, lparam_value=0)
+
+        UIManager.TestMouseAction(frame_id=frame_id, current_state=9, wparam_value=0, lparam_value=0)
+        yield from Routines.Yield.wait(60)
+        UIManager.TestMouseClickAction(frame_id=frame_id, current_state=9, wparam_value=0, lparam_value=0)
         yield from Routines.Yield.wait(125)
     
     @_yield_step(label="CancelSkillRewardWindow", counter_key="CANCEL_SKILL_REWARD_WINDOW")
     def cancel_skill_reward_window(self):
-        yield from self._cancel_skill_reward_window()
+        yield from self.iter_cancel_skill_reward_window()
             
             
     @_yield_step(label="SendChatMessage", counter_key="SEND_CHAT_MESSAGE")
@@ -164,26 +167,26 @@ class _UI:
 
     @_yield_step(label="OpenAllBags", counter_key="OPEN_ALL_BAGS")
     def open_all_bags(self):
-        yield from self._open_all_bags()
+        yield from self.iter_open_all_bags()
     @_yield_step(label="CloseAllBags", counter_key="CLOSE_ALL_BAGS")
     def close_all_bags(self):
-        yield from self._close_all_bags()
+        yield from self.iter_close_all_bags()
         
     @_yield_step(label="FrameClick", counter_key="FRAME_CLICK")
     def frame_click(self, frame_id:int):
-        yield from self._frame_click(frame_id)
+        yield from self.iter_frame_click(frame_id)
         
     @_yield_step(label="FrameClickOnBagSlot", counter_key="FRAME_CLICK_ON_BAG_SLOT")
     def frame_click_on_bag_slot(self, bag_id:int, slot:int):
-        yield from self._frame_click_on_bag_slot(bag_id, slot)
+        yield from self.iter_frame_click_on_bag_slot(bag_id, slot)
         
     @_yield_step(label="BagItemClick", counter_key="BAG_ITEM_CLICK")
     def bag_item_click(self, bag_id:int, slot:int):
-        yield from self._bag_item_click(bag_id, slot)
+        yield from self.iter_bag_item_click(bag_id, slot)
         
     @_yield_step(label="BagItemDoubleClick", counter_key="BAG_ITEM_DOUBLE_CLICK")
     def bag_item_double_click(self, bag_id:int, slot:int):
-        yield from self._bag_item_double_click(bag_id, slot)
+        yield from self.iter_bag_item_double_click(bag_id, slot)
         
     class _Keybinds:
         def __init__(self, parent: "_UI"):

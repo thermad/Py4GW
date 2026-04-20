@@ -4,6 +4,7 @@ from .Player import Player
 from .Agent import Agent
 from typing import List, Tuple
 from .Context import GWContext
+from .py4gwcorelib_src.FrameCache import frame_cache
 
 class Party:
     @staticmethod
@@ -13,6 +14,7 @@ class Party:
 
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPartyID")
     def GetPartyID():
         """
         Retrieve the party ID.
@@ -22,6 +24,7 @@ class Party:
         return Party.party_instance().party_id
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPartyLeaderID")
     def GetPartyLeaderID():
         """
         Purpose: Get the agent ID of the party leader.
@@ -33,6 +36,7 @@ class Party:
         return Party.Players.GetAgentIDByLoginNumber(leader.login_number)
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetOwnPartyNumber")
     def GetOwnPartyNumber():
         """
         Purpose: Get the party number of the player.
@@ -46,8 +50,22 @@ class Party:
 
         # Return -1 if the player is not found in the party
         return -1
+    
+    @staticmethod
+    @frame_cache(category="Party", source_lib="GetPartyTarget")
+    def GetPartyTarget():
+        if not Party.IsPartyLoaded():
+            return 0
+        
+        players = Party.GetPlayers()
+        target = players[0].called_target_id
+        if Agent.IsValid(target):
+            return target
+        return 0
+
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPlayers")
     def GetPlayers():
         """
         Purpose: Get the list of player IDs in the party.
@@ -57,6 +75,7 @@ class Party:
         return Party.party_instance().players
     
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetHeroes")
     def GetHeroes():
         """
         Purpose: Get the list of hero IDs in the party.
@@ -66,6 +85,7 @@ class Party:
         return Party.party_instance().heroes
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetHenchmen")
     def GetHenchmen():
         """
         Purpose: Get the list of henchmen IDs in the party.
@@ -75,6 +95,7 @@ class Party:
         return Party.party_instance().henchmen
     
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetOthers")
     def GetOthers():
         """
         Purpose: Get the list of other party members.
@@ -84,6 +105,7 @@ class Party:
         return Party.party_instance().others
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsHardModeUnlocked")
     def IsHardModeUnlocked():
         """
         Check if hard mode is unlocked.
@@ -93,6 +115,7 @@ class Party:
         return Party.party_instance().is_hard_mode_unlocked
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsHardMode")
     def IsHardMode():
         """
         Check if the party is in hard mode.
@@ -102,6 +125,7 @@ class Party:
         return Party.party_instance().is_in_hard_mode
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsNormalMode")
     def IsNormalMode():
         """
         Check if the party is in normal mode.
@@ -111,6 +135,7 @@ class Party:
         return not Party.IsHardMode()
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPartySize")
     def GetPartySize():
         """
         Purpose: Retrieve the size of the party.
@@ -120,6 +145,7 @@ class Party:
         return Party.party_instance().party_size
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPlayerCount")
     def GetPlayerCount():
         """
         Purpose: Retrieve the number of players in the party.
@@ -129,6 +155,7 @@ class Party:
         return Party.party_instance().party_player_count
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetHeroCount")
     def GetHeroCount():
         """
         Purpose: Retrieve the number of heroes in the party.
@@ -138,6 +165,7 @@ class Party:
         return Party.party_instance().party_hero_count
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetHenchmanCount")
     def GetHenchmanCount():
         """
         Purpose: Retrieve the number of henchmen in the party.
@@ -147,6 +175,7 @@ class Party:
         return Party.party_instance().party_henchman_count
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsPartyDefeated")
     def IsPartyDefeated():
         """
         Purpose: Check if the party has been defeated.
@@ -156,6 +185,7 @@ class Party:
         return Party.party_instance().is_party_defeated
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsPartyLoaded")
     def IsPartyLoaded():
         """
         Purpose: Check if the party is loaded.
@@ -170,6 +200,7 @@ class Party:
         return Party.party_instance().is_party_loaded
     
     @staticmethod
+    @frame_cache(category="Party", source_lib="GetPartyMorale")
     def GetPartyMorale() -> List[Tuple[int, int]]:
         """
         Purpose: Retrieve the player's current party morale.
@@ -194,6 +225,7 @@ class Party:
             
     
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsPlayerLoaded")
     def IsPlayerLoaded():
         """
         Purpose: Check if the player is loaded in the party.
@@ -203,6 +235,7 @@ class Party:
         pass
 
     @staticmethod
+    @frame_cache(category="Party", source_lib="IsPartyLeader")
     def IsPartyLeader():
         """
         Purpose: Check if the player is the party leader.
@@ -343,6 +376,7 @@ class Party:
 
     class Players:
         @staticmethod
+        @frame_cache(category="Party.Players", source_lib="GetAgentIDByLoginNumber")
         def GetAgentIDByLoginNumber(login_number):
             """
             Retrieve the agent ID by login number.
@@ -353,6 +387,7 @@ class Party:
             return Party.party_instance().GetAgentIDByLoginNumber(login_number)
 
         @staticmethod
+        @frame_cache(category="Party.Players", source_lib="GetPlayerNameByLoginNumber")
         def GetPlayerNameByLoginNumber(login_number):
             """
             Retrieve the player name by login number.
@@ -363,6 +398,7 @@ class Party:
             return Party.party_instance().GetPlayerNameByLoginNumber(login_number)
 
         @staticmethod
+        @frame_cache(category="Party.Players", source_lib="GetPartyNumberFromLoginNumber")
         def GetPartyNumberFromLoginNumber(login_number):
             """
             Retrieve the party number from the login number.
@@ -379,6 +415,7 @@ class Party:
             return -1
 
         @staticmethod
+        @frame_cache(category="Party.Players", source_lib="GetLoginNumberByAgentID")
         def GetLoginNumberByAgentID(agent_id):
             """
             Retrieve the login number by agent ID.
@@ -420,6 +457,7 @@ class Party:
 
     class Heroes:
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroAgentIDByPartyPosition")
         def GetHeroAgentIDByPartyPosition(hero_position):
             """
             Retrieve the Agent ID by hero ID.
@@ -430,6 +468,7 @@ class Party:
             return Party.party_instance().GetHeroAgentID(hero_position)
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroAgentIDByHeroID")
         def GetHeroIDByAgentID(agent_id):
             """
             Retrieve the hero ID of an agent.
@@ -444,6 +483,7 @@ class Party:
 
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroIDByPartyPosition")
         def GetHeroIDByPartyPosition(hero_position):
             """
             Retrieve the hero ID by party position.
@@ -457,6 +497,7 @@ class Party:
                     return hero.hero_id.GetID()
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroAgentIDByHeroID")
         def GetHeroIdByName(hero_name):
             """
             Retrieve the hero ID by name.
@@ -468,6 +509,7 @@ class Party:
             return hero.GetID()
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroNameById")
         def GetHeroNameById(hero_id):
             """
             Retrieve the hero name by ID.
@@ -479,6 +521,7 @@ class Party:
             return hero.GetName()
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroNameByAgentID")
         def GetNameByAgentID(agent_id):
             """
             Retrieve the hero name by agent ID.
@@ -490,6 +533,46 @@ class Party:
             for hero in heroes:
                 if hero.agent_id == agent_id:
                     return hero.hero_id.GetName()
+            return ""
+
+        @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroPartyPositionByAgentID")
+        def GetHeroPartyPositionByAgentID(agent_id):
+            """
+            Retrieve the 0-based party position for a hero agent.
+            Args:
+                agent_id (int): The hero agent ID.
+            Returns: int
+            """
+            heroes = Party.GetHeroes()
+            for index, hero in enumerate(heroes):
+                if hero.agent_id == agent_id:
+                    return index
+            return -1
+
+        @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetTargetIDByAgentID")
+        def GetTargetIDByAgentID(agent_id):
+            """
+            Retrieve the locked target ID for a hero agent.
+            Args:
+                agent_id (int): The hero agent ID.
+            Returns: int
+            """
+            if Party.Heroes.GetHeroPartyPositionByAgentID(agent_id) < 0:
+                return 0
+
+            from .Context import GWContext
+
+            world_ctx = GWContext.World.GetContext()
+            if world_ctx is None:
+                return 0
+
+            hero_flags = world_ctx.hero_flags or []
+            for hero_flag in hero_flags:
+                if hero_flag.agent_id == agent_id:
+                    return int(hero_flag.locked_target_id)
+            return 0
 
 
         @staticmethod
@@ -598,6 +681,7 @@ class Party:
             return Party.party_instance().IsHeroFlagged(hero_party_number)
 
         @staticmethod
+        @frame_cache(category="Party.Heroes", source_lib="GetHeroFlag")
         def IsAllFlagged():
             """
             Check if all heroes are flagged.
