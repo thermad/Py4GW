@@ -92,6 +92,9 @@ class _MULTIBOX:
     def UseWarSupplies(self):
         from ...GlobalCache import GLOBAL_CACHE
         self._helpers.Multibox.use_consumable((ModelID.War_Supplies.value, GLOBAL_CACHE.Skill.GetID("Well_Supplied"), 0, 0))
+
+    def UseSummoningStone(self):
+        self._helpers.Multibox.use_summoning_stone()
    
    
     def UseConset(self):
@@ -133,6 +136,12 @@ class _MULTIBOX:
     def RestockResurrectionScroll(self, quantity: int = 250):
         self._helpers.Multibox.restock_resurrection_scroll(quantity)
 
+    def RestockSummoningStones(self, quantity: int = 250):
+        self._helpers.Multibox.restock_summoning_stones(quantity)
+
+    def WithdrawGold(self, target_gold: int = 10000, deposit_all: bool = True):
+        self._helpers.Multibox.withdraw_gold(target_gold, deposit_all)
+
     def EnableWidget(self, widget_name: str):
         self._helpers.Multibox.enable_widget(widget_name)
 
@@ -151,9 +160,29 @@ class _MULTIBOX:
             for widget_name in enable_widgets:
                 if not widget_handler.is_widget_enabled(widget_name):
                     widget_handler.enable_widget(widget_name)
+                if widget_name == "HeroAI":
+                    self.parent.ResetHeroAICombatState(
+                        active=True,
+                        following=True,
+                        avoidance=True,
+                        looting=True,
+                        targeting=True,
+                        combat=True,
+                        skills=True,
+                    )
             for widget_name in disable_widgets:
                 if widget_handler.is_widget_enabled(widget_name):
                     widget_handler.disable_widget(widget_name)
+                if widget_name == "HeroAI":
+                    self.parent.ResetHeroAICombatState(
+                        active=False,
+                        following=False,
+                        avoidance=False,
+                        looting=False,
+                        targeting=False,
+                        combat=False,
+                        skills=True,
+                    )
 
         for widget_name in enable_widgets:
             self.EnableWidget(widget_name)

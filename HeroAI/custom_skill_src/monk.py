@@ -227,9 +227,10 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Dwaynas_Sorrow")
         skill.SkillType = SkillType.Enchantment.value
-        skill.TargetAllegiance = Skilltarget.Ally.value
+        skill.TargetAllegiance = Skilltarget.MinionOrAllyNonEnchanted.value
         skill.Nature = SkillNature.Buff.value
-        skill.Conditions.LessLife = 0.25
+        skill.Conditions.LessLife = 0.4
+        skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -448,7 +449,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Renew_Life")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -463,7 +464,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Restore_Life")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -471,7 +472,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Resurrection_Chant")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -733,7 +734,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Rebirth")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -1091,7 +1092,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Light_of_Dwayna")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -1133,7 +1134,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Resurrect")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -1160,7 +1161,7 @@ class MonkSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Vengeance")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill

@@ -3,21 +3,18 @@ from __future__ import annotations
 from typing import Iterable
 
 from Py4GWCoreLib import ActionQueueManager, Agent, GLOBAL_CACHE, Key, Keystroke, Player, SharedCommandType
+from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import SHMEM_MAX_NUMBER_OF_SKILLS
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 
 ENGINE_NONE = "none"
-ENGINE_CUSTOM_BEHAVIORS = "custom_behaviors"
 ENGINE_HERO_AI = "hero_ai"
 
 
 def resolve_active_engine() -> str:
     """Detect active combat engine based on enabled widgets."""
     widget_handler = get_widget_handler()
-    cb_enabled = bool(widget_handler.is_widget_enabled("CustomBehaviors"))
     hero_ai_enabled = bool(widget_handler.is_widget_enabled("HeroAI"))
 
-    if cb_enabled:
-        return ENGINE_CUSTOM_BEHAVIORS
     if hero_ai_enabled:
         return ENGINE_HERO_AI
     return ENGINE_NONE
@@ -29,12 +26,12 @@ def resolve_engine_for_bot(bot=None, preferred_engine: str | None = None) -> str
     engine, then live widget detection.
     """
     explicit = str(preferred_engine or "").strip().lower()
-    if explicit in (ENGINE_CUSTOM_BEHAVIORS, ENGINE_HERO_AI, ENGINE_NONE):
+    if explicit in (ENGINE_HERO_AI, ENGINE_NONE):
         return explicit
 
     cfg = getattr(bot, "config", None) if bot is not None else None
     pinned = str(getattr(cfg, "_modular_start_engine", "") or "").strip().lower()
-    if pinned in (ENGINE_CUSTOM_BEHAVIORS, ENGINE_HERO_AI, ENGINE_NONE):
+    if pinned in (ENGINE_HERO_AI, ENGINE_NONE):
         return pinned
 
     return resolve_active_engine()
@@ -68,16 +65,6 @@ def is_party_looting_enabled(bot=None, preferred_engine: str | None = None) -> b
     Return whether looting is currently enabled for the active combat backend.
     """
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        try:
-            from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-                CustomBehaviorParty,
-            )
-
-            return bool(CustomBehaviorParty().get_party_is_looting_enabled())
-        except Exception:
-            return False
-
     if engine == ENGINE_HERO_AI:
         try:
             my_email = Player.GetAccountEmail()
@@ -124,62 +111,52 @@ def _set_hero_ai_option_for_same_party(option_name: str, value) -> int:
         if options is None or not hasattr(options, option_name):
             continue
         setattr(options, option_name, value)
+        GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account.AccountEmail, options)
         changed += 1
     return changed
 
 
-def set_auto_combat(enabled: bool, preferred_engine: str | None = None, bot=None) -> None:
+def _force_hero_ai_enabled_for_same_party() -> int:
+    changed = 0
+    for account in _iter_same_party_accounts(include_self=True):
+        options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account.AccountEmail)
+        if options is None:
+            continue
+        options.Active = True
+        options.Following = True
+        options.Looting = True
+        options.Targeting = True
+        options.Combat = True
+        for skill_index in range(SHMEM_MAX_NUMBER_OF_SKILLS):
+            options.Skills[skill_index] = True
+        GLOBAL_CACHE.ShMem.SetHeroAIOptionsByEmail(account.AccountEmail, options)
+        changed += 1
+    return changed
+
+
+def set_hero_ai_combat(enabled: bool, preferred_engine: str | None = None, bot=None) -> None:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        CustomBehaviorParty().set_party_is_combat_enabled(bool(enabled))
-        return
-
     if engine == ENGINE_HERO_AI:
-        _set_hero_ai_option_for_same_party("Combat", bool(enabled))
+        if enabled:
+            _force_hero_ai_enabled_for_same_party()
+        else:
+            _set_hero_ai_option_for_same_party("Combat", False)
 
 
 def set_auto_looting(enabled: bool, preferred_engine: str | None = None, bot=None) -> None:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        CustomBehaviorParty().set_party_is_looting_enabled(bool(enabled))
-        return
-
     if engine == ENGINE_HERO_AI:
         _set_hero_ai_option_for_same_party("Looting", bool(enabled))
 
 
 def set_auto_following(enabled: bool, preferred_engine: str | None = None, bot=None) -> None:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        CustomBehaviorParty().set_party_is_following_enabled(bool(enabled))
-        return
-
     if engine == ENGINE_HERO_AI:
         _set_hero_ai_option_for_same_party("Following", bool(enabled))
 
 
 def set_party_target(target_agent_id: int, preferred_engine: str | None = None, bot=None) -> None:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        CustomBehaviorParty().set_party_custom_target(int(target_agent_id))
-        return
-
     if engine == ENGINE_HERO_AI:
         # HeroAI follows GW's called target; emulate Ctrl+Space on current target.
         ActionQueueManager().AddAction("ACTION", Keystroke.PressAndReleaseCombo, [Key.Ctrl.value, Key.Space.value])
@@ -187,24 +164,6 @@ def set_party_target(target_agent_id: int, preferred_engine: str | None = None, 
 
 def flag_all_accounts(x: float, y: float, preferred_engine: str | None = None, bot=None) -> int:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        party = CustomBehaviorParty()
-        manager = party.party_flagging_manager
-        manager.auto_assign_emails_if_none_assigned()
-
-        changed = 0
-        for flag_index in range(12):
-            account_email = str(manager.get_flag_account_email(flag_index) or "")
-            if not account_email:
-                continue
-            manager.set_flag_position(flag_index, float(x), float(y))
-            changed += 1
-        return changed
-
     if engine == ENGINE_HERO_AI:
         # HeroAI backend: use PixelStack command instead of HeroAI flag fields.
         # This mirrors the desired "stack alts to coordinates" behavior for FoW.
@@ -229,14 +188,6 @@ def flag_all_accounts(x: float, y: float, preferred_engine: str | None = None, b
 
 def unflag_all_accounts(preferred_engine: str | None = None, bot=None) -> int:
     engine = resolve_engine_for_bot(bot, preferred_engine)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-            CustomBehaviorParty,
-        )
-
-        CustomBehaviorParty().party_flagging_manager.clear_all_flag_positions()
-        return 1
-
     if engine == ENGINE_HERO_AI:
         changed = 0
         for account in _iter_same_party_accounts(include_self=True):

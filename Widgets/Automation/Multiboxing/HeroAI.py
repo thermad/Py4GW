@@ -1,7 +1,6 @@
 #region Imports
 import math
 import os
-import random
 import sys
 import traceback
 import Py4GW
@@ -17,12 +16,14 @@ from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.routines_src.BehaviourTrees import BehaviorTree
 
 from HeroAI.cache_data import CacheData
+from HeroAI.follow_runtime import FollowExecutionState, execute_follower_follow
 
 from HeroAI.windows import (HeroAI_FloatingWindows ,HeroAI_Windows,)
 from HeroAI.ui_base import HeroAI_BaseUI
 from HeroAI.ui import (draw_configure_window, draw_skip_cutscene_overlay)
-from Py4GWCoreLib import (GLOBAL_CACHE, Agent, ActionQueueManager, LootConfig,
-                          Range, Routines, ThrottledTimer, SharedCommandType, Utils)
+from HeroAI import team_viewer_broadcast
+from Py4GWCoreLib import (GLOBAL_CACHE, Agent, LootConfig,
+                          Range, Routines, ThrottledTimer, SharedCommandType)
 from Py4GWCoreLib.py4gwcorelib_src.WidgetManager import get_widget_handler
 
 #region GLOBALS
@@ -89,6 +90,10 @@ def HandleOutOfCombat(cached_data: CacheData):
     if cached_data.data.in_aggro:
         return False
 
+    player_agent_id = Player.GetAgentID()
+    if cached_data.combat_handler.InCastingRoutine() or Agent.IsCasting(player_agent_id):
+        return False
+
     heroai_build.set_cached_data(cached_data)
     next(heroai_build.ProcessOOC(), None)
     return heroai_build.DidTickSucceed()
@@ -110,8 +115,7 @@ def HandleCombat(cached_data: CacheData):
 
 #region Following
 following_flag = False
-last_follow_move_point: tuple[float, float] | None = None
-follow_map_entry_signature: tuple[int, int, int, int] | None = None
+follow_execution_state = FollowExecutionState()
 FOLLOW_MODULE_NAME = "FollowingModule"
 FOLLOW_INI_FILENAMES = (
     "FollowModule_Formations.ini",
@@ -150,108 +154,11 @@ def EnsureFollowModuleIni() -> None:
     follow_ini_bootstrap_disable_after_create = True
 
 def Follow(cached_data: CacheData) -> BehaviorTree.NodeState:
-    global last_follow_move_point, follow_map_entry_signature
+    return execute_follower_follow(cached_data, follow_execution_state)
 
-    def _is_nonzero_xy(x: float, y: float) -> bool:
-        return abs(float(x)) > 0.001 or abs(float(y)) > 0.001
-
-    options = cached_data.account_options
-    if not options or not options.Following:  # halt operation if following is disabled
-        return BehaviorTree.NodeState.FAILURE
-
-    if not cached_data.follow_throttle_timer.IsExpired():
-        return BehaviorTree.NodeState.FAILURE
-
-    if Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
-        cached_data.follow_throttle_timer.Reset()
-        return BehaviorTree.NodeState.FAILURE
-
-    map_sig = (
-        int(Map.GetMapID()),
-        int(Map.GetRegion()[0]),
-        int(Map.GetDistrict()),
-        int(Map.GetLanguage()[0]),
-    )
-    if follow_map_entry_signature != map_sig:
-        follow_map_entry_signature = map_sig
-        last_follow_move_point = None
-
-    leader_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(0)
-    own_flag_active = bool(getattr(options, "IsFlagged", False)) and _is_nonzero_xy(
-        float(options.FlagPos.x),
-        float(options.FlagPos.y),
-    )
-    all_flag_active = (
-        leader_options is not None
-        and bool(getattr(leader_options, "IsFlagged", False))
-        and _is_nonzero_xy(float(leader_options.AllFlag.x), float(leader_options.AllFlag.y))
-    )
-
-    follow_threshold_raw = float(options.FollowMoveThreshold)
-    combat_threshold_raw = float(options.FollowMoveThresholdCombat)
-
-    if own_flag_active:
-        follow_x = float(options.FlagPos.x)
-        follow_y = float(options.FlagPos.y)
-        follow_z = 0
-    else:
-        if follow_threshold_raw < 0.0 and combat_threshold_raw < 0.0:
-            return BehaviorTree.NodeState.FAILURE
-        # Shared memory already publishes the resolved per-follower target.
-        # For AllFlag this is the follower's rotated slot around the flag anchor,
-        # not the raw anchor point itself.
-        follow_x = float(options.FollowPos.x)
-        follow_y = float(options.FollowPos.y)
-        follow_z = int(float(options.FollowPos.z))
-
-    is_melee = Agent.IsMelee(Player.GetAgentID())
-    if cached_data.data.in_aggro:
-        if combat_threshold_raw >= 0.0:
-            follow_distance = max(0.0, combat_threshold_raw)
-        else:
-            follow_distance = max(0.0, follow_threshold_raw)
-
-        if is_melee and not own_flag_active and not all_flag_active:
-            leader_agent_id = GLOBAL_CACHE.Party.GetPartyLeaderID()
-            if leader_agent_id:
-                leader_distance = Utils.Distance(Agent.GetXY(leader_agent_id), Player.GetXY())
-                if leader_distance <= follow_distance:
-                    return BehaviorTree.NodeState.FAILURE
-    else:
-        follow_distance = max(0.0, follow_threshold_raw)
-    if Utils.Distance((follow_x, follow_y), Player.GetXY()) <= follow_distance:
-        # Inside threshold: do not let follow preempt OOC/combat logic.
-        return BehaviorTree.NodeState.FAILURE
-
-    xx = follow_x
-    yy = follow_y
-    if last_follow_move_point is not None:
-        last_x, last_y = last_follow_move_point
-        if abs(xx - last_x) <= 10 and abs(yy - last_y) <= 10:
-            xx += random.uniform(-5.0, 5.0)
-            yy += random.uniform(-5.0, 5.0)
-
-    ActionQueueManager().ResetQueue("ACTION")
-    if follow_z == 0:
-        #Player.Move(xx, yy, follow_z)
-        Player.Move(xx, yy)
-    else:
-        from Py4GWCoreLib.UIManager import UIManager
-        from Py4GWCoreLib.enums_src.UI_enums import ControlAction
-        ActionQueueManager().AddAction("ACTION",UIManager.Keypress,ControlAction.ControlAction_TargetPartyMember1.value, 0)
-        ActionQueueManager().AddAction("ACTION",UIManager.Keypress,ControlAction.ControlAction_Follow.value, 0)
-
-
-    last_follow_move_point = (xx, yy)
-    cached_data.follow_throttle_timer.Reset()
-    # In combat and out of range: only melee follow should preempt combat.
-    if cached_data.data.in_aggro and is_melee:
-        return BehaviorTree.NodeState.SUCCESS
-    # Out of combat: keep follow non-blocking so OOC behavior can still run freely.
-    return BehaviorTree.NodeState.FAILURE
-
-def handle_UI (cached_data: CacheData):    
+def handle_UI (cached_data: CacheData):
     global HeroAI_BT
+    team_viewer_broadcast.tick()
     if not cached_data.ui_state_data.show_classic_controls:
         HeroAI_BaseUI.DrawEmbeddedWindow(cached_data)
     else:
@@ -382,10 +289,6 @@ GlobalGuardNode = BehaviorTree.SequenceNode(
                 not Agent.IsKnockedDown(Player.GetAgentID())
         ),
         
-        BehaviorTree.ConditionNode(
-            name="NotUserInterrupting",
-            condition_fn=lambda: not IsUserInterrupting()
-        ),
     ],
 )
   
@@ -404,7 +307,13 @@ CastingBlockNode = BehaviorTree.ConditionNode(
     
 def movement_interrupt() -> BehaviorTree.NodeState:
     if Agent.IsMoving(Player.GetAgentID()):
-        return BehaviorTree.NodeState.RUNNING   # block automation
+        return BehaviorTree.NodeState.SUCCESS   # block lower-priority automation for this tick
+    return BehaviorTree.NodeState.FAILURE      # allow next branch
+
+
+def user_interrupt() -> BehaviorTree.NodeState:
+    if IsUserInterrupting():
+        return BehaviorTree.NodeState.SUCCESS   # block lower-priority automation for this tick
     return BehaviorTree.NodeState.FAILURE      # allow next branch
 
 
@@ -433,6 +342,11 @@ HeroAI_BT = BehaviorTree.SequenceNode(name="HeroAI_Main_BT",
                 ),
 
                 # User / external movement override (blocks below)
+                BehaviorTree.ActionNode(
+                    name="UserInterrupt",
+                    action_fn=lambda: user_interrupt(),
+                ),
+
                 BehaviorTree.ActionNode(
                     name="MovementInterrupt",
                     action_fn=lambda: movement_interrupt(),
@@ -510,13 +424,13 @@ modulo = 0
 def main():
     global cached_data, map_quads, modulo
     
-    try:        
-        cached_data.Update()  
+    try:
+        cached_data.Update()
 
         if not _follow_ini_ready():
             get_widget_handler().enable_widget(FOLLOW_MODULE_NAME)
         HeroAI_FloatingWindows.update()
-        handle_UI(cached_data)  
+        handle_UI(cached_data)
         
         if initialize(cached_data):
             modulo += 1

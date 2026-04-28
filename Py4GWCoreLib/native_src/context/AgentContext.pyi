@@ -259,6 +259,7 @@ class AgentLiving:
     visible_effects: List[VisibleEffectStruct]
     is_bleeding: bool
     is_conditioned: bool
+    is_used_corpse: bool
     is_crippled: bool
     is_dead: bool
     is_deep_wounded: bool
@@ -270,6 +271,9 @@ class AgentLiving:
     is_in_combat_stance: bool
     has_quest: bool
     is_dead_by_type_map: bool
+    is_exploitable: bool
+    corpse_exploit_state: str
+    corpse_exploit_signature: tuple[int, ...]
     is_female: bool
     has_boss_glow: bool
     is_hiding_cape: bool
@@ -358,6 +362,8 @@ class AgentLivingStruct(AgentStruct):
     @property
     def is_conditioned(self) -> bool:...
     @property
+    def is_used_corpse(self) -> bool:...
+    @property
     def is_crippled(self) -> bool:...
     @property
     def is_dead(self) -> bool:...
@@ -379,6 +385,12 @@ class AgentLivingStruct(AgentStruct):
     def has_quest(self) -> bool:...
     @property
     def is_dead_by_type_map(self) -> bool:...
+    @property
+    def is_exploitable(self) -> bool:...
+    @property
+    def corpse_exploit_state(self) -> str:...
+    @property
+    def corpse_exploit_signature(self) -> tuple[int, ...]:...
     @property
     def is_female(self) -> bool:...
     @property

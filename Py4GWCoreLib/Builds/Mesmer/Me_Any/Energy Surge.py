@@ -74,7 +74,7 @@ class Energy_Surge(BuildMgr):
 
     def _get_bar_snapshot(self) -> _EnergySurgeBarSnapshot:
         snapshot = _EnergySurgeBarSnapshot()
-        snapshot.in_aggro = bool(Routines.Checks.Agents.InAggro())
+        snapshot.in_aggro = bool(self.IsInAggro())
         snapshot.dead_ally_in_spellcast = int(Routines.Agents.GetDeadAlly(Range.Spellcast.value) or 0)
 
         if not snapshot.in_aggro:
@@ -116,6 +116,24 @@ class Energy_Surge(BuildMgr):
 
         if snapshot.enemy_casting_spell_or_chant and (yield from self.skills.Mesmer.InspirationMagic.Power_Drain(energy_threshold_pct=0.30)):
             return True
+        
+        if snapshot.enemy_in_spellcast and (yield from self.skills.Any.PvE.Ebon_Vanguard_Assassin_Support()):
+            return True
+        
+        if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Energy_Surge()):
+            return True
+
+        if snapshot.enemy_casting and (yield from self.skills.Mesmer.DominationMagic.Cry_of_Frustration()):
+            return True
+
+        if snapshot.enemy_casting_spell_or_chant and (yield from self.skills.Mesmer.InspirationMagic.Power_Drain()):
+            return True
+
+        if snapshot.enemy_casting and (yield from self.skills.Mesmer.DominationMagic.Overload()):
+            return True
+
+        if snapshot.enemy_casting and (yield from self.skills.Any.PvE.Cry_of_Pain(require_mesmer_hex=True)):
+            return True
 
         if snapshot.enemy_casting_spell and (yield from self.skills.Mesmer.DominationMagic.Mistrust()):
             return True
@@ -123,28 +141,10 @@ class Energy_Surge(BuildMgr):
         if (yield from self.skills.Mesmer.DominationMagic.Shatter_Hex()):
             return True
 
-        if snapshot.enemy_casting_spell_or_chant and (yield from self.skills.Mesmer.InspirationMagic.Power_Drain()):
-            return True
-
-        if snapshot.enemy_casting and (yield from self.skills.Any.PvE.Cry_of_Pain(allow_hex_fallback=False)):
-            return True
-
-        if snapshot.enemy_casting and (yield from self.skills.Mesmer.DominationMagic.Cry_of_Frustration()):
-            return True
-
-        if snapshot.enemy_casting and (yield from self.skills.Mesmer.DominationMagic.Overload()):
-            return True
-
-        if snapshot.enemy_in_spellcast and (yield from self.skills.Any.PvE.Ebon_Vanguard_Assassin_Support()):
+        if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Unnatural_Signet()):
             return True
 
         if snapshot.enemy_in_spellcast and (yield from self.skills.Any.PvE.Cry_of_Pain()):
-            return True
-
-        if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Energy_Surge()):
-            return True
-
-        if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Unnatural_Signet()):
             return True
 
         yield

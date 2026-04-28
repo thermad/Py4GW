@@ -613,7 +613,7 @@ class RitualistSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Death_Pact_Signet")
         skill.SkillType = SkillType.Signet.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -629,7 +629,7 @@ class RitualistSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Flesh_of_My_Flesh")
         skill.SkillType = SkillType.Spell.value
-        skill.TargetAllegiance = Skilltarget.DeadAlly.value
+        skill.TargetAllegiance = Skilltarget.ResurrectionAlly.value
         skill.Nature = SkillNature.Resurrection.value
         skill.Conditions.IsAlive = False
         skill_data[skill.SkillID] = skill
@@ -658,6 +658,7 @@ class RitualistSkills:
         skill.TargetAllegiance = Skilltarget.Self.value
         skill.Nature = SkillNature.Buff.value
         skill.Conditions.IsOutOfCombat = False
+        skill.Conditions.CloseToAggro = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -723,9 +724,9 @@ class RitualistSkills:
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Recuperation")
         skill.SkillType = SkillType.Ritual.value
         skill.TargetAllegiance = Skilltarget.Self.value
-        skill.Nature = SkillNature.Healing.value
+        skill.Nature = SkillNature.CustomA.value
         skill.Conditions.IsOutOfCombat = False
-        skill.Conditions.MinSpiritHpFractionForRecast = 0.20
+        skill.Conditions.AllowRecastAtLife = 0.20
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()

@@ -2,25 +2,15 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .actions_party import apply_auto_combat_state, apply_auto_looting_state
-from .combat_engine import ENGINE_CUSTOM_BEHAVIORS, ENGINE_HERO_AI, is_party_looting_enabled, resolve_engine_for_bot
+from .actions_party import apply_hero_ai_combat_state, apply_auto_looting_state
+from .combat_engine import ENGINE_HERO_AI, is_party_looting_enabled, resolve_engine_for_bot
 from .step_context import StepContext
 from .step_selectors import resolve_agent_xy_from_step, resolve_item_model_id_from_step
 from .step_utils import wait_after_step
 
 
-def _current_auto_combat_enabled(ctx: StepContext) -> bool:
+def _current_hero_ai_combat_enabled(ctx: StepContext) -> bool:
     engine = resolve_engine_for_bot(ctx.bot)
-    if engine == ENGINE_CUSTOM_BEHAVIORS:
-        try:
-            from Sources.oazix.CustomBehaviors.primitives.parties.custom_behavior_party import (
-                CustomBehaviorParty,
-            )
-
-            return bool(CustomBehaviorParty().get_party_is_combat_enabled())
-        except Exception:
-            return False
-
     if engine == ENGINE_HERO_AI:
         try:
             from Py4GWCoreLib import GLOBAL_CACHE, Player
@@ -35,8 +25,6 @@ def _current_auto_combat_enabled(ctx: StepContext) -> bool:
             return bool(ctx.bot.Properties.IsActive("hero_ai"))
         return False
 
-    if ctx.bot.Properties.exists("auto_combat"):
-        return bool(ctx.bot.Properties.IsActive("auto_combat"))
     if ctx.bot.Properties.exists("hero_ai"):
         return bool(ctx.bot.Properties.IsActive("hero_ai"))
     return False
@@ -44,7 +32,7 @@ def _current_auto_combat_enabled(ctx: StepContext) -> bool:
 
 def _current_auto_looting_enabled(ctx: StepContext) -> bool:
     engine = resolve_engine_for_bot(ctx.bot)
-    if engine in (ENGINE_CUSTOM_BEHAVIORS, ENGINE_HERO_AI):
+    if engine == ENGINE_HERO_AI:
         try:
             return bool(is_party_looting_enabled(bot=ctx.bot, preferred_engine=engine))
         except Exception:
@@ -58,7 +46,7 @@ def _current_auto_looting_enabled(ctx: StepContext) -> bool:
 def _wrap_dialog_with_auto_state_guard(ctx: StepContext, action_factory: Callable):
     def _guarded_dialog():
         looting_was_enabled = _current_auto_looting_enabled(ctx)
-        combat_was_enabled = _current_auto_combat_enabled(ctx)
+        combat_was_enabled = _current_hero_ai_combat_enabled(ctx)
         pause_on_danger_exists = bool(ctx.bot.Properties.exists("pause_on_danger"))
         pause_on_danger_was_active = (
             bool(ctx.bot.Properties.IsActive("pause_on_danger")) if pause_on_danger_exists else False
@@ -67,7 +55,7 @@ def _wrap_dialog_with_auto_state_guard(ctx: StepContext, action_factory: Callabl
         if looting_was_enabled:
             apply_auto_looting_state(ctx.bot, False)
         if combat_was_enabled:
-            apply_auto_combat_state(ctx.bot, False)
+            apply_hero_ai_combat_state(ctx.bot, False)
 
         try:
             yield from action_factory()
@@ -75,7 +63,7 @@ def _wrap_dialog_with_auto_state_guard(ctx: StepContext, action_factory: Callabl
             if looting_was_enabled:
                 apply_auto_looting_state(ctx.bot, True)
             if combat_was_enabled:
-                apply_auto_combat_state(ctx.bot, True)
+                apply_hero_ai_combat_state(ctx.bot, True)
             if pause_on_danger_exists:
                 ctx.bot.Properties.ApplyNow("pause_on_danger", "active", pause_on_danger_was_active)
 

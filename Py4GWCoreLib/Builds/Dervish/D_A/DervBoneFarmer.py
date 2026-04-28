@@ -12,7 +12,7 @@ from Py4GWCoreLib import Skill
 from Py4GWCoreLib import SpiritModelID
 from Py4GWCoreLib import Weapon
 from Py4GWCoreLib import Agent
-from Py4GWCoreLib.Builds.Any.AutoCombat import AutoCombat
+from Py4GWCoreLib.Builds.Any.HeroAI import HeroAI_Build
 
 ENEMY_BLACKLIST = {SpiritModelID.BLOODSONG, SpiritModelID.DESTRUCTION, AgentModelID.CHARR_AXEMASTER}
 
@@ -33,6 +33,7 @@ class DervBoneFarmer(BuildMgr):
             required_primary=Profession.Dervish,
             required_secondary=Profession.Assassin,
             template_code='OgCjkqqLrSYiihdftXjhOXhX0kA',
+            is_combat_automator_compatible=False,
             required_skills=[
                 GLOBAL_CACHE.Skill.GetID("Signet_of_Mystic_Speed"),
                 GLOBAL_CACHE.Skill.GetID("Pious_Fury"),
@@ -47,7 +48,7 @@ class DervBoneFarmer(BuildMgr):
         if match_only:
             return
 
-        self.SetFallback("AutoCombat", AutoCombat())
+        self.SetFallback("HeroAI", HeroAI_Build(standalone_fallback=True))
         # assign extra skill attributes from the already populated self.skills
         self.signet_of_mystic_speed = self.skills[0]
         self.pious_fury = self.skills[1]
@@ -142,7 +143,7 @@ class DervBoneFarmer(BuildMgr):
 
             if (
                 yield from Routines.Yield.Skills.IsSkillIDUsable(self.grenths_aura)
-                and Routines.Yield.Skills.IsSkillIDUsable(self.vow_of_silence)
+                and (yield from Routines.Yield.Skills.IsSkillIDUsable(self.vow_of_silence))
             ) and has_signet_of_mystic_speed:
                 ActionQueueManager().ResetAllQueues()
                 yield from self._CastSkillID(self.pious_fury, aftercast_delay=100)
@@ -175,7 +176,7 @@ class DervBoneFarmer(BuildMgr):
                     and vos_buff_time_remaining > 2000
                     and not (
                         yield from Routines.Yield.Skills.IsSkillIDUsable(self.grenths_aura)
-                        and Routines.Yield.Skills.IsSkillIDUsable(self.vow_of_silence)
+                        and (yield from Routines.Yield.Skills.IsSkillIDUsable(self.vow_of_silence))
                     )
                 ):
                     yield from self.swap_to_scythe()

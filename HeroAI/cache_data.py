@@ -43,6 +43,9 @@ class GameData:
         
         #combat field data
         self.in_aggro = False
+        self.leader_in_aggro = False
+        self.party_in_aggro = False
+        self.party_position = -1
         self.weapon_type = 0
               
         
@@ -200,6 +203,16 @@ class CacheData:
         filtered = AgentArray.Filter.ByDistance(enemy_array, player_pos, aggro_range)
         filtered = [e for e in filtered if Agent.IsAlive(e) and not bl.is_blacklisted(e)]
         return len(filtered) > 0
+    
+    def GetActiveScanRange(self) -> float:
+        from .settings import Settings
+
+        if Settings().get_combat_range_mode() == Settings.COMBAT_RANGE_MODE_LEGACY:
+            return Range.Earshot.value if self.stay_alert_timer.HasElapsed(STAY_ALERT_TIME) else Range.Spellcast.value
+
+        HighRange = Range.Longbow.value if not self.data.party_in_aggro else Range.Spellcast.value
+        LowRange = Range.Longbow.value if self.data.party_in_aggro else Range.Earshot.value
+        return LowRange if self.stay_alert_timer.HasElapsed(STAY_ALERT_TIME) else HighRange
         
     def UpdateCombat(self):
         self.combat_handler.Update(self)
@@ -234,22 +247,32 @@ class CacheData:
                 
                 self.account_data = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(self.account_email) or self.account_data
                 self.account_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(self.account_email) or self.account_options
+                self.data.party_position = int(self.account_data.AgentPartyData.PartyPosition)
                 
-                if self.stay_alert_timer.HasElapsed(STAY_ALERT_TIME):
-                    self.data.in_aggro = self.InAggro(AgentArray.GetEnemyArray(), Range.Earshot.value)
-                else:
-                    self.data.in_aggro = self.InAggro(AgentArray.GetEnemyArray(), Range.Spellcast.value)
+                from .utils import SameMapOrPartyAsAccount
+
+                self.data.party_in_aggro = False
+                self.data.leader_in_aggro = False
+                for account in self.party:
+                    if not account.IsSlotActive or not SameMapOrPartyAsAccount(account):
+                        continue
+                    account_in_aggro = bool(account.InAggro)
+                    if int(account.AgentPartyData.PartyPosition) == 0:
+                        self.data.leader_in_aggro = account_in_aggro
+                    if account_in_aggro:
+                        self.data.party_in_aggro = True
+                    
+                self.data.in_aggro = self.InAggro(AgentArray.GetEnemyArray(), self.GetActiveScanRange())
                     
                 if self.data.in_aggro:
                     self.stay_alert_timer.Reset()
                     
                 if not self.stay_alert_timer.HasElapsed(STAY_ALERT_TIME):
                     self.data.in_aggro = True
-                    
                 self.auto_attack_time = self.GetWeaponAttackAftercast()
                 
         except Exception as e:
-            ConsoleLog(f"Update Cahe Data Error:", e)
+            ConsoleLog(f"Update Cache Data Error:", e)
                        
             
                      

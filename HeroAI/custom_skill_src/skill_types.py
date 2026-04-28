@@ -23,6 +23,7 @@ class CastConditions:
         # Special Conditions
         self.HasWeaponSpell = False
         self.WeaponSpellList = []
+        self.AllowOverlapWeaponSpell = False
         self.HasEnchantment = False
         self.EnchantmentList = []
         self.HasDervishEnchantment = False
@@ -54,7 +55,6 @@ class CastConditions:
         # cast is skipped when the caster is already near full.
         self.LessSelfEnergyPercentage = 0.0
         self.Overcast = 0.0
-        self.Overcast = 0.0
         self.SacrificeHealth = 0.0
         # Fraction of the caster's max HP that this skill sacrifices on cast (e.g. 0.33 for BiP).
         # Used by the post-sacrifice safety floors below to compute hp_after_sacrifice.
@@ -74,7 +74,9 @@ class CastConditions:
         # spirit of this skill as absent once its HP drops below this fraction,
         # allowing a preemptive recast before the spirit dies. 0.0 = disabled
         # (default), matches the pre-change binary alive/dead gate.
-        self.MinSpiritHpFractionForRecast = 0.0
+        self.AllowRecastAtLife = 0.0
+
+        self.CloseToAggro = False
 
         # combat field checks
         self.EnemiesInRange = 0
@@ -96,3 +98,19 @@ class CustomSkill:
         self.TargetAllegiance = Skilltarget.Enemy.value
         self.Nature = SkillNature.Offensive.value
         self.Conditions = CastConditions()
+        # When True, this skill participates in the cross-hero whiteboard:
+        # before casting, other heroes in the same IsolationGroupID who see an
+        # unexpired (SkillID, TargetAgentID) claim will skip this slot.
+        self.CoordinatesViaWhiteboard: bool = False
+        # Skill-wide lock. Unlike CoordinatesViaWhiteboard, this blocks on
+        # SkillID only (target_id=0), so only one account in the same
+        # IsolationGroupID can cast this skill during the lease.
+        self.SkillLock: bool = False
+        # Extra milliseconds added to the skill lock lease after the normal
+        # activation + aftercast window. Use this to stagger repeated team
+        # casts of skills such as Technobabble.
+        self.SkillLockAftercastMs: int = 0
+        # When True, the caster calls the resolved enemy target and posts a
+        # CALL_TARGET whiteboard lock before casting, so party members converge
+        # on the same spike target.
+        self.SpikeLock: bool = False

@@ -69,7 +69,7 @@ class Checks:
             if not enemy_array:
                 return 0
 
-            radius = aggro_area.value
+            radius = aggro_area.value if hasattr(aggro_area, "value") else float(aggro_area)
             radius_sq = radius * radius
             self_agent_id = Player.GetAgentID()
 
@@ -702,7 +702,7 @@ class Checks:
             if not player_pos:
                 return False
 
-            radius = aggro_area.value
+            radius = aggro_area.value if hasattr(aggro_area, "value") else float(aggro_area)
             radius_sq = radius * radius
             px, py = player_pos
 
@@ -917,10 +917,9 @@ class Checks:
                 skill_id (int): The skill ID to check.
             Returns: bool
             """
-            from ..GlobalCache import GLOBAL_CACHE
             from ..Agent import Agent
             player_energy = Agent.GetEnergy(agent_id) * Agent.GetMaxEnergy(agent_id)
-            skill_energy = GLOBAL_CACHE.Skill.Data.GetEnergyCost(skill_id)
+            skill_energy = Checks.Skills.GetEnergyCostWithEffects(skill_id, agent_id)
             return player_energy >= skill_energy
         
         @staticmethod

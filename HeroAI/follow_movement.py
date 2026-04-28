@@ -7,6 +7,7 @@ from Py4GWCoreLib import Agent, Range, ThrottledTimer, Utils
 from Py4GWCoreLib.AgentArray import AgentArray
 from Py4GWCoreLib.IniManager import IniManager
 from Py4GWCoreLib.Player import Player
+from Py4GWCoreLib.Py4GWcorelib import VectorFields
 
 
 @dataclass(slots=True)
@@ -24,6 +25,18 @@ _FOLLOW_RUNTIME_KEY = ""
 _FOLLOW_MOVEMENT_VARS_REGISTERED = False
 _FOLLOW_MOVEMENT_CACHE: FollowMovementConfig | None = None
 _FOLLOW_MOVEMENT_CACHE_TIMER = ThrottledTimer(1000)
+_FOLLOW_RUNTIME_SECTION = "FollowRuntime"
+
+
+def _write_follow_movement_value(im: IniManager, key: str, name: str, value: float) -> None:
+    im.write_key(key, _FOLLOW_RUNTIME_SECTION, name, float(value))
+    node = im._get_node(key)
+    if node:
+        text_value = str(float(value))
+        node.ini_handler.write_key(_FOLLOW_RUNTIME_SECTION, name, text_value)
+        node.cached_values[(_FOLLOW_RUNTIME_SECTION, name)] = text_value
+        node.pending_writes.pop((_FOLLOW_RUNTIME_SECTION, name), None)
+        node.needs_flush = bool(node.pending_writes)
 
 
 def _ensure_follow_runtime_key() -> str:
@@ -120,31 +133,31 @@ def load_follow_movement_config(force_reload: bool = False) -> FollowMovementCon
     _FOLLOW_MOVEMENT_CACHE = FollowMovementConfig(
         slot_recovery_distance=max(
             1.0,
-            float(im.getFloat(key, "slot_recovery_distance", float(Range.Nearby.value), section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "slot_recovery_distance", float(Range.Nearby.value))),
         ),
         ally_repulsion_radius=max(
             0.0,
-            float(im.getFloat(key, "ally_repulsion_radius", float(Range.Adjacent.value), section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "ally_repulsion_radius", float(Range.Adjacent.value))),
         ),
         ally_repulsion_weight=max(
             0.0,
-            float(im.getFloat(key, "ally_repulsion_weight", 0.65, section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "ally_repulsion_weight", 0.65)),
         ),
         enemy_repulsion_radius=max(
             0.0,
-            float(im.getFloat(key, "enemy_repulsion_radius", float(Range.Nearby.value), section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "enemy_repulsion_radius", float(Range.Nearby.value))),
         ),
         enemy_repulsion_weight=max(
             0.0,
-            float(im.getFloat(key, "enemy_repulsion_weight", 0.45, section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "enemy_repulsion_weight", 0.45)),
         ),
         local_move_clamp=max(
             1.0,
-            float(im.getFloat(key, "local_move_clamp", float(Range.Area.value), section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "local_move_clamp", float(Range.Area.value))),
         ),
         min_move_threshold=max(
             0.0,
-            float(im.getFloat(key, "min_move_threshold", 15.0, section="FollowRuntime")),
+            float(im.read_float(key, _FOLLOW_RUNTIME_SECTION, "min_move_threshold", 15.0)),
         ),
     )
     _FOLLOW_MOVEMENT_CACHE_TIMER.Reset()
@@ -159,14 +172,21 @@ def save_follow_movement_config(config: FollowMovementConfig) -> None:
         return
 
     im = IniManager()
-    im.set(key, "slot_recovery_distance", float(config.slot_recovery_distance), section="FollowRuntime")
-    im.set(key, "ally_repulsion_radius", float(config.ally_repulsion_radius), section="FollowRuntime")
-    im.set(key, "ally_repulsion_weight", float(config.ally_repulsion_weight), section="FollowRuntime")
-    im.set(key, "enemy_repulsion_radius", float(config.enemy_repulsion_radius), section="FollowRuntime")
-    im.set(key, "enemy_repulsion_weight", float(config.enemy_repulsion_weight), section="FollowRuntime")
-    im.set(key, "local_move_clamp", float(config.local_move_clamp), section="FollowRuntime")
-    im.set(key, "min_move_threshold", float(config.min_move_threshold), section="FollowRuntime")
+    im.set(key, "slot_recovery_distance", float(config.slot_recovery_distance), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "ally_repulsion_radius", float(config.ally_repulsion_radius), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "ally_repulsion_weight", float(config.ally_repulsion_weight), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "enemy_repulsion_radius", float(config.enemy_repulsion_radius), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "enemy_repulsion_weight", float(config.enemy_repulsion_weight), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "local_move_clamp", float(config.local_move_clamp), section=_FOLLOW_RUNTIME_SECTION)
+    im.set(key, "min_move_threshold", float(config.min_move_threshold), section=_FOLLOW_RUNTIME_SECTION)
     im.save_vars(key)
+    _write_follow_movement_value(im, key, "slot_recovery_distance", config.slot_recovery_distance)
+    _write_follow_movement_value(im, key, "ally_repulsion_radius", config.ally_repulsion_radius)
+    _write_follow_movement_value(im, key, "ally_repulsion_weight", config.ally_repulsion_weight)
+    _write_follow_movement_value(im, key, "enemy_repulsion_radius", config.enemy_repulsion_radius)
+    _write_follow_movement_value(im, key, "enemy_repulsion_weight", config.enemy_repulsion_weight)
+    _write_follow_movement_value(im, key, "local_move_clamp", config.local_move_clamp)
+    _write_follow_movement_value(im, key, "min_move_threshold", config.min_move_threshold)
     _FOLLOW_MOVEMENT_CACHE = FollowMovementConfig(
         slot_recovery_distance=float(config.slot_recovery_distance),
         ally_repulsion_radius=float(config.ally_repulsion_radius),
@@ -257,64 +277,90 @@ def compute_mixed_follow_target(
     follow_distance: float,
     in_combat: bool,
     config: FollowMovementConfig | None = None,
+    ally_positions: list[tuple[float, float]] | None = None,
+    enemy_positions: list[tuple[float, float]] | None = None,
 ) -> tuple[float, float] | None:
     cfg = config or load_follow_movement_config()
+    target_tolerance = max(0.0, follow_distance)
 
-    slot_dx = assigned_pos[0] - current_pos[0]
-    slot_dy = assigned_pos[1] - current_pos[1]
-    slot_norm_x, slot_norm_y, slot_distance = _normalize(slot_dx, slot_dy)
+    slot_distance = Utils.Distance(current_pos, assigned_pos)
+    attraction_active = slot_distance > target_tolerance
 
-    if slot_distance <= max(0.0, follow_distance) and not in_combat:
+    if slot_distance <= target_tolerance and not in_combat:
         return None
 
-    if slot_distance > cfg.slot_recovery_distance:
-        move_amount = min(slot_distance, cfg.local_move_clamp)
-        if move_amount < cfg.min_move_threshold:
-            return None
-        return (
-            current_pos[0] + (slot_norm_x * move_amount),
-            current_pos[1] + (slot_norm_y * move_amount),
-        )
+    repulsion_positions: list[tuple[float, float]] = []
+    active_ally_count = 0
+    active_enemy_count = 0
 
-    result_x = 0.0
-    result_y = 0.0
+    ally_positions = ally_positions if ally_positions is not None else _collect_nearby_allies()
+    for ally_pos in ally_positions:
+        if cfg.ally_repulsion_radius <= 0.0:
+            break
+        if Utils.Distance(current_pos, ally_pos) < cfg.ally_repulsion_radius:
+            repulsion_positions.append(ally_pos)
+            active_ally_count += 1
 
-    if slot_distance > follow_distance:
-        attraction_amount = slot_distance - follow_distance
-        result_x += slot_norm_x * attraction_amount
-        result_y += slot_norm_y * attraction_amount
+    enemy_positions = enemy_positions if enemy_positions is not None else _collect_nearby_enemies()
+    for enemy_pos in enemy_positions:
+        if cfg.enemy_repulsion_radius <= 0.0:
+            break
+        if Utils.Distance(current_pos, enemy_pos) < cfg.enemy_repulsion_radius:
+            repulsion_positions.append(enemy_pos)
+            active_enemy_count += 1
 
-    if in_combat:
-        ally_repulsion_x, ally_repulsion_y = _accumulate_repulsion(
-            current_pos,
-            _collect_nearby_allies(),
-            cfg.ally_repulsion_radius,
-            cfg.ally_repulsion_weight,
-        )
-        enemy_repulsion_x, enemy_repulsion_y = _accumulate_repulsion(
-            current_pos,
-            _collect_nearby_enemies(),
-            cfg.enemy_repulsion_radius,
-            cfg.enemy_repulsion_weight,
-        )
-        result_x += ally_repulsion_x + enemy_repulsion_x
-        result_y += ally_repulsion_y + enemy_repulsion_y
+    if not attraction_active and not repulsion_positions:
+        return None
 
+    max_repulsion_radius = max(cfg.ally_repulsion_radius, cfg.enemy_repulsion_radius, 1.0)
+    max_attraction_radius = max(1500.0, slot_distance + 1.0)
+    vf = VectorFields(
+        current_pos,
+        custom_repulsion_radius=int(max_repulsion_radius),
+        custom_attraction_radius=int(max_attraction_radius),
+    )
+
+    for repulsion_pos in repulsion_positions:
+        vf.add_custom_repulsion_position(repulsion_pos)
+
+    if attraction_active:
+        vf.add_custom_attraction_position(assigned_pos)
+
+    result_x, result_y = vf.compute_combined_vector()
     move_norm_x, move_norm_y, move_distance = _normalize(result_x, result_y)
-    if move_distance < cfg.min_move_threshold:
+    if move_distance <= 0.001:
         return None
 
-    if move_distance > cfg.local_move_clamp:
-        result_x = move_norm_x * cfg.local_move_clamp
-        result_y = move_norm_y * cfg.local_move_clamp
+    movement_scale = 50.0
+    if attraction_active:
+        distance_error = max(0.0, slot_distance - target_tolerance)
+        if slot_distance > cfg.slot_recovery_distance:
+            movement_scale = max(
+                movement_scale,
+                min(distance_error, cfg.local_move_clamp),
+            )
+        else:
+            attraction_weight_factor = min(max(distance_error / 200.0, 1.0), 5.0)
+            movement_scale *= attraction_weight_factor
+
+    if active_ally_count > 0:
+        movement_scale *= max(cfg.ally_repulsion_weight, 0.1)
+
+    if active_enemy_count > 0:
+        movement_scale *= max(cfg.enemy_repulsion_weight, 0.1)
+
+    movement_scale = max(movement_scale, cfg.min_move_threshold)
+    movement_scale = min(movement_scale, cfg.local_move_clamp)
+    result_x = move_norm_x * movement_scale
+    result_y = move_norm_y * movement_scale
 
     candidate = (
         current_pos[0] + result_x,
         current_pos[1] + result_y,
     )
 
-    if slot_distance <= follow_distance:
-        candidate = _clamp_point_to_radius(candidate, assigned_pos, max(follow_distance, cfg.min_move_threshold))
+    if slot_distance <= target_tolerance:
+        candidate = _clamp_point_to_radius(candidate, assigned_pos, max(target_tolerance, cfg.min_move_threshold))
 
     if Utils.Distance(candidate, current_pos) < cfg.min_move_threshold:
         return None

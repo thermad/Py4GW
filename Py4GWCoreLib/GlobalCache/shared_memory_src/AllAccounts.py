@@ -4,6 +4,12 @@ import Py4GW
 from PyParty import HeroPartyMember, PetInfo
 from ctypes import Structure, c_float
 from Py4GWCoreLib.enums_src.Multiboxing_enums import SharedCommandType
+from Py4GWCoreLib.enums_src.Whiteboard_enums import (
+    WhiteboardClaimStrength,
+    WhiteboardLockKind,
+    WhiteboardLockMode,
+    WhiteboardReentryPolicy,
+)
 from Py4GWCoreLib.py4gwcorelib_src.Console import ConsoleLog
 
 from .Globals import (
@@ -11,16 +17,23 @@ from .Globals import (
     SHMEM_MODULE_NAME,
     SHMEM_SUBSCRIBE_TIMEOUT_MILLISECONDS,
     SHMEM_MAX_CHAR_LEN,
-    SHMEM_MAX_NUMBER_OF_SKILLS
-    
+    SHMEM_MAX_NUMBER_OF_SKILLS,
+    SHMEM_MAX_INTENTS,
 )
 
 from .SharedMessageStruct import SharedMessageStruct
 from .HeroAIOptionStruct import HeroAIOptionStruct
 from .AccountStruct import AccountStruct
 from .KeyStruct import KeyStruct
+from .IntentStruct import IntentStruct
 
-#region AllAccounts 
+# Flip this to False to silence whiteboard POST/CLEAR/SWEEP console logs.
+# Can also be toggled at runtime:
+#   from Py4GWCoreLib.GlobalCache.shared_memory_src import AllAccounts as _wb_mod
+#   _wb_mod.WHITEBOARD_DEBUG = False
+WHITEBOARD_DEBUG: bool = False
+
+#region AllAccounts
 class AllAccounts(Structure):
     _pack_ = 1
     _fields_ = [
@@ -28,14 +41,16 @@ class AllAccounts(Structure):
         ("AccountData", AccountStruct * SHMEM_MAX_PLAYERS),
         ("Inbox", SharedMessageStruct * SHMEM_MAX_PLAYERS),  # Messages for each player
         ("HeroAIOptions", HeroAIOptionStruct * SHMEM_MAX_PLAYERS),  # Game options for HeroAI
+        ("Intents", IntentStruct * SHMEM_MAX_INTENTS),  # Cross-hero cast-intent whiteboard
     ]
-    
+
     # Type hints for IntelliSense
     AccountData: list["AccountStruct"]
     Inbox: list["SharedMessageStruct"]
     HeroAIOptions: list[HeroAIOptionStruct]
     Keys: list["KeyStruct"]
-    
+    Intents: list["IntentStruct"]
+
     def reset(self) -> None:
         """Reset all fields to zero."""
         for i in range(SHMEM_MAX_PLAYERS):
@@ -43,6 +58,8 @@ class AllAccounts(Structure):
             self.AccountData[i].reset()
             self.Inbox[i].reset()
             self.HeroAIOptions[i].reset()
+        for i in range(SHMEM_MAX_INTENTS):
+            self.Intents[i].reset()
             
     #region Account
     def GetAccountData(self, index: int) -> AccountStruct:
@@ -864,3 +881,309 @@ class AllAccounts(Structure):
                 f"Invalid message index: {message_index}.",
                 Py4GW.Console.MessageType.Error
             )
+
+    #region Whiteboard (cross-hero cast-intent)
+
+    def _wb_log(self, msg: str) -> None:
+        """Gated debug log for whiteboard state transitions."""
+        if not WHITEBOARD_DEBUG:
+            return
+        ConsoleLog("Whiteboard", msg, Py4GW.Console.MessageType.Info)
+
+    def _wb_kind_display(self, kind_id: int) -> str:
+        try:
+            return WhiteboardLockKind(int(kind_id)).name
+        except Exception:
+            return f"kind={int(kind_id)}"
+
+    def _wb_mode_display(self, mode: int) -> str:
+        try:
+            return WhiteboardLockMode(int(mode)).name
+        except Exception:
+            return f"mode={int(mode)}"
+
+    def _wb_key_display(self, kind_id: int, key_id: int) -> str:
+        if int(kind_id) != int(WhiteboardLockKind.SKILL_TARGET):
+            return f"key={int(key_id)}"
+        try:
+            from Py4GWCoreLib import GLOBAL_CACHE
+            name = GLOBAL_CACHE.Skill.GetName(int(key_id)) or ""
+            name = str(name).strip()
+            if name:
+                return f"'{name}'(id={int(key_id)})"
+        except Exception:
+            pass
+        return f"skill={int(key_id)}"
+
+    def _wb_lock_display(self, intent: IntentStruct) -> str:
+        return (
+            f"kind={self._wb_kind_display(intent.KindID)} "
+            f"mode={self._wb_mode_display(intent.LockMode)} "
+            f"{self._wb_key_display(intent.KindID, intent.SkillID)} "
+            f"target={int(intent.TargetAgentID)} "
+            f"group={int(intent.IsolationGroupID)}"
+        )
+
+    def GetAllIntents(self) -> list[tuple[int, IntentStruct]]:
+        """Return (index, IntentStruct) pairs for every active slot."""
+        out: list[tuple[int, IntentStruct]] = []
+        for i in range(SHMEM_MAX_INTENTS):
+            intent = self.Intents[i]
+            if intent.Active:
+                out.append((i, intent))
+        return out
+
+    def ClearIntent(self, index: int) -> None:
+        """Zero a single intent slot."""
+        if not (0 <= index < SHMEM_MAX_INTENTS):
+            return
+        intent = self.Intents[index]
+        if intent.Active:
+            lifetime = int(Py4GW.Game.get_tick_count64()) - int(intent.PostedAtTick)
+            self._wb_log(
+                f"CLEAR slot={index} email='{intent.OwnerEmail}' "
+                f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=explicit"
+            )
+        intent.reset()
+
+    def ClearIntentsByOwner(self, owner_email: str) -> int:
+        """Zero every whiteboard slot whose OwnerEmail matches. Returns count cleared."""
+        if not owner_email:
+            return 0
+        count = 0
+        now = int(Py4GW.Game.get_tick_count64())
+        for i in range(SHMEM_MAX_INTENTS):
+            intent = self.Intents[i]
+            if intent.Active and intent.OwnerEmail == owner_email:
+                lifetime = now - int(intent.PostedAtTick)
+                self._wb_log(
+                    f"CLEAR slot={i} email='{owner_email}' "
+                    f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=owner_clear"
+                )
+                intent.reset()
+                count += 1
+        return count
+
+    def PostLock(
+        self,
+        owner_email: str,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int | None = None,
+        lock_mode: int = int(WhiteboardLockMode.EXCLUSIVE),
+        max_holders: int = 1,
+        reentry_policy: int = int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+        claim_strength: int = int(WhiteboardClaimStrength.HARD),
+    ) -> int:
+        """Claim a generic whiteboard slot. Returns slot index or -1 if full.
+
+        Every lock is a lease. Past or missing expiry is rejected so no caller
+        can create a permanent lock.
+        """
+        now = int(Py4GW.Game.get_tick_count64())
+        if not owner_email or kind_id <= 0 or target_id < 0:
+            return -1
+        if int(expires_at_tick) <= now:
+            return -1
+        if int(max_holders) <= 0:
+            max_holders = 1
+        if isolation_group_id is None:
+            owner_slot = self._find_account_slot_by_email(owner_email)
+            if owner_slot == -1:
+                isolation_group_id = 0
+            else:
+                isolation_group_id = int(self.AccountData[owner_slot].IsolationGroupID)
+        for i in range(SHMEM_MAX_INTENTS):
+            intent = self.Intents[i]
+            if intent.Active:
+                continue
+            intent.OwnerEmail = owner_email
+            intent.KindID = int(kind_id)
+            intent.LockMode = int(lock_mode)
+            intent.ReentryPolicy = int(reentry_policy)
+            intent.ClaimStrength = int(claim_strength)
+            intent.MaxHolders = int(max_holders)
+            intent.SkillID = int(key_id)
+            intent.TargetAgentID = int(target_id)
+            intent.IsolationGroupID = int(isolation_group_id)
+            intent.PostedAtTick = now
+            intent.ExpiresAtTick = int(expires_at_tick)
+            intent.Active = True
+            budget = int(expires_at_tick) - now
+            self._wb_log(
+                f"POST  slot={i} email='{owner_email}' "
+                f"{self._wb_lock_display(intent)} holders={int(max_holders)} "
+                f"expires_in={budget}ms"
+            )
+            return i
+        self._wb_log(
+            f"POST-FAIL email='{owner_email}' kind={self._wb_kind_display(kind_id)} "
+            f"key={int(key_id)} target={int(target_id)} reason=full"
+        )
+        return -1
+
+    def CountLocks(
+        self,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        group_id: int,
+        exclude_email: str,
+        now_tick: int,
+        reentry_policy: int = int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+        claim_strength: int = int(WhiteboardClaimStrength.HARD),
+    ) -> int:
+        """Count matching active locks. Expired slots are ignored by readers."""
+        if kind_id <= 0 or target_id < 0:
+            return 0
+        count = 0
+        for i in range(SHMEM_MAX_INTENTS):
+            intent = self.Intents[i]
+            if not intent.Active:
+                continue
+            if now_tick >= int(intent.ExpiresAtTick):
+                continue
+            if int(intent.KindID) != int(kind_id):
+                continue
+            if int(intent.SkillID) != int(key_id):
+                continue
+            if int(intent.TargetAgentID) != int(target_id):
+                continue
+            if int(intent.IsolationGroupID) != int(group_id):
+                continue
+            if int(intent.ClaimStrength) != int(claim_strength):
+                continue
+            policy = int(intent.ReentryPolicy or reentry_policy)
+            if (
+                policy == int(WhiteboardReentryPolicy.OWNER_REENTRANT)
+                and exclude_email
+                and intent.OwnerEmail == exclude_email
+            ):
+                continue
+            count += 1
+        return count
+
+    def IsLockBlocked(
+        self,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        group_id: int,
+        exclude_email: str,
+        now_tick: int,
+        lock_mode: int = int(WhiteboardLockMode.EXCLUSIVE),
+        max_holders: int = 1,
+        reentry_policy: int = int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+        claim_strength: int = int(WhiteboardClaimStrength.HARD),
+    ) -> bool:
+        """True when matching unexpired locks should block this caller."""
+        if int(max_holders) <= 0:
+            max_holders = 1
+        mode = int(lock_mode)
+        if mode == int(WhiteboardLockMode.BARRIER):
+            return False
+        count = self.CountLocks(
+            kind_id,
+            key_id,
+            target_id,
+            group_id,
+            exclude_email,
+            now_tick,
+            reentry_policy,
+            claim_strength,
+        )
+        if mode == int(WhiteboardLockMode.EXCLUSIVE):
+            return count >= 1
+        if mode in (int(WhiteboardLockMode.SHARED), int(WhiteboardLockMode.SEMAPHORE)):
+            return count >= int(max_holders)
+        return False
+
+    def IsLockSatisfied(
+        self,
+        kind_id: int,
+        key_id: int,
+        target_id: int,
+        group_id: int,
+        exclude_email: str,
+        now_tick: int,
+        required_holders: int,
+        claim_strength: int = int(WhiteboardClaimStrength.HARD),
+    ) -> bool:
+        """Barrier helper: True when enough matching unexpired locks exist."""
+        if required_holders <= 0:
+            return True
+        return self.CountLocks(
+            kind_id,
+            key_id,
+            target_id,
+            group_id,
+            exclude_email,
+            now_tick,
+            int(WhiteboardReentryPolicy.NON_REENTRANT),
+            claim_strength,
+        ) >= int(required_holders)
+
+    def PostIntent(
+        self,
+        owner_email: str,
+        skill_id: int,
+        target_agent_id: int,
+        expires_at_tick: int,
+        isolation_group_id: int | None = None,
+    ) -> int:
+        """Compatibility wrapper for the original skill-target whiteboard."""
+        if skill_id <= 0 or target_agent_id <= 0:
+            return -1
+        return self.PostLock(
+            owner_email,
+            int(WhiteboardLockKind.SKILL_TARGET),
+            int(skill_id),
+            int(target_agent_id),
+            int(expires_at_tick),
+            isolation_group_id,
+            int(WhiteboardLockMode.EXCLUSIVE),
+            1,
+            int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+            int(WhiteboardClaimStrength.HARD),
+        )
+
+    def IsIntentClaimed(
+        self,
+        skill_id: int,
+        target_agent_id: int,
+        group_id: int,
+        exclude_email: str,
+        now_tick: int,
+    ) -> bool:
+        """Compatibility read-gate for original (skill_id, target_agent_id)."""
+        if skill_id <= 0 or target_agent_id <= 0:
+            return False
+        return self.IsLockBlocked(
+            int(WhiteboardLockKind.SKILL_TARGET),
+            int(skill_id),
+            int(target_agent_id),
+            int(group_id),
+            exclude_email,
+            int(now_tick),
+            int(WhiteboardLockMode.EXCLUSIVE),
+            1,
+            int(WhiteboardReentryPolicy.OWNER_REENTRANT),
+            int(WhiteboardClaimStrength.HARD),
+        )
+
+    def SweepExpiredIntents(self, now_tick: int) -> int:
+        """Compact pass: zero expired slots. Returns count cleared."""
+        count = 0
+        for i in range(SHMEM_MAX_INTENTS):
+            intent = self.Intents[i]
+            if intent.Active and now_tick >= int(intent.ExpiresAtTick):
+                lifetime = int(now_tick) - int(intent.PostedAtTick)
+                self._wb_log(
+                    f"SWEEP slot={i} email='{intent.OwnerEmail}' "
+                    f"{self._wb_lock_display(intent)} lifetime={lifetime}ms reason=expired"
+                )
+                intent.reset()
+                count += 1
+        return count

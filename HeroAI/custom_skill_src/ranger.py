@@ -395,7 +395,7 @@ class RangerSkills:
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Savage_Pounce")
         skill.SkillType = SkillType.PetAttack.value
         skill.TargetAllegiance = Skilltarget.Enemy.value
-        skill.Nature = SkillNature.Interrupt.value
+        skill.Nature = SkillNature.Offensive.value
         skill.Conditions.IsCasting = True
         skill_data[skill.SkillID] = skill
 
@@ -462,7 +462,7 @@ class RangerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Barrage")
         skill.SkillType = SkillType.Attack.value
-        skill.TargetAllegiance = Skilltarget.Enemy.value
+        skill.TargetAllegiance = Skilltarget.EnemyClustered.value
         skill.Nature = SkillNature.Offensive.value
         skill_data[skill.SkillID] = skill
 

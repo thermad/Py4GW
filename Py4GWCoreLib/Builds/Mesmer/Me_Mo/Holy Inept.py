@@ -26,12 +26,12 @@ class HolyInept(BuildMgr):
                 Ineptitude_ID,
                 Wandering_Eye_ID,
                 Arcane_Conundrum_ID,
-                Ebon_Vanguard_Assassin_Support_ID,
+                Judges_Insight_ID,
             ],
             optional_skills=[
                 Air_of_Superiority_ID,
                 Ebon_Battle_Standard_of_Wisdom_ID,
-                Judges_Insight_ID,
+                Ebon_Vanguard_Assassin_Support_ID,
                 Signet_of_Clumsiness_ID,
                 Power_Drain_ID
             ],
@@ -50,12 +50,12 @@ class HolyInept(BuildMgr):
 
         if (
             self.IsSkillEquipped(Air_of_Superiority_ID)
-            and (Routines.Checks.Agents.InAggro() or self.IsCloseToAggro())
+            and (self.IsInAggro() or self.IsCloseToAggro())
             and (yield from self.skills.Any.PvE.Air_of_Superiority())
         ):
             return True
 
-        if not Routines.Checks.Agents.InAggro():
+        if not self.IsInAggro():
             return False
 
         if (yield from self.skills.Mesmer.InspirationMagic.Power_Drain(energy_threshold_pct=0.30)):

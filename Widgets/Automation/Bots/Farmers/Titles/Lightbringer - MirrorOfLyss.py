@@ -40,7 +40,7 @@ RESIGN_STEP_NAME = ""
 
 _SETTINGS_SECTION = "Settings"
 _MULTIBOX_ALTS_KEY = "use_multibox_alts"
-_party_mode: int = 0  # 0 = Single Account with Heroes, 1 = Custom Behaviors with Alts
+_party_mode: int = 0  # 0 = Single Account with Heroes, 1 = Multiboxing with alts
 _mode_loaded: bool = False
 
 bot = Botting(BotSettings.BOT_NAME,
@@ -50,7 +50,7 @@ bot = Botting(BotSettings.BOT_NAME,
               upkeep_war_supplies_restock=2,
               upkeep_birthday_cupcake_restock=2,
               upkeep_honeycomb_restock=20,
-              upkeep_auto_combat_active=True,
+              upkeep_hero_ai_active=True,
               upkeep_auto_inventory_management_active=True,
               upkeep_auto_loot_active=True)
 

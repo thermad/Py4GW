@@ -15,7 +15,7 @@ from HeroAI.settings import Settings
 from HeroAI.types import Docked, FramePosition
 from HeroAI.utils import IsHeroFlagged, SameMapAsAccount, SameMapOrPartyAsAccount
 
-from Py4GWCoreLib import ImGui
+from Py4GWCoreLib import ImGui, Routines
 from Py4GWCoreLib.GlobalCache import GLOBAL_CACHE
 from Py4GWCoreLib.GlobalCache.SharedMemory import AccountStruct, HeroAIOptionStruct, SharedMessageStruct
 from Py4GWCoreLib.ImGui_src.IconsFontAwesome5 import IconsFontAwesome5
@@ -1600,11 +1600,22 @@ def _post_pcon_message(params, cached_data: CacheData):
     self_account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(cached_data.account_email)
     if not self_account:
         return
-    
+
     accounts = cached_data.party.accounts.values()
     sender_email = cached_data.account_email
-    for account in accounts:        
+    for account in accounts:
         GLOBAL_CACHE.ShMem.SendMessage(sender_email, account.AccountEmail, SharedCommandType.PCon, params)
+
+def _use_all_cons(cached_data: CacheData):
+    # Paced like party_command_contants.use_all_consumables — enqueueing all
+    # PCon messages in one frame overflows the ShMem inbox / outpaces the
+    # receiver's UseItem cooldown, causing later items (e.g. War Supplies)
+    # to be silently dropped.
+    for model_id, (_texture_path, params) in consumables:
+        if model_id == 0:
+            continue
+        _post_pcon_message(params, cached_data)
+        yield from Routines.Yield.wait(100)
 
 #_post_pcon_message((ModelID.Essence_Of_Celerity.value, GLOBAL_CACHE.Skill.GetID("Essence_of_Celerity_item_effect"), 0, 0))
 def draw_consumables_window(cached_data: CacheData):
@@ -1618,13 +1629,16 @@ def draw_consumables_window(cached_data: CacheData):
     
     PyImGui.open_popup("Configure Consumables")
     
-    if PyImGui.begin_popup("Configure Consumables"):        
+    if PyImGui.begin_popup("Configure Consumables"):
         if PyImGui.is_window_appearing():
             io = PyImGui.get_io()
             mouse_x, mouse_y = io.mouse_pos_x, io.mouse_pos_y
             PyImGui.set_window_pos(mouse_x, mouse_y - 170, PyImGui.ImGuiCond.Always)
-            
+
         ImGui.text("Consumable configuration window")
+        if PyImGui.button("Use Cons"):
+            GLOBAL_CACHE.Coroutines.append(_use_all_cons(cached_data))
+        ImGui.show_tooltip("Use all consumables on all accounts.")
         btn_size = 32
         style.CellPadding.push_style_var(2, 2)
         if ImGui.begin_table("##ConTable", 6, PyImGui.TableFlags.SizingStretchProp):
@@ -1670,8 +1684,11 @@ def draw_base_consumables_window(cached_data: CacheData):
         return
     
     _flags = PyImGui.WindowFlags(PyImGui.WindowFlags.NoTitleBar | PyImGui.WindowFlags.NoResize | PyImGui.WindowFlags.AlwaysAutoResize | PyImGui.WindowFlags.NoSavedSettings)
-    if ImGui.Begin(ini_key=cached_data.consumables_ini_key, name="Configure Consumables",p_open=True, flags=_flags):        
+    if ImGui.Begin(ini_key=cached_data.consumables_ini_key, name="Configure Consumables",p_open=True, flags=_flags):
         ImGui.text("Consumable configuration window")
+        if PyImGui.button("Use Cons"):
+            GLOBAL_CACHE.Coroutines.append(_use_all_cons(cached_data))
+        ImGui.show_tooltip("Use all consumables on all accounts.")
         btn_size = 32
         style.CellPadding.push_style_var(2, 2)
         if ImGui.begin_table("##ConTable", 6, PyImGui.TableFlags.SizingStretchProp):
@@ -2681,6 +2698,29 @@ def draw_configure_window(module_name : str, configure_window : WindowModule):
                     if show_floating_targets != settings.ShowFloatingTargets:
                         settings.ShowFloatingTargets = show_floating_targets
                         settings.save_settings()
+
+                    auto_call_targets = ImGui.checkbox("Auto Call Combat Targets", settings.AutoCallTargets)
+                    if auto_call_targets != settings.AutoCallTargets:
+                        settings.AutoCallTargets = auto_call_targets
+                        settings.save_settings()
+
+                    combat_range_modes = [
+                        Settings.COMBAT_RANGE_MODE_PARTY_AGGRO,
+                        Settings.COMBAT_RANGE_MODE_LEGACY,
+                    ]
+                    combat_range_labels = [Settings.COMBAT_RANGE_MODE_LABELS[mode] for mode in combat_range_modes]
+                    current_combat_range_index = combat_range_modes.index(
+                        Settings.normalize_combat_range_mode(settings.CombatRangeMode)
+                    )
+                    selected_combat_range_index = ImGui.combo(
+                        "Combat range mode",
+                        current_combat_range_index,
+                        combat_range_labels,
+                    )
+                    if selected_combat_range_index != current_combat_range_index:
+                        settings.CombatRangeMode = combat_range_modes[selected_combat_range_index]
+                        settings.save_settings()
+                    ImGui.show_tooltip("Party aggro uses leader/party-aware scan ranges. Legacy uses the old Earshot out-of-combat and Spellcast stay-alert behavior.")
 
                     show_command_panel = ImGui.checkbox("Show Global Config Panel", settings.ShowCommandPanel)
                     if show_command_panel != settings.ShowCommandPanel:

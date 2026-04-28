@@ -225,6 +225,60 @@ class BuildMgr:
             return None
         return self.GetCustomSkill(skill_id)
 
+    def _get_shared_skill_toggle(self, slot: int) -> bool:
+        if not (1 <= int(slot) <= 8):
+            return False
+
+        options = getattr(self._cached_data, "account_options", None)
+        if options is None:
+            try:
+                from Py4GWCoreLib import GLOBAL_CACHE, Player
+
+                account_email = Player.GetAccountEmail()
+                if account_email:
+                    options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(account_email)
+            except Exception:
+                options = None
+
+        if options is None:
+            return True
+
+        skills = getattr(options, "Skills", None)
+        if skills is None:
+            return True
+
+        try:
+            return bool(skills[int(slot) - 1])
+        except (IndexError, TypeError, ValueError):
+            return True
+
+    def IsSharedSkillToggleEnabled(self, slot: int) -> bool:
+        return self._get_shared_skill_toggle(slot)
+    
+    def GetActiveScanRange(self) -> float:
+        cached_data = getattr(self, "_cached_data", None)
+        if cached_data is not None and hasattr(cached_data, "GetActiveScanRange"):
+            return float(cached_data.GetActiveScanRange())
+        
+        try:
+            from HeroAI.cache_data import CacheData
+            cached_data = CacheData()
+            cached_data.Update()
+            return float(cached_data.GetActiveScanRange())
+        except Exception:
+            from Py4GWCoreLib import Range, Routines
+            return Range.Spellcast.value if Routines.Checks.Agents.InAggro() else Range.Earshot.value
+    
+    def IsInAggro(self) -> bool:
+        cached_data = getattr(self, "_cached_data", None)
+        if cached_data is not None:
+            data = getattr(cached_data, "data", None)
+            if data is not None:
+                return bool(data.in_aggro)
+        
+        from Py4GWCoreLib import Routines
+        return bool(Routines.Checks.Agents.InAggro(self.GetActiveScanRange()))
+
     def IsCloseToAggro(self) -> bool:
         """Returns True when combat is imminent but the player is not yet engaged."""
         from Py4GWCoreLib import Routines
@@ -239,6 +293,11 @@ class BuildMgr:
             TargetLowestAllyMartial,
             TargetLowestAllyMelee,
             TargetLowestAllyRanged,
+            TargetAllyNonEnchanted,
+            TargetAllyNonWeaponSpelled,
+            TargetMinionNonEnchanted,
+            TargetMinionOrAllyNonEnchanted,
+            TargetDeadPartyMember,
         )
         from HeroAI.types import Skilltarget, SkillType
         from Py4GWCoreLib import Agent, AgentArray, Player, Routines, Skill
@@ -250,6 +309,15 @@ class BuildMgr:
 
         target_allegiance = custom_skill.TargetAllegiance
         targeting_strict = bool(custom_skill.Conditions.TargetingStrict)
+
+        if target_allegiance == Skilltarget.MinionOrAllyNonEnchanted.value:
+            return TargetMinionOrAllyNonEnchanted(filter_skill_id=skill_id)
+        if target_allegiance == Skilltarget.MinionNonEnchanted.value:
+            return TargetMinionNonEnchanted()
+        if target_allegiance == Skilltarget.AllyNonEnchanted.value:
+            return TargetAllyNonEnchanted()
+        if target_allegiance == Skilltarget.NonWeaponSpelledAlly.value:
+            return Player.GetAgentID() if TargetAllyNonWeaponSpelled() else 0
 
         if target_allegiance in (
             Skilltarget.Ally.value,
@@ -265,7 +333,14 @@ class BuildMgr:
             other_ally = target_allegiance == Skilltarget.OtherAlly.value
             base_target = 0
             if custom_skill.SkillType == SkillType.WeaponSpell.value:
-                weapon_spell_predicate = lambda agent_id: not Routines.Checks.Agents.IsWeaponSpelled(agent_id)
+                if custom_skill.Conditions.AllowOverlapWeaponSpell:
+                    weapon_spell_predicate = lambda agent_id: not Routines.Checks.Agents.HasEffect(
+                        agent_id,
+                        skill_id,
+                        exact_weapon_spell=True,
+                    )
+                else:
+                    weapon_spell_predicate = lambda agent_id: not Routines.Checks.Agents.IsWeaponSpelled(agent_id)
             if target_allegiance == Skilltarget.Ally.value:
                 base_target = TargetLowestAlly(other_ally=other_ally, filter_skill_id=skill_id)
             elif target_allegiance == Skilltarget.AllyCaster.value:
@@ -320,13 +395,14 @@ class BuildMgr:
             return 0
         if target_allegiance == Skilltarget.DeadAlly.value:
             from Py4GWCoreLib.enums_src.GameData_enums import Range
-            dead_ally_array = AgentArray.GetDeadAllyArray()
-            dead_ally_array = AgentArray.Filter.ByDistance(dead_ally_array, Player.GetXY(), Range.Spellcast.value)
-            spirit_pet_array = AgentArray.GetSpiritPetArray()
-            spirit_pet_array = AgentArray.Filter.ByDistance(spirit_pet_array, Player.GetXY(), Range.Spellcast.value)
-            dead_ally_array = AgentArray.Manipulation.Subtract(dead_ally_array, spirit_pet_array)
-            dead_ally_array = AgentArray.Sort.ByDistance(dead_ally_array, Player.GetXY())
-            return dead_ally_array[0] if dead_ally_array else 0
+            return Routines.Agents.GetDeadAlly(Range.Spellcast.value)
+        if target_allegiance == Skilltarget.ResurrectionAlly.value:
+            from Py4GWCoreLib.enums_src.GameData_enums import Range
+            return Routines.Agents.GetResurrectionTarget(
+                Range.Spellcast.value,
+                reserve=True,
+                skill_id=skill_id,
+            )
         if target_allegiance == Skilltarget.Self.value:
             return Player.GetAgentID()
 
@@ -675,7 +751,7 @@ class BuildMgr:
     def _refresh_target_tracking(self) -> None:
         from Py4GWCoreLib import Routines
 
-        in_aggro = bool(Routines.Checks.Agents.InAggro())
+        in_aggro = self.IsInAggro()
         if self._was_in_aggro and not in_aggro:
             self.ResetTarget()
             self.ResetPartyHealthMonitor()
@@ -685,13 +761,17 @@ class BuildMgr:
         self,
         cluster_radius: float,
         preferred_condition: Callable[[int], bool] | None = None,
+        *,
+        filter_radius: float | None = None,
     ) -> int:
         from Py4GWCoreLib import Player, AgentArray
         from Py4GWCoreLib.Agent import Agent
 
+        effective_filter_radius = float(filter_radius if filter_radius is not None else cluster_radius)
+
         player_pos = Player.GetXY()
         enemy_array = AgentArray.GetEnemyArray()
-        enemy_array = AgentArray.Filter.ByDistance(enemy_array, player_pos, cluster_radius)
+        enemy_array = AgentArray.Filter.ByDistance(enemy_array, player_pos, effective_filter_radius)
         enemy_array = AgentArray.Filter.ByCondition(enemy_array, lambda agent_id: Agent.IsAlive(agent_id))
 
         if not enemy_array:
@@ -743,7 +823,8 @@ class BuildMgr:
         if not Routines.Checks.Agents.IsMelee(Player.GetAgentID()):
             return desired_target
 
-        nearest_enemy = Routines.Agents.GetNearestEnemy(Range.Spellcast.value)
+        combat_distance = self.GetActiveScanRange()
+        nearest_enemy = Routines.Agents.GetNearestEnemy(combat_distance)
         if not (Agent.IsValid(nearest_enemy) and not Agent.IsDead(nearest_enemy)):
             return desired_target
 
@@ -754,7 +835,7 @@ class BuildMgr:
         nearby_enemies = Routines.Agents.GetFilteredEnemyArray(
             player_pos[0],
             player_pos[1],
-            Range.Spellcast.value,
+            combat_distance,
         )
 
         contact_enemies = [
@@ -816,35 +897,35 @@ class BuildMgr:
     
     def _pick_fallback_target(self, target_type: str) -> int:
         from HeroAI.targeting import GetEnemyAttacking, GetEnemyInjured, TargetClusteredEnemy
-        from Py4GWCoreLib import Range
         from Py4GWCoreLib.Agent import Agent
         
+        combat_distance = self.GetActiveScanRange()
         return_target = 0
         if target_type == "EnemyClustered":
-            return_target = TargetClusteredEnemy(Range.Earshot.value)
+            return_target = TargetClusteredEnemy(combat_distance)
             if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
-                return_target = GetEnemyInjured(Range.Earshot.value)
+                return_target = GetEnemyInjured(combat_distance)
         elif target_type == "EnemyHexedOrEnchantedClustered":
             return_target = self._pick_clustered_target(
-                Range.Earshot.value,
+                combat_distance,
                 preferred_condition=lambda agent_id: Agent.IsHexed(agent_id) or Agent.IsEnchanted(agent_id),
             )
             if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
-                return_target = GetEnemyInjured(Range.Earshot.value)
+                return_target = GetEnemyInjured(combat_distance)
         elif target_type == "EnemyAttackingClustered":
             return_target = self._pick_clustered_target(
-                Range.Earshot.value,
+                combat_distance,
                 preferred_condition=lambda agent_id: Agent.IsAttacking(agent_id),
             )
             if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
-                return_target = GetEnemyInjured(Range.Earshot.value)
+                return_target = GetEnemyInjured(combat_distance)
         elif target_type == "EnemyAttacking":
-            return_target = GetEnemyAttacking(Range.Earshot.value)
+            return_target = GetEnemyAttacking(combat_distance)
             if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
-                return_target = GetEnemyInjured(Range.Earshot.value)
-                 
+                return_target = GetEnemyInjured(combat_distance)
+                  
         elif target_type == "EnemyInjured":
-            return_target = GetEnemyInjured(Range.Earshot.value)
+            return_target = GetEnemyInjured(combat_distance)
 
         return_target = self._prefer_melee_nearest_enemy(return_target)
 
@@ -1052,14 +1133,14 @@ class BuildMgr:
             return False
 
         # Allow the skill's metadata to request HP-aware recast: when the spirit's
-        # current HP fraction drops below `MinSpiritHpFractionForRecast`, treat it
+        # current HP fraction drops below `AllowRecastAtLife`, treat it
         # as absent so the caller can refresh before the spirit naturally dies.
         # 0.0 (default) keeps the pre-change binary alive/dead gate.
         min_hp_fraction = 0.0
         try:
             custom_skill = self.GetCustomSkill(skill_id)
             if custom_skill is not None:
-                min_hp_fraction = float(custom_skill.Conditions.MinSpiritHpFractionForRecast or 0.0)
+                min_hp_fraction = float(custom_skill.Conditions.AllowRecastAtLife or 0.0)
         except Exception:
             min_hp_fraction = 0.0
 
@@ -1187,6 +1268,11 @@ class BuildMgr:
         return result
 
     def _process_phase(self, handler: BuildHandler | None, is_in_combat: bool) -> BuildCoroutine:
+        # Whiteboard owner self-clear — release my (skill, target) slots on
+        # the cast-finish transition so sibling accounts can reuse them
+        # immediately. Lives here (not in Tick) because HeroAI's BT path
+        # calls ProcessCombat/ProcessOOC directly and bypasses Tick.
+        self._whiteboard_owner_self_clear()
         if not self.CanProcess():
             reasons: list[str] = []
             from Py4GWCoreLib import Agent, Player, Routines
@@ -1226,6 +1312,7 @@ class BuildMgr:
         handler: BuildHandler | None,
         is_in_combat: bool | None = None,
     ) -> BuildCoroutine:
+        self._whiteboard_owner_self_clear()
         if not self.CanProcess():
             yield
             return
@@ -1305,6 +1392,11 @@ class BuildMgr:
             return True
 
         target_allegiance = custom_skill.TargetAllegiance
+        if target_allegiance == Skilltarget.NonWeaponSpelledAlly.value:
+            from HeroAI.targeting import TargetAllyNonWeaponSpelled
+
+            return bool(TargetAllyNonWeaponSpelled())
+
         if target_allegiance == Skilltarget.AllyCaster.value:
             if (
                 not Routines.Checks.Agents.IsCaster(target_agent_id)
@@ -1326,10 +1418,111 @@ class BuildMgr:
                 return False
 
         if custom_skill.SkillType == SkillType.WeaponSpell.value:
-            if Routines.Checks.Agents.IsWeaponSpelled(target_agent_id):
+            if custom_skill.Conditions.AllowOverlapWeaponSpell:
+                if Routines.Checks.Agents.HasEffect(target_agent_id, skill_id, exact_weapon_spell=True):
+                    return False
+            elif Routines.Checks.Agents.IsWeaponSpelled(target_agent_id):
                 return False
 
         return True
+
+    #region Whiteboard (cross-hero cast-intent coordination)
+    def _is_whiteboard_skill(self, skill_id: int) -> bool:
+        """True iff this skill opts into cross-hero whiteboard coordination,
+        via either CustomSkill.CoordinatesViaWhiteboard or the shared
+        Py4GWCoreLib.Builds.Skills._whiteboard registry.
+        """
+        if skill_id <= 0:
+            return False
+        # Lazy import — avoid a circular load of the Builds package during
+        # BuildMgr's own module initialization.
+        try:
+            from Py4GWCoreLib.Builds.Skills._whiteboard import is_registered as _wb_is_registered
+            if _wb_is_registered(skill_id):
+                return True
+        except Exception:
+            pass
+        try:
+            custom = self.GetCustomSkill(skill_id)
+            return bool(getattr(custom, "CoordinatesViaWhiteboard", False))
+        except Exception:
+            return False
+
+    def _whiteboard_is_claimed(self, skill_id: int, target_agent_id: int) -> bool:
+        """Read-gate: True if another account in my IsolationGroupID holds an
+        unexpired (skill_id, target_agent_id) claim. Failures fall back to
+        False so a broken ShMem path never blocks casting.
+        """
+        if skill_id <= 0 or target_agent_id <= 0:
+            return False
+        try:
+            from Py4GWCoreLib import GLOBAL_CACHE, Player
+            email = Player.GetAccountEmail() or ""
+            if not email:
+                return False
+            group_id = GLOBAL_CACHE.ShMem.GetAccountGroupByEmail(email)
+            now = Py4GW.Game.get_tick_count64()
+            return GLOBAL_CACHE.ShMem.IsIntentClaimed(
+                int(skill_id),
+                int(target_agent_id),
+                int(group_id),
+                email,
+                int(now),
+            )
+        except Exception:
+            return False
+
+    def _whiteboard_post_intent(self, skill_id: int, target_agent_id: int) -> None:
+        """Claim (skill_id, target_agent_id) just before the cast commits."""
+        if skill_id <= 0 or target_agent_id <= 0:
+            return
+        try:
+            from Py4GWCoreLib import GLOBAL_CACHE, Player
+            from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import (
+                SHMEM_INTENT_DEFAULT_PING_BUDGET_MS,
+            )
+            email = Player.GetAccountEmail() or ""
+            if not email:
+                return
+            activation_ms = 0
+            aftercast_ms = 0
+            try:
+                activation_ms = int((GLOBAL_CACHE.Skill.Data.GetActivation(skill_id) or 0) * 1000)
+            except Exception:
+                pass
+            try:
+                aftercast_ms = int((GLOBAL_CACHE.Skill.Data.GetAftercast(skill_id) or 0) * 1000)
+            except Exception:
+                pass
+            cast_window_ms = max(500, activation_ms + aftercast_ms)
+            now = Py4GW.Game.get_tick_count64()
+            expires_at = int(now) + cast_window_ms + int(SHMEM_INTENT_DEFAULT_PING_BUDGET_MS)
+            GLOBAL_CACHE.ShMem.PostIntent(
+                email, int(skill_id), int(target_agent_id), int(expires_at)
+            )
+            self._wb_posted_this_cast = True
+        except Exception:
+            pass
+
+    def _whiteboard_owner_self_clear(self) -> None:
+        """On the local-cast-pending True->False transition, zero my intent
+        slots so sibling accounts can reuse the (skill, target) immediately.
+        """
+        try:
+            pending = self._is_local_cast_pending()
+            prev = getattr(self, "_wb_prev_cast_pending", False)
+            self._wb_prev_cast_pending = pending
+            if not (prev and not pending):
+                return
+            if not getattr(self, "_wb_posted_this_cast", False):
+                return
+            from Py4GWCoreLib import GLOBAL_CACHE, Player
+            email = Player.GetAccountEmail() or ""
+            if email:
+                GLOBAL_CACHE.ShMem.ClearIntentsByOwner(email)
+            self._wb_posted_this_cast = False
+        except Exception:
+            pass
 
     def CanCastSkillID(
         self,
@@ -1351,6 +1544,8 @@ class BuildMgr:
 
         slot = SkillBar.GetSlotBySkillID(skill_id)
         if not (1 <= slot <= 8):
+            return False
+        if not self.IsSharedSkillToggleEnabled(slot):
             return False
         if not Routines.Checks.Skills.HasEnoughAdrenalineBySlot(slot):
             return False
@@ -1377,6 +1572,8 @@ class BuildMgr:
 
         skill_id = SkillBar.GetSkillIDBySlot(slot)
         if not skill_id:
+            return False
+        if not self.IsSharedSkillToggleEnabled(slot):
             return False
         if not Routines.Checks.Skills.HasEnoughEnergy(Player.GetAgentID(), skill_id):
             return False
@@ -1406,7 +1603,49 @@ class BuildMgr:
         if not self._validate_target_for_skill_cast(skill_id, target_agent_id):
             return False
 
+        # Interrupt feasibility gate — only for skills classified as
+        # SkillNature.Interrupt in HeroAI/custom_skill_src/. Non-interrupts
+        # short-circuit on the registry lookup with zero further work.
+        # Lazy import keeps BuildMgr independent at module load; HeroAI
+        # pushes the gate down via the registry.
+        try:
+            from HeroAI.interrupt import (
+                is_classified_as_interrupt,
+                is_interrupt_feasible,
+                _get_player_fast_casting_level,
+                _PING_HANDLER as _RUPT_PING_HANDLER,
+                _queue_outcome,
+            )
+            if target_agent_id and is_classified_as_interrupt(skill_id):
+                from Py4GWCoreLib.Agent import Agent as _RuptAgent
+                if not is_interrupt_feasible(
+                    target_agent_id=target_agent_id,
+                    our_skill_id=skill_id,
+                    fast_casting_level=_get_player_fast_casting_level(),
+                    ping_ms=int(_RUPT_PING_HANDLER.GetCurrentPing()),
+                ):
+                    return False
+                _queue_outcome(
+                    target_agent_id,
+                    _RuptAgent.GetCastingSkillID(target_agent_id),
+                    skill_id,
+                )
+        except Exception:
+            # Never let a feasibility-helper bug block casting. Legacy
+            # behavior (no feasibility gate) is the safe fallback.
+            pass
+
+        # Whiteboard read gate — skip if another hero in my isolation group
+        # already claimed this (skill_id, target_agent_id). Opt-in per skill.
+        if self._is_whiteboard_skill(skill_id) and self._whiteboard_is_claimed(skill_id, target_agent_id):
+            return False
+
         slot = SkillBar.GetSlotBySkillID(skill_id)
+
+        # Whiteboard write — claim (skill_id, target_agent_id) so other heroes
+        # in my isolation group skip this combo until my cast resolves.
+        if self._is_whiteboard_skill(skill_id):
+            self._whiteboard_post_intent(skill_id, target_agent_id)
 
         GLOBAL_CACHE.SkillBar.UseSkill(slot, target_agent_id=target_agent_id, aftercast_delay=aftercast_delay)
         self._mark_local_cast_pending(aftercast_delay)
@@ -1468,7 +1707,26 @@ class BuildMgr:
                 aftercast_delay=aftercast_delay,
             ))
 
-        yield from self._move_for_spirit_cast()
+        # yield from self._move_for_spirit_cast()
+        #
+        # Pre-cast positioning disabled. Previously this path ran the line
+        # above, which issued Player.Move and interrupted any in-progress
+        # cast. When the player had not yet arrived at the destination by
+        # the time UseSkill ran, the cast silently failed - leaving the
+        # caster stuck in a cast-retry + reposition loop while HeroAI's
+        # follow behavior pulled them back. Post-cast step-away inside
+        # CastSkillID still runs and keeps the caster from standing inside
+        # the new spirit after it has actually spawned.
+        #
+        # The helpers _move_for_spirit_cast and _pick_spirit_precast_position
+        # are intentionally left in place. They do semi-work today (the move
+        # happens, the candidate search runs) but are mis-timed: the cast is
+        # fired before the player arrives at the destination, so the spirit
+        # spawns at an intermediate position or not at all. They can be re-
+        # enabled by uncommenting the line above after fixing the timing
+        # (arrival poll on Player.Move, widening the candidate search to
+        # avoid dead-ends in crowded spirit clusters, and decoupling the
+        # move-distance from the overlap radius).
         return (yield from self.CastSkillID(
             skill_id=skill_id,
             extra_condition=extra_condition,
@@ -1516,9 +1774,9 @@ class BuildMgr:
         if self._local_ooc_handler is None and self._local_combat_handler is None:
             raise NotImplementedError
 
-        from Py4GWCoreLib import Range, Routines
+        from Py4GWCoreLib.botting_src.helpers_src.HeroAICombatRange import hero_ai_combat_detected
 
-        if Routines.Checks.Agents.InDanger(Range.Earshot):
+        if hero_ai_combat_detected():
             yield from self.ProcessCombat()
         else:
             yield from self.ProcessOOC()
@@ -1536,6 +1794,10 @@ class BuildMgr:
         yield from self._process_phase(self._local_combat_handler, is_in_combat=True)
 
     def Tick(self, is_in_combat: bool):
+        # Clear whiteboard intent slots on the cast-finish transition so
+        # sibling accounts can reuse the (skill, target) as soon as my
+        # local cast window has closed.
+        self._whiteboard_owner_self_clear()
         if is_in_combat:
             yield from self.ProcessCombat()
         else:
