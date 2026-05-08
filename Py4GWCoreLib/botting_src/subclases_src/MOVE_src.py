@@ -28,7 +28,12 @@ class _MOVE:
         self._config.path_to_draw.extend(path.copy())
         yield
         
-    def _coro_follow_path_to(self, forced_timeout = -1, autopath: bool = True) -> Generator[Any, Any, bool]:
+    def _coro_follow_path_to(
+        self,
+        forced_timeout=-1,
+        autopath: bool = True,
+        fail_on_unmanaged: bool = True,
+    ) -> Generator[Any, Any, bool]:
         from ...Routines import Routines
         from ...Map import Map
         from ...py4gwcorelib_src.Lootconfig_src import LootConfig
@@ -46,6 +51,8 @@ class _MOVE:
         initial_instance_uptime = Map.GetInstanceUptime()
 
         def map_transition_detected() -> bool:
+            if Map.IsInCinematic():
+                return True
             # Any map-invalid/loading phase should let movement step exit cleanly.
             if not Routines.Checks.Map.MapValid() or Map.IsMapLoading():
                 return True
@@ -97,9 +104,15 @@ class _MOVE:
 
         # --- merged pause condition ---
         def pause_condition() -> bool:
+            # Death should hard-pause movement so timeout windows do not
+            # expire while waiting for revive.
+            if Routines.Checks.Player.IsDead():
+                return True
             if danger_pause and danger_pause():
                 return True
             if loot_config_enabled and loot_pause():
+                return True
+            if Map.IsInCinematic():
                 return True
             if fsm_pause():
                 return True
@@ -132,7 +145,8 @@ class _MOVE:
             if exit_condition():
                 return True
 
-            self._Events.on_unmanaged_fail()
+            if fail_on_unmanaged:
+                self._Events.on_unmanaged_fail()
             return False
 
         return True
@@ -151,13 +165,24 @@ class _MOVE:
         yield from self._coro_follow_path_to()
         return True
 
-    def _coro_xy(self, x: float, y: float, step_name: str = "", forced_timeout: int = -1) -> Generator[Any, Any, None]:
+    def _coro_xy(
+        self,
+        x: float,
+        y: float,
+        step_name: str = "",
+        forced_timeout: int = -1,
+        fail_on_unmanaged: bool = True,
+    ) -> Generator[Any, Any, bool]:
         if step_name == "":
             step_name = f"MoveTo_{self._config.get_counter('MOVE_TO')}"
 
         yield from self._coro_get_path_to(x, y)
         # pass forced_timeout through to the follow-path stage
-        yield from self._coro_follow_path_to(forced_timeout)
+        result = yield from self._coro_follow_path_to(
+            forced_timeout,
+            fail_on_unmanaged=fail_on_unmanaged,
+        )
+        return bool(result)
         
     def _coro_xy_and_exit_map(self, x: float, y: float, target_map_id: int = 0, target_map_name: str = "", step_name: str="") -> Generator[Any, Any, None]:
         if step_name == "":
@@ -234,6 +259,10 @@ class _MOVE:
 
         If *on_enemy_detected* is provided, it is called with (x, y) of the
         first enemy each time a new engagement starts.
+        
+        After resume path completes, verify arrival at target waypoint
+        before returning to aggro scan. This prevents zigzag behavior when enemies
+        are detected during/after resume.
         """
         import random
         from ...Routines import Routines
@@ -260,6 +289,8 @@ class _MOVE:
         initial_instance_uptime = Map.GetInstanceUptime()
 
         def _map_changed() -> bool:
+            if Map.IsInCinematic():
+                return True
             if not Routines.Checks.Map.MapValid() or Map.IsMapLoading():
                 return True
             if Map.GetMapID() != initial_map_id:
@@ -299,9 +330,15 @@ class _MOVE:
             )) > 0
 
         def _pause() -> bool:
+            # Death should hard-pause movement so timeout windows do not
+            # expire while waiting for revive.
+            if Routines.Checks.Player.IsDead():
+                return True
             if danger_pause and danger_pause():
                 return True
             if loot_enabled and _loot_pause():
+                return True
+            if Map.IsInCinematic():
                 return True
             if fsm.is_paused():
                 return True
@@ -725,15 +762,32 @@ class _MOVE:
                             Player.Move(tx, ty)
                             yield from wait(250)
 
+                        # ╔═══════════════════════════════════════════════════════════╗
+                        # ║ Check if we reached target waypoint after resume          ║
+                        # ╚═══════════════════════════════════════════════════════════╝
+                        final_dist = Utils.Distance(Player.GetXY(), (tx, ty))
+                        ConsoleLog("FollowPathAggro",
+                                   f"Resume complete. Distance to wp {idx+1}: {final_dist:.0f}.",
+                                   Console.MessageType.Info, log=log)
+                        
+                        if final_dist <= tolerance:
+                            # ✓ Successfully reached waypoint after resume
+                            ConsoleLog("FollowPathAggro",
+                                       f"Reached wp {idx+1}/{len(path_points)} after resume.",
+                                       Console.MessageType.Success, log=log)
+                            break  # ← EXIT inner while, advance to next waypoint
+                        
+                        # ✗ Did not reach waypoint yet, reset timers and retry
                         prev_dist = Utils.Distance(Player.GetXY(), (tx, ty))
                         retries = 0
                         stuck_count = 0
                         t0 = Utils.GetBaseTimestamp()
+                        # ← CONTINUE inner while to retry reaching waypoint
                         continue
 
-                # ══════════════════════════════════════════════════
+                # ══════════════════════════════════════════════════════════════════════════
                 # PATH PROGRESS (standard FollowPath logic)
-                # ══════════════════════════════════════════════════
+                # ══════════════════════════════════════════════════════════════════════════
                 if _map_changed():
                     return _abort("Map changed before finishing waypoint.")
 

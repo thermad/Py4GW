@@ -45,11 +45,32 @@ Docstring parsing rules
 
 from __future__ import annotations
 
+import random
+
 from ...GlobalCache import GLOBAL_CACHE
 from ...Map import Map
 from ...Player import Player
 from ...Py4GWcorelib import ConsoleLog, Console
 from ...py4gwcorelib_src.BehaviorTree import BehaviorTree
+from ...enums_src.Region_enums import District
+
+_MAPS_REQUIRING_EXTRA_CONFIRM: set[int] = {
+    28,   # The Great Northern Wall
+    29,   # Fort Ranik
+    30,   # Ruins of Surmia
+    32,   # Nolani Academy
+    25,   # Borlis Pass
+    21,   # The Frost Gate
+    14,   # Gates of Kryta
+}
+
+
+def _log(source: str, message: str, *, log: bool = False, message_type=Console.MessageType.Info) -> None:
+    ConsoleLog(source, message, message_type, log=log)
+
+
+def _fail_log(source: str, message: str, message_type=Console.MessageType.Warning) -> None:
+    ConsoleLog(source, message, message_type, log=True)
 
 
 class BTMap:
@@ -64,6 +85,15 @@ class BTMap:
       UserDescription: Built-in BT helper group for travel and map-state routines.
       Notes: Public `PascalCase` methods in this class are discovery candidates when marked exposed.
     """
+    @staticmethod
+    def _resolve_map_id(map_id: int = 0, map_name: str = "") -> int:
+        resolved_map_id = int(map_id or 0)
+        if resolved_map_id <= 0 and map_name:
+            resolved_map_id = int(Map.GetMapIDByName(map_name) or 0)
+        if resolved_map_id <= 0:
+            return 0
+        return int(Map.GetBaseMapID(resolved_map_id) or resolved_map_id)
+
     @staticmethod
     def SetHardMode(hard_mode=True, log=False):
         """
@@ -108,9 +138,9 @@ class BTMap:
               Notes: Returns a boolean result for the enclosing condition node and logs success or failure.
             """
             if GLOBAL_CACHE.Party.IsHardMode() == hard_mode:
-                ConsoleLog("SetHardMode", f"Mode set to {'hard_mode' if hard_mode else 'normal_mode'}.", Console.MessageType.Info, log=log)
+                _log("SetHardMode", f"Mode set to {'hard_mode' if hard_mode else 'normal_mode'}.", log=log)
                 return True
-            ConsoleLog("SetHardMode", f"Failed to set hard mode to {hard_mode}.", Console.MessageType.Error, log=log)
+            _fail_log("SetHardMode", f"Failed to set hard mode to {hard_mode}.", Console.MessageType.Error)
             return False
         
         tree = BehaviorTree.SequenceNode(children=[
@@ -121,7 +151,45 @@ class BTMap:
         return BehaviorTree(tree)
 
     @staticmethod
-    def TravelToOutpost(outpost_id: int, log: bool = False, timeout: int = 10000) -> BehaviorTree: 
+    def WaitUntilOnExplorable(timeout_ms: int = 15000, log: bool = False) -> BehaviorTree:
+        """
+        Build a tree that waits until the current map is a valid explorable instance.
+
+        Meta:
+          Expose: true
+          Audience: beginner
+          Display: Wait Until On Explorable
+          Purpose: Wait until the current map becomes a valid explorable map.
+          UserDescription: Use this when a step should pause until the party is fully inside explorable mode.
+          Notes: Requires both a valid map context and explorable mode.
+        """
+        from ..Checks import Checks
+        state = {"logged_success": False}
+
+        def _wait_until_on_explorable() -> BehaviorTree.NodeState:
+            if Checks.Map.MapValid() and Checks.Map.IsExplorable():
+                if not state["logged_success"]:
+                    _log("WaitUntilOnExplorable", "Explorable map is ready.", log=log)
+                    state["logged_success"] = True
+                return BehaviorTree.NodeState.SUCCESS
+            return BehaviorTree.NodeState.RUNNING
+
+        return BehaviorTree(
+            BehaviorTree.WaitUntilNode(
+                name="WaitUntilOnExplorable",
+                condition_fn=_wait_until_on_explorable,
+                throttle_interval_ms=500,
+                timeout_ms=timeout_ms,
+            )
+        )
+
+    @staticmethod
+    def TravelToOutpost(
+        outpost_id: int = 0,
+        outpost_name: str = "",
+        log: bool = False,
+        timeout: int = 10000,
+    ) -> BehaviorTree:
         """
         Build a tree that travels to an outpost and waits for arrival.
 
@@ -133,7 +201,9 @@ class BTMap:
           UserDescription: Use this when you want to move the party to a specific outpost safely.
           Notes: Succeeds immediately if already in the requested outpost and otherwise waits for map readiness and party load.
         """
-        def arrived_early(outpost_id) -> bool: 
+        resolved_outpost_id = BTMap._resolve_map_id(outpost_id, outpost_name)
+
+        def arrived_early(target_outpost_id: int) -> bool:
             """
             Check whether the party is already in the requested outpost.
 
@@ -145,12 +215,15 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Logs the matched outpost when early success is detected.
             """
-            if Map.IsMapIDMatch(0, outpost_id): 
-                ConsoleLog("TravelToOutpost", f"Already at {Map.GetMapName(outpost_id)}", log=log) 
+            if target_outpost_id <= 0:
+                _fail_log("TravelToOutpost", f"Failed to travel: invalid outpost target '{outpost_name or outpost_id}'.")
+                return False
+            if Map.IsMapIDMatch(0, target_outpost_id):
+                _log("TravelToOutpost", f"Already at {Map.GetMapName(target_outpost_id)}", log=log)
                 return True
             return False
 
-        def travel_action(outpost_id) -> BehaviorTree.NodeState:
+        def travel_action(target_outpost_id: int) -> BehaviorTree.NodeState:
             """
             Dispatch the outpost travel request.
 
@@ -162,11 +235,14 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Returns success immediately after dispatching the travel request.
             """
-            ConsoleLog("TravelToOutpost", f"Travelling to {Map.GetMapName(outpost_id)}", log=log)
-            Map.Travel(outpost_id)
+            if target_outpost_id <= 0:
+                _fail_log("TravelToOutpost", f"Failed to travel: invalid outpost target '{outpost_name or outpost_id}'.")
+                return BehaviorTree.NodeState.FAILURE
+            _log("TravelToOutpost", f"Travelling to {Map.GetMapName(target_outpost_id)}", log=log)
+            Map.Travel(target_outpost_id)
             return BehaviorTree.NodeState.SUCCESS 
         
-        def map_arrival (outpost_id: int) -> BehaviorTree.NodeState: 
+        def map_arrival(target_outpost_id: int) -> BehaviorTree.NodeState:
             """
             Check whether the requested outpost has fully loaded.
 
@@ -178,18 +254,20 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Keeps the enclosing wait node running until map readiness and outpost id match both succeed.
             """
+            if target_outpost_id <= 0:
+                return BehaviorTree.NodeState.FAILURE
             if (Map.IsMapReady() and 
                 GLOBAL_CACHE.Party.IsPartyLoaded() and 
-                Map.IsMapIDMatch(0, outpost_id)): 
-                ConsoleLog("TravelToOutpost", f"Arrived at {Map.GetMapName(outpost_id)}", log=log) 
+                Map.IsMapIDMatch(0, target_outpost_id)): 
+                _log("TravelToOutpost", f"Arrived at {Map.GetMapName(target_outpost_id)}", log=log) 
                 return BehaviorTree.NodeState.SUCCESS 
             return BehaviorTree.NodeState.RUNNING 
         
         tree = BehaviorTree.SelectorNode(children=[ 
-                    BehaviorTree.ConditionNode(name="ArrivedEarly", condition_fn=lambda: arrived_early(outpost_id)),
+                    BehaviorTree.ConditionNode(name="ArrivedEarly", condition_fn=lambda: arrived_early(resolved_outpost_id)),
                     BehaviorTree.SequenceNode(name="TravelSequence", children=[ 
-                        BehaviorTree.ActionNode(name="TravelAction", action_fn=lambda: travel_action(outpost_id), aftercast_ms=3000),
-                        BehaviorTree.WaitNode(name="MapArrival", check_fn=lambda: map_arrival(outpost_id), timeout_ms=timeout),
+                        BehaviorTree.ActionNode(name="TravelAction", action_fn=lambda: travel_action(resolved_outpost_id), aftercast_ms=3000),
+                        BehaviorTree.WaitNode(name="MapArrival", check_fn=lambda: map_arrival(resolved_outpost_id), timeout_ms=timeout),
                         BehaviorTree.WaitForTimeNode(name="PostArrivalWait", duration_ms=1000)
                     ]) 
             ]) 
@@ -227,9 +305,7 @@ class BTMap:
                 Map.GetDistrict() == district and
                 Map.GetLanguage() == language):
 
-                ConsoleLog("TravelToRegion",
-                        f"Already at {Map.GetMapName(outpost_id)}",
-                        log=log)
+                _log("TravelToRegion", f"Already at {Map.GetMapName(outpost_id)}", log=log)
                 return True
             
             return False
@@ -246,9 +322,7 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Returns success immediately after dispatching the travel request.
             """
-            ConsoleLog("TravelToRegion",
-                    f"Travelling to {Map.GetMapName(outpost_id)}",
-                    log=log)
+            _log("TravelToRegion", f"Travelling to {Map.GetMapName(outpost_id)}", log=log)
             Map.TravelToRegion(outpost_id, region, district, language)
             return BehaviorTree.NodeState.SUCCESS
         # 3. ARRIVAL CHECK
@@ -271,9 +345,7 @@ class BTMap:
                 Map.GetDistrict() == district and
                 Map.GetLanguage() == language):
 
-                ConsoleLog("TravelToRegion",
-                        f"Arrived at {Map.GetMapName(outpost_id)}",
-                        log=log)
+                _log("TravelToRegion", f"Arrived at {Map.GetMapName(outpost_id)}", log=log)
                 return BehaviorTree.NodeState.SUCCESS
 
             return BehaviorTree.NodeState.RUNNING
@@ -291,6 +363,100 @@ class BTMap:
         return BehaviorTree(tree)
 
     @staticmethod
+    def TravelToRandomDistrict(
+        target_map_id: int = 0,
+        target_map_name: str = "",
+        region_pool: str = "eu",
+        log: bool = False,
+    ) -> BehaviorTree:
+        """
+        Build a tree that travels to a target outpost using a randomized district.
+
+        Meta:
+          Expose: true
+          Audience: intermediate
+          Display: Travel To Random District
+          Purpose: Travel to a target outpost while randomizing district selection from a chosen pool.
+          UserDescription: Use this when you want to rotate outpost districts automatically.
+          Notes: Accepts either `target_map_id` or `target_map_name`. Region pools supported are `eu`, `eu_asia`, and `asia`.
+        """
+        state = {
+            "resolved_map_id": 0,
+        }
+
+        def _normalize_region_pool() -> str:
+            mode = (region_pool or "eu").strip().lower()
+            mode = mode.replace("+", "_").replace("-", "_").replace(" ", "_")
+            aliases = {
+                "euasia": "eu_asia",
+                "eu_asia": "eu_asia",
+                "asia_only": "asia",
+                "eu_only": "eu",
+            }
+            mode = aliases.get(mode, mode)
+            return mode if mode in ("eu", "eu_asia", "asia") else "eu"
+
+        def _get_random_district_candidates() -> list[int]:
+            eu = [
+                District.EuropeItalian.value,
+                District.EuropeSpanish.value,
+                District.EuropePolish.value,
+                District.EuropeRussian.value,
+            ]
+            asia = [
+                District.AsiaKorean.value,
+                District.AsiaChinese.value,
+                District.AsiaJapanese.value,
+            ]
+
+            mode = _normalize_region_pool()
+            if mode == "asia":
+                return asia
+            if mode == "eu_asia":
+                return eu + asia
+            return eu
+
+        def _travel_to_random_district() -> BehaviorTree.NodeState:
+            resolved_map_id = BTMap._resolve_map_id(target_map_id, target_map_name)
+            if resolved_map_id <= 0:
+                _fail_log(
+                    "TravelToRandomDistrict",
+                    f"Failed to travel to random district: invalid target map '{target_map_name or target_map_id}'.",
+                )
+                return BehaviorTree.NodeState.FAILURE
+            state["resolved_map_id"] = resolved_map_id
+            if Map.IsMapReady() and Map.IsMapIDMatch(Map.GetMapID(), resolved_map_id):
+                _log("TravelToRandomDistrict", f"Already at {Map.GetMapName(resolved_map_id)}", log=log)
+                return BehaviorTree.NodeState.SUCCESS
+
+            district = random.choice(_get_random_district_candidates())
+            _log(
+                "TravelToRandomDistrict",
+                f"Travelling to {Map.GetMapName(resolved_map_id)} using district {district}.",
+                log=log,
+            )
+            Map.TravelToDistrict(resolved_map_id, district)
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree(
+            BehaviorTree.SequenceNode(
+                name="TravelToRandomDistrict",
+                children=[
+                    BehaviorTree.ActionNode(
+                        name="TravelToRandomDistrictAction",
+                        action_fn=_travel_to_random_district,
+                        aftercast_ms=500,
+                    ),
+                    BehaviorTree.SubtreeNode(
+                        name="WaitForRandomDistrictMapLoad",
+                        subtree_fn=lambda _node: BTMap.WaitforMapLoad(map_id=int(state["resolved_map_id"] or target_map_id)),
+                    ),
+                ],
+            )
+        )
+
+
+    @staticmethod
     def TravelGH(log: bool = False, wait_time: int = 1000, timeout: int = 15000) -> BehaviorTree:
         """
         Build a tree that travels to the guild hall and waits until it is loaded.
@@ -305,7 +471,7 @@ class BTMap:
         """
         def already_in_guild_hall() -> bool:
             if Map.IsMapReady() and Map.IsOutpost() and Map.IsGuildHall() and GLOBAL_CACHE.Party.IsPartyLoaded():
-                ConsoleLog("TravelGH", "Already in a loaded guild hall.", Console.MessageType.Info, log=log)
+                _log("TravelGH", "Already in a loaded guild hall.", log=log)
                 return True
             return False
 
@@ -321,7 +487,7 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Returns success immediately after dispatching the request.
             """
-            ConsoleLog("TravelGH", "Traveling to guild hall.", Console.MessageType.Info, log=log)
+            _log("TravelGH", "Traveling to guild hall.", log=log)
             Map.TravelGH()
             return BehaviorTree.NodeState.SUCCESS
 
@@ -334,7 +500,7 @@ class BTMap:
                 and Map.GetInstanceUptime() >= 1500
                 and Player.GetInstanceUptime() >= 1500
             ):
-                ConsoleLog("TravelGH", "Guild hall loaded.", Console.MessageType.Info, log=log)
+                _log("TravelGH", "Guild hall loaded.", log=log)
                 return BehaviorTree.NodeState.SUCCESS
             return BehaviorTree.NodeState.RUNNING
 
@@ -367,6 +533,101 @@ class BTMap:
         )
 
     @staticmethod
+    def EnterChallenge(
+        target_map_id: int = 0,
+        target_map_name: str = "",
+        *,
+        delay_ms: int = 3000,
+        confirm_extra: bool = False,
+        timeout: int = 30000,
+        log: bool = False,
+    ) -> BehaviorTree:
+        """
+        Build a tree that enters the current mission or challenge and waits for the destination map to load.
+
+        Meta:
+          Expose: true
+          Audience: intermediate
+          Display: Enter Challenge
+          Purpose: Trigger the current outpost's enter-mission flow, handle optional confirm dialogs, and wait for the destination map.
+          UserDescription: Use this when a route needs to leave an outpost through the mission or challenge entry dialog.
+          Notes: Accepts a target map id or name and mirrors the legacy EnterChallenge helper's confirm-dialog behavior.
+        """
+        state = {
+            "started": False,
+            "confirm_elapsed_ms": 0,
+        }
+
+        def _enter_challenge_action() -> BehaviorTree.NodeState:
+            needs_confirm = bool(
+                confirm_extra
+                or target_map_id in _MAPS_REQUIRING_EXTRA_CONFIRM
+                or Map.GetMapID() in _MAPS_REQUIRING_EXTRA_CONFIRM
+            )
+
+            if not state["started"]:
+                state["started"] = True
+                state["confirm_elapsed_ms"] = 0
+                _log("EnterChallenge", "Entering challenge.", log=log)
+                Map.EnterChallenge()
+                if not needs_confirm:
+                    return BehaviorTree.NodeState.SUCCESS
+
+            if not needs_confirm:
+                return BehaviorTree.NodeState.SUCCESS
+
+            if not Map.IsOutpost():
+                return BehaviorTree.NodeState.SUCCESS
+
+            if state["confirm_elapsed_ms"] >= 5000:
+                _fail_log("EnterChallenge", "Timed out waiting for the extra confirm dialog.")
+                return BehaviorTree.NodeState.FAILURE
+
+            Map.ConfirmEnterChallenge()
+            state["confirm_elapsed_ms"] += 100
+            return BehaviorTree.NodeState.RUNNING
+
+        def _reset_state(_node: BehaviorTree.Node) -> BehaviorTree.NodeState:
+            state["started"] = False
+            state["confirm_elapsed_ms"] = 0
+            return BehaviorTree.NodeState.SUCCESS
+
+        resolved_target_map_id = BTMap._resolve_map_id(target_map_id, target_map_name)
+
+        return BehaviorTree(
+            BehaviorTree.SequenceNode(
+                name="EnterChallenge",
+                children=[
+                    BehaviorTree.ActionNode(
+                        name="EnterChallengeAction",
+                        action_fn=_enter_challenge_action,
+                        aftercast_ms=100,
+                    ),
+                    BehaviorTree.WaitForTimeNode(
+                        name="EnterChallengeDelay",
+                        duration_ms=max(0, int(delay_ms)),
+                    ),
+                    BehaviorTree.SubtreeNode(
+                        name="WaitForChallengeMapLoad",
+                        subtree_fn=lambda _node: BTMap.WaitforMapLoad(
+                            map_id=resolved_target_map_id,
+                            map_name=target_map_name,
+                            log=log,
+                            timeout=timeout,
+                            player_instance_uptime_ms=500,
+                            throttle_interval_ms=250,
+                            post_arrival_wait_ms=0,
+                        ),
+                    ),
+                    BehaviorTree.ActionNode(
+                        name="EnterChallengeResetState",
+                        action_fn=_reset_state,
+                    ),
+                ],
+            )
+        )
+
+    @staticmethod
     def LeaveGH(log: bool = False, wait_time: int = 1000, timeout: int = 15000) -> BehaviorTree:
         """
         Build a tree that leaves the guild hall and waits until a non-guild-hall outpost is loaded.
@@ -381,7 +642,7 @@ class BTMap:
         """
         def already_outside_guild_hall() -> bool:
             if Map.IsMapReady() and Map.IsOutpost() and not Map.IsGuildHall() and GLOBAL_CACHE.Party.IsPartyLoaded():
-                ConsoleLog("LeaveGH", "Already outside the guild hall in a loaded outpost.", Console.MessageType.Info, log=log)
+                _log("LeaveGH", "Already outside the guild hall in a loaded outpost.", log=log)
                 return True
             return False
 
@@ -397,7 +658,7 @@ class BTMap:
               UserDescription: Internal support routine.
               Notes: Returns success immediately after dispatching the request.
             """
-            ConsoleLog("LeaveGH", "Leaving guild hall.", Console.MessageType.Info, log=log)
+            _log("LeaveGH", "Leaving guild hall.", log=log)
             Map.LeaveGH()
             return BehaviorTree.NodeState.SUCCESS
 
@@ -410,7 +671,7 @@ class BTMap:
                 and Map.GetInstanceUptime() >= 1500
                 and Player.GetInstanceUptime() >= 1500
             ):
-                ConsoleLog("LeaveGH", "Returned outpost loaded.", Console.MessageType.Info, log=log)
+                _log("LeaveGH", "Returned outpost loaded.", log=log)
                 return BehaviorTree.NodeState.SUCCESS
             return BehaviorTree.NodeState.RUNNING
 
@@ -443,7 +704,10 @@ class BTMap:
         )
     
     @staticmethod
-    def WaitforMapLoad(map_id:int=0, log:bool=False, timeout: int = 10000, map_name: str =""):   
+    def WaitforMapLoad(map_id:int=0, log:bool=False, timeout: int = 10000, map_name: str ="",
+                       player_instance_uptime_ms: int = 1500, map_instance_uptime_ms: int = 1500,
+                       throttle_interval_ms: int = 500, post_arrival_wait_ms: int = 1000
+                       ) -> BehaviorTree:   
         """
         Build a tree that waits for a target map instance to finish loading.
 
@@ -470,9 +734,8 @@ class BTMap:
             nonlocal map_id, map_name, log
             from ..Checks import Checks
             
-            if map_name:
-                map_id = Map.GetMapIDByName(map_name)
-                
+            map_id = BTMap._resolve_map_id(map_id, map_name)
+                 
             if map_id == 0:
                 return BehaviorTree.NodeState.RUNNING
             
@@ -483,14 +746,14 @@ class BTMap:
             if not GLOBAL_CACHE.Party.IsPartyLoaded():
                 return BehaviorTree.NodeState.RUNNING
             
-            if not Map.GetInstanceUptime() >= 1500:
+            if not Map.GetInstanceUptime() >= map_instance_uptime_ms:
                 return BehaviorTree.NodeState.RUNNING
             
-            if not Player.GetInstanceUptime() >= 1500:
+            if not Player.GetInstanceUptime() >= player_instance_uptime_ms:
                 return BehaviorTree.NodeState.RUNNING
 
             if Map.IsMapIDMatch(Map.GetMapID(), map_id):
-                ConsoleLog("WaitforMapLoad", f"Map {Map.GetMapName(map_id)} loaded successfully.", log=log)
+                _log("WaitforMapLoad", f"Map {Map.GetMapName(map_id)} loaded successfully.", log=log)
                 return BehaviorTree.NodeState.SUCCESS
             return BehaviorTree.NodeState.RUNNING
 
@@ -498,9 +761,9 @@ class BTMap:
                     children=[
                         BehaviorTree.WaitUntilNode(name="WaitForMapLoadUntil",
                             condition_fn=lambda node: _map_arrival_check(node),
-                            throttle_interval_ms=500,
+                            throttle_interval_ms=throttle_interval_ms,
                             timeout_ms=timeout),
-                        BehaviorTree.WaitForTimeNode(name="PostArrivalWait", duration_ms=1000)
+                        BehaviorTree.WaitForTimeNode(name="PostArrivalWait", duration_ms=post_arrival_wait_ms)
                     ]
                 )
         

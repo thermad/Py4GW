@@ -6,6 +6,7 @@ import Py4GW
 from Py4GWCoreLib import Player, GLOBAL_CACHE, SpiritModelID, Timer, Agent, Routines, Range, Allegiance, AgentArray
 from Py4GWCoreLib import Weapon, Effects
 from Py4GWCoreLib.enums import SPIRIT_BUFF_MAP, ModelID
+from Py4GWCoreLib.GlobalCache.HexRemovalPriority import get_hexed_ally_for_removal
 from .custom_skill import CustomSkillClass
 from .targeting import TargetLowestAlly, TargetLowestAllyEnergy, TargetClusteredEnemy, TargetLowestAllyCaster, TargetLowestAllyMartial, TargetLowestAllyMelee, TargetLowestAllyRanged, GetAllAlliesArray, TargetAllyWeaponSpell, TargetMinionOrAllyNonEnchanted, TargetMinionNonEnchanted, TargetAllyNonEnchanted, TargetAllyNonWeaponSpelled, TargetDeadPartyMember, IsResurrectablePartyMember
 from .targeting import GetEnemyAttacking, GetEnemyCasting, GetEnemyCastingSpell, GetEnemyCastingSpellOrChant, GetEnemyInjured, GetEnemyConditioned, GetEnemyHealthy
@@ -111,6 +112,7 @@ class CombatClass:
         self.oldCalledTarget: int = 0
         self.auto_call_target_id: int = 0
         self.auto_call_target_called: bool = False
+        self.auto_call_target_source: str = ""
 
         self.in_aggro: bool = False
         self.is_targeting_enabled: bool = False
@@ -462,7 +464,7 @@ class CombatClass:
         players = GLOBAL_CACHE.Party.GetPlayers()
         target = players[0].called_target_id
 
-        if Agent.IsValid(target):
+        if Agent.IsLiving(target) and not Agent.IsDead(target):
             return target  
         
         return 0 
@@ -476,25 +478,47 @@ class CombatClass:
             Player.ChangeTarget(target_id)
             Player.Interact(target_id, False)
 
-    def MaybeCallCombatTarget(self, target_id: int, cached_data: CacheData | None) -> None:
+    def _is_valid_call_target(self, target_id: int) -> bool:
+        if target_id == 0 or not Agent.IsValid(target_id) or Agent.IsDead(target_id):
+            return False
+        _, target_allegiance = Agent.GetAllegiance(target_id)
+        return target_allegiance == "Enemy"
+
+    def MaybeCallCombatTarget(
+        self,
+        target_id: int,
+        cached_data: CacheData | None,
+        *,
+        force: bool = False,
+        source: str = "auto",
+    ) -> None:
         if cached_data is None or not Settings().AutoCallTargets:
             return
 
         if not cached_data.account_data.AgentPartyData.IsPartyLeader:
             return
 
+        if not self._is_valid_call_target(self.auto_call_target_id):
+            self.auto_call_target_id = 0
+            self.auto_call_target_called = False
+            self.auto_call_target_source = ""
+
+        if (
+            self.auto_call_target_id != 0
+            and target_id != self.auto_call_target_id
+            and not force
+        ):
+            return
+
         if target_id != self.auto_call_target_id:
             self.auto_call_target_id = target_id
             self.auto_call_target_called = False
+            self.auto_call_target_source = source
 
         if self.auto_call_target_called:
             return
 
-        if target_id == 0 or not Agent.IsValid(target_id) or Agent.IsDead(target_id):
-            return
-
-        _, target_allegiance = Agent.GetAllegiance(target_id)
-        if target_allegiance != "Enemy":
+        if not self._is_valid_call_target(target_id):
             return
 
         from Py4GWCoreLib import Party
@@ -553,6 +577,7 @@ class CombatClass:
         if CallTarget(target_id, interact=False):
             self.auto_call_target_id = target_id
             self.auto_call_target_called = True
+            self.auto_call_target_source = "spike"
         self._post_spike_lock(skill, target_id)
 
     def GetPartyTarget(self) -> int:
@@ -734,6 +759,12 @@ class CombatClass:
             v_target = TargetDeadPartyMember(Range.Spellcast.value)
         elif target_allegiance == Skilltarget.ResurrectionAlly:
             v_target = Routines.Agents.GetResurrectionTarget(
+                Range.Spellcast.value,
+                reserve=True,
+                skill_id=self.skills[slot].skill_id,
+            )
+        elif target_allegiance == Skilltarget.HexedAlly:
+            v_target = get_hexed_ally_for_removal(
                 Range.Spellcast.value,
                 reserve=True,
                 skill_id=self.skills[slot].skill_id,
@@ -1020,7 +1051,7 @@ class CombatClass:
         feature_count += (1 if Conditions.Overcast > 0 else 0)
         feature_count += (1 if Conditions.IsPartyWide else 0)
         feature_count += (1 if Conditions.RequiresSpiritInEarshot else 0)
-        feature_count += (1 if Conditions.EnemiesInRange > 0 else 0)
+        feature_count += (1 if Conditions.EnemyCount > 0 else 0)
         feature_count += (1 if Conditions.AlliesInRange > 0 else 0)
         feature_count += (1 if Conditions.SpiritsInRange > 0 else 0)
         feature_count += (1 if Conditions.MinionsInRange > 0 else 0)
@@ -1295,10 +1326,10 @@ class CombatClass:
                     if self.HasEffect(pet_id,self.skills[slot].skill_id ):
                         return False
             
-        if Conditions.EnemiesInRange != 0:
+        if Conditions.EnemyCount != 0:
             player_pos = Player.GetXY()
-            enemy_array = enemy_array = Routines.Agents.GetFilteredEnemyArray(player_pos[0], player_pos[1], Conditions.EnemiesInRangeArea)
-            if len(enemy_array) >= Conditions.EnemiesInRange:
+            enemy_array = Routines.Agents.GetFilteredEnemyArray(player_pos[0], player_pos[1], Conditions.EnemiesInRange)
+            if len(enemy_array) >= Conditions.EnemyCount:
                 number_of_features += 1
             else:
                 return False
@@ -1769,7 +1800,6 @@ class CombatClass:
             return False
 
         self.aftercast_timer.Reset()
-        self.MaybeCallCombatTarget(target_agent_id, cached_data)
         self._apply_spike_lock(skill, target_agent_id)
         self._skill_lock_post(skill)
         GLOBAL_CACHE.SkillBar.UseSkill(self.skill_order[slot]+1, target_agent_id, aftercast_delay=self.aftercast)

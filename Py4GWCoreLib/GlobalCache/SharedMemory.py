@@ -44,7 +44,7 @@ from .shared_memory_src.HeroAIOptionStruct import HeroAIOptionStruct
 from .shared_memory_src.AgentDataStruct import AgentDataStruct
 from .shared_memory_src.AccountStruct import AccountStruct
 from .shared_memory_src.AllAccounts import AllAccounts
-from HeroAI.following import FollowFormationPublisher
+from HeroAI.follow.leader_publish import FollowFormationPublisher
 from ..py4gwcorelib_src.FrameCache import frame_cache
 
 
@@ -234,7 +234,7 @@ class Py4GWSharedMemoryManager:
     def AccountHasEffect(self, account_email: str, effect_id: int) -> bool:
         """Check if the account with the given email has the specified effect."""
         return self.GetAllAccounts().AccountHasEffect(account_email, effect_id)
-    
+
     #region HeroAI
     @frame_cache(category="SharedMemory", source_lib="GetAllAccountHeroAIOptions")
     def GetAllAccountHeroAIOptions(self) -> list[HeroAIOptionStruct]:
