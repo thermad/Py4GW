@@ -1,5 +1,6 @@
 # region Imports
 import os
+import sys
 import random
 import traceback
 from collections import deque
@@ -19,6 +20,11 @@ import threading
 import json, struct
 from enum import Enum
 import math
+
+lib_path = sys.prefix + "\\Py4GWCoreLib\\ExternalLibs"
+if lib_path not in sys.path:
+    sys.path.insert(0, lib_path)
+import Py4GWCoreLib.ExternalLibs.zmq as ZMQ
 # endregion
 
 
@@ -531,82 +537,6 @@ class BehaviorPermaseedPrinter(Behavior):
         super().__init__(thread_globals)
         self.target_minion_count = 20
         self.state = 0
-
-    def run_(self):
-        weapon_of_quickening = 1268
-        kareis_healing_circle = 1119
-        heal_area = 280
-        shielding_hands = 299
-        shield_of_absorption = 1399
-        fomf = 791
-        ee = 2420
-        balth_spirit = 242
-
-        ua = 268
-        seed = 2105
-        blessed_aura = 256
-        life_bond = 241
-        animate_minions = 85
-        dark_aura = 116
-        oop = 134
-
-        ritmo_busy = GW.Timer()
-        ritmo_t = 0
-        mona_busy = GW.Timer()
-        mona_t = 0
-        monb_busy = GW.Timer()
-        monb_t = 0
-        mona = 0
-        monb = 0
-        c: Client
-        if ritmo_busy.HasElapsed(ritmo_t):
-            ritmo_busy.Reset()
-            ritmo_busy.Stop()
-        if mona_busy.HasElapsed(mona_t):
-            mona_busy.Reset()
-            mona_busy.Stop()
-        if monb_busy.HasElapsed(monb_t):
-            monb_busy.Reset()
-            monb_busy.Stop()
-        #ritmo logic
-        if not ritmo_busy.IsRunning():
-            # Maintain balth spirit on Ritmo
-            if GW.Effects.GetEffectTimeRemaining(GW.Player.GetAgentID(), balth_spirit) == 0:
-                GW.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(balth_spirit), GW.Player.GetAgentID())
-                ritmo_t = 3000
-                ritmo_busy.Start()
-            elif (GW.SkillBar.GetSkillData(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening)).get_recharge == 0 and
-                  GW.Effects.GetEffectTimeRemaining(GW.Player.GetAgentID(), weapon_of_quickening) < 3000):
-                GW.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening), GW.Player.GetAgentID())
-                ritmo_t = 3000
-                ritmo_busy.Start()
-            elif GW.Agent.GetEnergy(GW.Player.GetAgentID()) > 0.9 and GW.SkillBar.GetSkillData(GW.SkillBar.GetSlotBySkillID(heal_area)).get_recharge == 0:
-                GW.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(heal_area), GW.Player.GetAgentID())
-                ritmo_t = 2000
-                ritmo_busy.Start()
-            elif (len(self.client_list) >= 1 and GW.Agent.GetEnergy(GW.Player.GetAgentID()) > 0.5 and
-                  GW.SkillBar.GetSkillData(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening)).get_recharge == 0 and
-                  self.client_data.get(self.client_list[0], dict()).get("effects", dict()).get(str(weapon_of_quickening), dict()).get("time_remaining", 0) < 3000):
-                GW.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening), self.client_data.get(self.client_list[0], dict()).get("id", 0))
-                ritmo_t = 3000
-                ritmo_busy.Start()
-            elif (len(self.client_list) >= 2 and GW.Agent.GetEnergy(GW.Player.GetAgentID()) > 0.5 and
-                  GW.SkillBar.GetSkillData(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening)).get_recharge == 0 and
-                  self.client_data.get(self.client_list[1], dict()).get("effects", dict()).get(str(weapon_of_quickening), dict()).get("time_remaining", 0) < 3000):
-                GW.SkillBar.UseSkill(GW.SkillBar.GetSlotBySkillID(weapon_of_quickening), self.client_data.get(self.client_list[1], dict()).get("id", 0))
-                ritmo_t = 3000
-                ritmo_busy.Start()
-        else:
-            pass # print(f"Ritmo busy {ritmo_busy.GetElapsedTime()}")
-        #mona logic
-        for c in self.client_list:
-            pass
-            # maintain dark aura on both
-            # state track who to kill
-            #   sac A
-            #   b make minion and res A
-            #   b use blessed aura and then seed ritmo
-            #   switch a and b
 
     def draw(self):
         PyImGui.text("Minion Goal:")
