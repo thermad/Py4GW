@@ -40,10 +40,16 @@ class SharedCommandType(IntEnum):
     ResumeWidgets = auto()
     SwitchCharacter = auto()
     LoadSkillTemplate = auto()
+    LoadSkillTemplateOnHero = auto()
+    AddHero = auto()
+    KickHero = auto()
+    
     SkipCutscene = auto()
     SendDialog = auto()
+    SendManualDialog = auto()
     TravelToGuildHall = auto()
     
+    SetActiveTitle = auto()
     SetActiveQuest = auto()
     AbandonQuest = auto()
 
@@ -58,6 +64,8 @@ class SharedCommandType(IntEnum):
     MerchantRules = auto()
     RefreshHeroAIBuilds = auto()
     WithdrawGold = auto()
+    
+    Reload = auto()
 
     #region privately Handled Commands
     MultiBoxing = auto() # privately Handled Command, by frenkey
@@ -65,10 +73,31 @@ class SharedCommandType(IntEnum):
     UseSkillCombatPrep = auto() #handled in CombatPrep only by Mark
     LootEx = auto() # privately Handled Command, by frenkey
     Pycons = auto()
-    BroadcastChatCommand = auto() 
+    BroadcastChatCommand = auto()
+    ConsoleMessage = auto()
+    SetHeadlessLooting = auto()
+    SetResurrectionScroll = auto()
     #endregion
 
+class ReloadType(IntEnum):
+    Unknown = auto()
+    Buying = auto()
+    Looting = auto()
+    Inventory = auto()
+    Crafting = auto()
+    Sorting = auto()
     
+    Items = auto()
+    
+    Allies = auto()
+    Armorers = auto()
+    Artisans = auto()
+    Collectors = auto()
+    ConsumableCrafters = auto()
+    Foes = auto()
+    Merchants = auto()
+    Traders = auto()
+    Weaponsmiths = auto()
 
 
 class CombatPrepSkillsType(IntEnum):

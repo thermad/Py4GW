@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Tuple, Generator, Any
-import os
+import os, time
 import PyImGui
 from Py4GW import Game
 from Py4GWCoreLib import (GLOBAL_CACHE, Routines, Range, Py4GW, ConsoleLog, ModelID, Bags, Botting,
@@ -947,9 +947,7 @@ def Forming_A_Party(bot: Botting) -> None:
     bot.Items.SpawnAndDestroyBonusItems()
     exec_fn = lambda: QuestLoop(440, -14063.00, 10044.00, 0x81B801)
     bot.States.AddCustomState(exec_fn, "Accept - Forming A Party")
-    #bot.Move.XYAndDialog(-14063.00, 10044.00, 0x81B801)
     bot.Move.XYAndExitMap(-14961, 11453, target_map_name="Sunqua Vale")
-    #bot.Move.XYAndDialog(19673.00, -6982.00, 0x81B807)
     exec_fn = lambda: QuestLoop(440, 19673.00, -6982.00, 0x81B807, mode="complete")
     bot.States.AddCustomState(exec_fn, "Complete - Forming A Party")
     

@@ -16,7 +16,14 @@ from Py4GWCoreLib.Player import Player
 from Py4GWCoreLib.routines_src.BehaviourTrees import BehaviorTree
 
 from HeroAI.cache_data import CacheData
-from HeroAI.follow.follower_runtime import FollowExecutionState, execute_follower_follow
+from HeroAI.follow.follower_runtime import (
+    FollowExecutionState,
+    execute_follower_follow,
+    get_follow_destination_distance,
+    is_follow_recovery_active,
+)
+from HeroAI import enemy_party
+from HeroAI import resurrection_scroll
 
 from HeroAI.windows import (HeroAI_FloatingWindows ,HeroAI_Windows,)
 from HeroAI.ui_base import HeroAI_BaseUI
@@ -36,6 +43,9 @@ build_contract_map_signature: tuple[int, int, int, int] | None = None
 def LootingNode(cached_data: CacheData)-> BehaviorTree.NodeState:
     options = cached_data.account_options
     if not options or not options.Looting:
+        return BehaviorTree.NodeState.FAILURE
+
+    if is_follow_recovery_active(cached_data, follow_execution_state):
         return BehaviorTree.NodeState.FAILURE
     
     if cached_data.data.in_aggro:
@@ -89,6 +99,9 @@ def HandleOutOfCombat(cached_data: CacheData):
     if cached_data.data.in_aggro:
         return False
 
+    if is_follow_recovery_active(cached_data, follow_execution_state):
+        return False
+
     player_agent_id = Player.GetAgentID()
     if cached_data.combat_handler.InCastingRoutine() or Agent.IsCasting(player_agent_id):
         return False
@@ -101,6 +114,9 @@ def HandleCombat(cached_data: CacheData):
     options = cached_data.account_options
     
     if not options or not options.Combat:  # halt operation if combat is disabled
+        return False
+
+    if is_follow_recovery_active(cached_data, follow_execution_state):
         return False
     
     if not cached_data.data.in_aggro:
@@ -144,7 +160,10 @@ def EnsureFollowModuleIni() -> None:
         Py4GW.Console.Log(MODULE_NAME, f"Follow formation INI bootstrap failed: {e}", Py4GW.Console.MessageType.Error)
 
 def Follow(cached_data: CacheData) -> BehaviorTree.NodeState:
-    return execute_follower_follow(cached_data, follow_execution_state)
+    if not cached_data.data.is_leader:
+        return execute_follower_follow(cached_data, follow_execution_state)
+    
+    return BehaviorTree.NodeState.FAILURE  # leader doesn't follow anyone
 
 def handle_UI (cached_data: CacheData):
     global HeroAI_BT
@@ -160,6 +179,8 @@ def handle_UI (cached_data: CacheData):
         HeroAI_BaseUI.draw_debug_window(HeroAI_BT)
 
     HeroAI_FloatingWindows.show_ui(cached_data)
+    if Map.IsExplorable() and cached_data.data.is_leader and enemy_party.is_enabled():
+        enemy_party.ui_main()
     HeroAI_BaseUI.DrawBuildMatchesWindow(cached_data)
     HeroAI_BaseUI.DrawFollowFormationsQuickWindow(cached_data)
    
@@ -271,8 +292,8 @@ GlobalGuardNode = BehaviorTree.SequenceNode(
         BehaviorTree.ConditionNode(
             name="DistanceSafe",
             condition_fn=lambda:
-                HeroAI_FloatingWindows.DistanceToDestination(cached_data)
-                < Range.SafeCompass.value
+                get_follow_destination_distance(cached_data) < Range.SafeCompass.value
+                or is_follow_recovery_active(cached_data, follow_execution_state)
         ),
 
         BehaviorTree.ConditionNode(
@@ -289,7 +310,10 @@ CastingBlockNode = BehaviorTree.ConditionNode(
     condition_fn=lambda:
         BehaviorTree.NodeState.RUNNING
         if (
-            cached_data.combat_handler.InCastingRoutine()
+            (
+                cached_data.combat_handler.InCastingRoutine()
+                and not is_follow_recovery_active(cached_data, follow_execution_state)
+            )
             or Agent.IsCasting(Player.GetAgentID())
         )
         else BehaviorTree.NodeState.SUCCESS
@@ -298,14 +322,18 @@ CastingBlockNode = BehaviorTree.ConditionNode(
     
     
 def movement_interrupt() -> BehaviorTree.NodeState:
+    # During a smart unstuck detour, BT.Move must be ticked at full HeroAI
+    # BT rate so it can steer the engine target continuously 
+    if follow_execution_state.stuck.mode != "idle":
+        return BehaviorTree.NodeState.FAILURE  # let Follow run every tick during detour
     if Agent.IsMoving(Player.GetAgentID()):
         return BehaviorTree.NodeState.SUCCESS   # block lower-priority automation for this tick
     return BehaviorTree.NodeState.FAILURE      # allow next branch
 
 
 def user_interrupt() -> BehaviorTree.NodeState:
-    if IsUserInterrupting():
-        return BehaviorTree.NodeState.SUCCESS   # block lower-priority automation for this tick
+    #if IsUserInterrupting():
+    #    return BehaviorTree.NodeState.SUCCESS   # block lower-priority automation for this tick
     return BehaviorTree.NodeState.FAILURE      # allow next branch
 
 
@@ -339,15 +367,15 @@ HeroAI_BT = BehaviorTree.SequenceNode(name="HeroAI_Main_BT",
                     action_fn=lambda: user_interrupt(),
                 ),
 
-                BehaviorTree.ActionNode(
-                    name="MovementInterrupt",
-                    action_fn=lambda: movement_interrupt(),
-                ),
-
                 # Follow
                 BehaviorTree.ActionNode(
                     name="Follow",
                     action_fn=lambda: Follow(cached_data),
+                ),
+
+                BehaviorTree.ActionNode(
+                    name="MovementInterrupt",
+                    action_fn=lambda: movement_interrupt(),
                 ),
 
                 # Combat
@@ -423,6 +451,7 @@ def main():
         EnsureFollowModuleIni()
         HeroAI_FloatingWindows.update()
         handle_UI(cached_data)
+        resurrection_scroll.tick()
         
         if initialize(cached_data):
             modulo += 1

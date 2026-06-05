@@ -845,7 +845,7 @@ class NecromancerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Dark_Aura")
         skill.SkillType = SkillType.Enchantment.value
-        skill.TargetAllegiance = Skilltarget.Self.value
+        skill.TargetAllegiance = Skilltarget.OtherAlly.value
         skill.Nature = SkillNature.Buff.value
         skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
@@ -856,7 +856,7 @@ class NecromancerSkills:
         skill.TargetAllegiance = Skilltarget.Minion.value
         skill.Nature = SkillNature.Buff.value
         skill.Conditions.LessLife = 0.35
-        skill.Conditions.IsOutOfCombat = True
+        skill.Conditions.IsOutOfCombat = False
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()
@@ -985,8 +985,9 @@ class NecromancerSkills:
         skill = CustomSkill()
         skill.SkillID = GLOBAL_CACHE.Skill.GetID("Tainted_Flesh")
         skill.SkillType = SkillType.Enchantment.value
-        skill.TargetAllegiance = Skilltarget.Ally.value
+        skill.TargetAllegiance = Skilltarget.Self.value
         skill.Nature = SkillNature.Buff.value
+        skill.Conditions.IsOutOfCombat = True
         skill_data[skill.SkillID] = skill
 
         skill = CustomSkill()

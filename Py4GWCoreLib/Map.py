@@ -744,8 +744,14 @@ class Map:
     @staticmethod
     def SkipCinematic() -> None:
         """ Skip the cinematic."""
+        if not Map.IsInCinematic():
+            return
+
         def _skip_cinematic() -> bool:
+            if not Map.IsInCinematic():
+                return False
             return MapMethods.SkipCinematic()
+
         ActionQueueManager().AddAction("TRANSITION", _skip_cinematic)
 
         
@@ -2097,10 +2103,28 @@ class Map:
             return MapContext.GetPathingMapsRaw()
 
         @staticmethod
-        def ClearPathingCache(map_id: Optional[int] = None) -> None:
-            """Clear cached pathing data."""
+        def ClearPathingCache(map_id: Optional[int] = None, include_live: bool = False) -> None:
+            """Clear cached pathing data.
+
+            By default this clears offline FFNA caches. Set include_live=True to also
+            clear live map-context snapshots and the AutoPathing navmesh cache.
+            """
             from .native_src.methods.FfnaMapMethods import FfnaMapMethods
             FfnaMapMethods.ClearCache(map_id)
+            if include_live:
+                from .native_src.context.MapContext import MapContext
+                from .Pathing import AutoPathing
+
+                MapContext.ClearPathingCache(map_id)
+                AutoPathing().clear_navmesh_cache(map_id)
+
+        @staticmethod
+        def ForceReloadNavMesh() -> None:
+            """Clear live/offline pathing caches for the current map and rebuild navmesh."""
+            from .Pathing import AutoPathing
+
+            for _ in AutoPathing().force_reload_navmesh():
+                pass
 
         @staticmethod
         def GetAvailableMapIds() -> set[int]:

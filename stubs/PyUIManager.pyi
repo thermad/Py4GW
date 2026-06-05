@@ -189,6 +189,28 @@ class UIManager:
     @staticmethod
     def get_prev_child_frame_id(frame_id: int) -> int: ...
     @staticmethod
+    def get_related_frame_id(frame_id: int, relation_kind: int, start_after: int = ...) -> int: ...
+    @staticmethod
+    def get_frame_layer_by_frame_id(frame_id: int) -> int: ...
+    @staticmethod
+    def set_frame_layer_by_frame_id(frame_id: int, layer: int) -> bool: ...
+    @staticmethod
+    def is_ancestor_of_by_frame_id(frame_id: int, ancestor_id: int) -> bool: ...
+    @staticmethod
+    def get_frame_code_by_frame_id(frame_id: int) -> int: ...
+    @staticmethod
+    def get_frame_min_size_by_frame_id(frame_id: int) -> Tuple[float, float]: ...
+    @staticmethod
+    def get_frame_client_border_by_frame_id(frame_id: int) -> Tuple[float, float, float, float]: ...
+    @staticmethod
+    def get_frame_clip_rect_by_frame_id(frame_id: int) -> Tuple[float, float, float, float]: ...
+    @staticmethod
+    def get_frame_position_ex_by_frame_id(frame_id: int) -> Tuple[float, float, float, float, int]: ...
+    @staticmethod
+    def get_frame_title_by_frame_id(frame_id: int) -> str: ...
+    @staticmethod
+    def get_frame_native_size_by_frame_id(frame_id: int) -> Tuple[float, float]: ...
+    @staticmethod
     def get_item_frame_id(parent_frame_id: int, index: int) -> int: ...
     @staticmethod
     def get_tab_frame_id(parent_frame_id: int, index: int) -> int: ...
@@ -281,9 +303,6 @@ class UIManager:
     ) -> int: ...
 
     @staticmethod
-    def resolve_devtext_dialog_proc() -> int: ...
-
-    @staticmethod
     def ensure_devtext_source() -> Tuple[int, bool]: ...
 
     @staticmethod
@@ -303,37 +322,34 @@ class UIManager:
 
     @staticmethod
     def clear_window_contents_by_frame_id(root_frame_id: int) -> bool: ...
-
+    
     @staticmethod
-    def create_window(
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        frame_label: str = ...,
-        parent_frame_id: int = ...,
-        child_index: int = ...,
-        frame_flags: int = ...,
-        create_param: int = ...,
-        frame_callback: int = ...,
-        anchor_flags: int = ...,
-        ensure_devtext_source: bool = ...
+    def CreateNativeWindow(
+        content_x: float,
+        content_y: float,
+        content_width: float,
+        content_height: float,
+        title: str = ...,
     ) -> int: ...
 
     @staticmethod
-    def create_empty_window(
+    def create_titled_window_clone(
+        title: str,
         x: float,
         y: float,
         width: float,
         height: float,
         frame_label: str = ...,
-        parent_frame_id: int = ...,
-        child_index: int = ...,
-        frame_flags: int = ...,
-        create_param: int = ...,
-        frame_callback: int = ...,
-        anchor_flags: int = ...,
-        ensure_devtext_source: bool = ...
+    ) -> int: ...
+
+    @staticmethod
+    def create_titled_empty_window(
+        title: str,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        frame_label: str = ...,
     ) -> int: ...
 
     @staticmethod
@@ -371,6 +387,24 @@ class UIManager:
 
     @staticmethod
     def set_frame_disabled_by_frame_id(frame_id: int, is_disabled: bool) -> bool: ...
+    @staticmethod
+    def get_frame_state_bit_by_frame_id(frame_id: int, bit: int) -> bool: ...
+    @staticmethod
+    def set_frame_opacity_by_frame_id(frame_id: int, opacity: float, fade_time: float = ...) -> bool: ...
+    @staticmethod
+    def show_frame_by_frame_id(frame_id: int, show: bool) -> bool: ...
+    @staticmethod
+    def get_parent_frame_id_direct(frame_id: int) -> int: ...
+    @staticmethod
+    def get_frame_opacity_by_frame_id(frame_id: int) -> float: ...
+    @staticmethod
+    def get_frame_user_param_by_frame_id(frame_id: int) -> int: ...
+    @staticmethod
+    def get_child_frame_id_from_name_hash(parent_frame_id: int, name_hash: int) -> int: ...
+    @staticmethod
+    def get_overlay_frame_ids() -> List[int]: ...
+    @staticmethod
+    def get_popup_frame_ids() -> List[int]: ...
 
     @staticmethod
     def set_frame_title_by_frame_id(frame_id: int, title: str) -> bool: ...
@@ -729,3 +763,44 @@ class UIManager:
     def set_window_position(window_id: int, position: list[int]) -> None: ...
     @staticmethod
     def is_shift_screenshot() -> bool: ...
+
+    # =========================================================================
+    # Window Contents — Frame List Item Management (2026-06-04)
+    # =========================================================================
+    @staticmethod
+    def ctl_frame_list_create_item_by_frame_id(
+        parent_frame_list_id: int,
+        flags: int,
+        insert_index: int,
+        item_proc: int,
+        encoded_text: str,
+    ) -> int: ...
+    @staticmethod
+    def frame_new_subclass_by_frame_id(
+        frame_id: int,
+        subclass_proc: int,
+        msg_id: int,
+    ) -> int: ...
+    @staticmethod
+    def create_scrollable_content_by_frame_id(
+        window_id: int,
+        child_index: int = 0,
+        component_flags: int = 0x20000,
+        component_label: str = "",
+    ) -> int: ...
+    @staticmethod
+    def add_text_item_to_frame_list_by_frame_id(
+        frame_list_id: int,
+        plain_text: str,
+        insert_index: int = 0,
+        item_flags: int = 0,
+    ) -> int: ...
+    @staticmethod
+    def create_scrollable_text_window(
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        title: str,
+        items: list[str],
+    ) -> int: ...

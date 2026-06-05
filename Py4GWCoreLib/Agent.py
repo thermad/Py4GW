@@ -1,6 +1,8 @@
 from typing import List, Optional, Tuple
 
 import PyAgent
+
+from Py4GWCoreLib.py4gwcorelib_src.FrameCache import frame_cache
 from .native_src.context.AgentContext import AgentStruct, AgentLivingStruct, AgentItemStruct, AgentGadgetStruct
 from .native_src.context.WorldContext import AttributeStruct
 from .native_src.internals.helpers import encoded_wstr_to_str
@@ -10,7 +12,10 @@ from .native_src.internals.string_table import decode as decode_raw
 
 class Agent:
     ILLUSIONARY_WEAPONRY_ID = 0
-    DEAD_HEALTH_EPSILON = 0.001
+    # Agent HP is normalized 0.0-1.0 for most non-party entities. Use the
+    # smallest expected enemy health pool so ~= 1 HP residual noise is still
+    # treated as dead across the common 400-1000 HP range.
+    DEAD_HEALTH_EPSILON = 1.0 / 400.0
 
     @staticmethod
     def _enc_name_bytes_to_wstr(enc_bytes: list[int]) -> str:
@@ -329,6 +334,7 @@ class Agent:
         return living.model_state 
 
     @staticmethod
+    @frame_cache(category="Agent", source_lib="GetModelID")
     def GetModelID(agent_id : int) -> int:
         """Retrieve the model of an agent."""
         living = Agent.GetLivingAgentByID(agent_id)
@@ -415,6 +421,7 @@ class Agent:
         return living.owner
 
     @staticmethod
+    @frame_cache(category="Agent", source_lib="GetXY")
     def GetXY(agent_id : int) -> tuple[float, float]:
         """
         Purpose: Retrieve the X and Y coordinates of an agent.
@@ -1030,10 +1037,18 @@ class Agent:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return False
-        is_dead = living.is_dead
-        dead_by_type_map = living.is_dead_by_type_map
-        health = living.hp
-        return is_dead or dead_by_type_map or health <= Agent.DEAD_HEALTH_EPSILON
+        health = float(living.hp)
+        is_dead = bool(living.is_dead)
+        dead_by_type_map = bool(living.is_dead_by_type_map)
+        is_exploitable_corpse = bool(living.is_exploitable)
+        is_used_corpse = bool(living.is_used_corpse)
+        return (
+            is_dead
+            or dead_by_type_map
+            or is_exploitable_corpse
+            or is_used_corpse
+            or health <= Agent.DEAD_HEALTH_EPSILON
+        )
 
     @staticmethod
     def IsExploitable(agent_id: int) -> bool:
@@ -1064,8 +1079,18 @@ class Agent:
         living = Agent.GetLivingAgentByID(agent_id)
         if living is None:
             return False
-        health = living.hp
-        return not Agent.IsDead(agent_id) and health > Agent.DEAD_HEALTH_EPSILON
+        health = float(living.hp)
+        is_dead = bool(living.is_dead)
+        dead_by_type_map = bool(living.is_dead_by_type_map)
+        is_exploitable_corpse = bool(living.is_exploitable)
+        is_used_corpse = bool(living.is_used_corpse)
+        return (
+            health > Agent.DEAD_HEALTH_EPSILON
+            and not is_dead
+            and not dead_by_type_map
+            and not is_exploitable_corpse
+            and not is_used_corpse
+        )
 
     @staticmethod
     def IsWeaponSpelled(agent_id: int) -> bool:

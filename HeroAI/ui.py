@@ -7,6 +7,7 @@ import random
 from typing import Optional
 from Py4GW import Console
 import PyImGui
+from HeroAI import resurrection_scroll
 from HeroAI import windows
 from HeroAI.cache_data import CacheData
 from HeroAI.commands import HeroAICommands
@@ -335,20 +336,21 @@ def draw_health_bar(width: float, height: float, max_health: float, current_heal
 def draw_energy_bar(width: float, height: float, max_energy: float, current_energy: float, regen: float) -> bool:
     style = ImGui.get_style()
     pips = Utils.calculate_energy_pips(max_energy, regen)
+    has_valid_energy = 0.0 <= current_energy <= 1.0
+    clamped_energy = max(0.0, min(1.0, current_energy)) if has_valid_energy else 0.0
 
     draw_textures = style.Theme in ImGui.Textured_Themes
 
     if not draw_textures:
         style.PlotHistogram.push_color((30, 94, 153, 255))
         style.FrameRounding.push_style_var(0)
-        ImGui.progress_bar(current_energy, width, height)
+        ImGui.progress_bar(clamped_energy, width, height)
         style.FrameRounding.pop_style_var()
         style.PlotHistogram.pop_color()
     else:
         ImGui.dummy(width, height)
 
-    fraction = (max(0.0, min(1.0, current_energy))
-                if max_energy > 0 else 0.0)
+    fraction = clamped_energy if max_energy > 0 else 0.0
     
     item_rect_min, item_rect_max, item_rect_size = ImGui.get_item_rect()
 
@@ -374,13 +376,13 @@ def draw_energy_bar(width: float, height: float, max_energy: float, current_ener
             progress_rect[2:],
         )
 
-        if current_energy * max_energy != max_energy:
+        if has_valid_energy and current_energy * max_energy != max_energy:
             ThemeTextures.EnergyBarCursor.value.get_texture().draw_in_drawlist(
                 cursor_rect[:2],
                 cursor_rect[2:],
             )
 
-    display_label = str(int(current_energy * max_energy))
+    display_label = str(int(current_energy * max_energy)) if has_valid_energy else "--"
     textsize = PyImGui.calc_text_size(display_label)
     text_rect = (item_rect[0] + ((width - textsize[0]) / 2), item_rect[1] +
                  ((height - textsize[1]) / 2) + 3, textsize[0], textsize[1])
@@ -1122,21 +1124,32 @@ def draw_buttons(account_data: AccountStruct, cached_data: CacheData, message_qu
     if not is_explorable:
         player_x, player_y = Player.GetXY()
         target_id = Player.GetTargetID() or Player.GetAgentID()
+        summon_command = SharedCommandType.TravelToGuildHall if Map.IsGuildHall() else SharedCommandType.TravelToMap
 
         def invite_player():            
             if same_map:
                 GLOBAL_CACHE.Party.Players.InvitePlayer(account_data.AgentData.CharacterName)
-                
+                return GLOBAL_CACHE.ShMem.SendMessage(
+                    player_email,
+                    account_email,
+                    SharedCommandType.InviteToParty,
+                    (account_data.AgentData.AgentID, 0, 0, 0),
+                )
+
             return GLOBAL_CACHE.ShMem.SendMessage(
                 player_email,
                 account_email,
-                SharedCommandType.InviteToParty if same_map else SharedCommandType.TravelToMap,
-                (account_data.AgentData.AgentID, 0, 0, 0) if same_map else (
-                    Map.GetMapID(),
-                    Map.GetRegion()[0],
-                    Map.GetDistrict(),
-                    Map.GetLanguage()[0],
-                )
+                summon_command,
+                (
+                    (0, 0, 0, 0)
+                    if Map.IsGuildHall()
+                    else (
+                        Map.GetMapID(),
+                        Map.GetRegion()[0],
+                        Map.GetDistrict(),
+                        Map.GetLanguage()[0],
+                    )
+                ),
             )
         
         def load_template():
@@ -1185,9 +1198,9 @@ def draw_buttons(account_data: AccountStruct, cached_data: CacheData, message_qu
                 "invite_summon",
                 IconsFontAwesome5.ICON_USER_PLUS,
                 "Invite" if same_map else "Summon",
-                SharedCommandType.InviteToParty if same_map else SharedCommandType.TravelToMap,
+                SharedCommandType.InviteToParty if same_map else summon_command,
                 invite_player,
-                lambda: is_queued(SharedCommandType.InviteToParty) if same_map else is_queued(SharedCommandType.TravelToMap),
+                lambda: is_queued(SharedCommandType.InviteToParty) if same_map else is_queued(summon_command),
             ),
             (
                 "focus_client",
@@ -1217,9 +1230,11 @@ def draw_buttons(account_data: AccountStruct, cached_data: CacheData, message_qu
         
         def flag_hero_account():
             from HeroAI.ui_base import HeroAI_BaseUI
+            party_pos = int(account_data.AgentPartyData.PartyPosition)
+            hero_count = int(GLOBAL_CACHE.Party.GetHeroCount() or 0)
             HeroAI_BaseUI.capture_flag_all = False
             HeroAI_BaseUI.capture_hero_flag = True
-            HeroAI_BaseUI.capture_hero_index = account_data.AgentPartyData.PartyPosition  
+            HeroAI_BaseUI.capture_hero_index = party_pos if account_data.IsHero else party_pos + hero_count
             return -1
         
         def clear_hero_flag():
@@ -1250,7 +1265,7 @@ def draw_buttons(account_data: AccountStruct, cached_data: CacheData, message_qu
              SharedCommandType.TakeDialogWithTarget, lambda: GLOBAL_CACHE.ShMem.SendMessage(player_email, account_email, SharedCommandType.TakeDialogWithTarget, (target_id, 0, 0, 0)), lambda: is_queued(SharedCommandType.TakeDialogWithTarget), True),
 
             ("flag", IconsFontAwesome5.ICON_FLAG, "Flag Target",
-             SharedCommandType.NoCommand, flag_hero_account, lambda: IsHeroFlagged(account_data.AgentPartyData.PartyPosition)),
+             SharedCommandType.NoCommand, flag_hero_account, lambda: IsHeroFlagged(account_data.AgentPartyData.PartyPosition if account_data.IsHero else int(account_data.AgentPartyData.PartyPosition) + int(GLOBAL_CACHE.Party.GetHeroCount() or 0))),
 
             ("clear flag", IconsFontAwesome5.ICON_CIRCLE_XMARK, "Clear Flag",
              SharedCommandType.NoCommand, clear_hero_flag, lambda: False),
@@ -2659,14 +2674,18 @@ def draw_party_search_overlay(cached_data: CacheData):
                         GLOBAL_CACHE.ShMem.SendMessage(
                             sender_email,
                             account.AccountEmail,
-                            SharedCommandType.TravelToMap,
+                            SharedCommandType.TravelToGuildHall if Map.IsGuildHall() else SharedCommandType.TravelToMap,
                             (
-                                Map.GetMapID(),
-                                Map.GetRegion()[0],
-                                Map.GetDistrict(),
-                                Map.GetLanguage()[0],
-                            )
-                        ) 
+                                (0, 0, 0, 0)
+                                if Map.IsGuildHall()
+                                else (
+                                    Map.GetMapID(),
+                                    Map.GetRegion()[0],
+                                    Map.GetDistrict(),
+                                    Map.GetLanguage()[0],
+                                )
+                            ),
+                        )
                     
                 else:
                     selected_account = account.AccountEmail
@@ -2939,6 +2958,10 @@ def draw_configure_window(module_name : str, configure_window : WindowModule):
                 if ImGui.begin_child("##BlacklistSettingsChild", (0, 0)):
                     draw_blacklist_ui()
                 ImGui.end_child()
+                ImGui.end_tab_item()
+
+            if ImGui.begin_tab_item("Resurrection Scroll"):
+                resurrection_scroll.draw_settings()
                 ImGui.end_tab_item()
 
             if ImGui.begin_tab_item("Debug"):

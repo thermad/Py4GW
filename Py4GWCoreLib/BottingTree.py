@@ -4,6 +4,9 @@ from typing import Callable, Sequence
 import Py4GW
 from HeroAI.headless_tree import HeroAIHeadlessTree
 
+from .botting_tree_src.account_config import BottingTreeAccountConfig
+from .botting_tree_src.account_config import BottingTreeAccountMode
+from .botting_tree_src.auto_inventory import BottingTreeAutoInventoryMixin
 from .botting_tree_src.blackboard import BottingTreeBlackboardMixin
 from .botting_tree_src.config import _BottingTreeConfig
 from .botting_tree_src.debugging import BottingTreeDebuggingMixin
@@ -13,11 +16,12 @@ from .botting_tree_src.isolation import BottingTreeIsolationMixin
 from .botting_tree_src.messaging import BottingTreeMessagingMixin
 from .botting_tree_src.planner import BottingTreePlannerMixin
 from .botting_tree_src.services import BottingTreeServicesMixin
-from .botting_tree_src.templates import BottingTreeTemplates, _BottingTreeTemplates
 from .botting_tree_src.ticks import BottingTreeTicksMixin
 from .botting_tree_src.ui import BottingTreeUIMovePathMixin, _BottingTreeUI
 from .botting_tree_src.upkeep import BottingTreeUpkeepMixin
+from .botting_tree_src.widget_control import BottingTreeWidgetControlMixin
 from .py4gwcorelib_src.BehaviorTree import BehaviorTree
+from .routines_src.behaviourtrees_src import constants
 
 
 class BottingTree(
@@ -29,6 +33,8 @@ class BottingTree(
     BottingTreeServicesMixin,
     BottingTreeIsolationMixin,
     BottingTreeHeroAIMixin,
+    BottingTreeAutoInventoryMixin,
+    BottingTreeWidgetControlMixin,
     BottingTreeTicksMixin,
     BottingTreeUIMovePathMixin,
 ):
@@ -50,13 +56,25 @@ class BottingTree(
         reset: bool = False,
         auto_start: bool = False,
         pause_on_combat: bool = True,
-        isolation_enabled: bool = True,
+        multi_account: bool = False,
+        auto_loot: bool = True,
+        auto_resurrection_scroll: bool = False,
+        activate_widget_list: Sequence[str] | None = None,
+        deactivate_widget_list: Sequence[str] | None = None,
+        isolation_enabled: bool | None = None,
+        account_config: BottingTreeAccountConfig | dict[str, object] | str | None = None,
         configure_fn: Callable[['BottingTree'], object] | None = None,
     ) -> 'BottingTree':
         tree = cls(
             bot_name=bot_name,
             pause_on_combat=pause_on_combat,
+            multi_account=multi_account,
+            auto_loot=auto_loot,
+            auto_resurrection_scroll=auto_resurrection_scroll,
+            activate_widget_list=activate_widget_list,
+            deactivate_widget_list=deactivate_widget_list,
             isolation_enabled=isolation_enabled,
+            account_config=account_config,
         )
 
         if callable(configure_fn):
@@ -75,7 +93,18 @@ class BottingTree(
 
         return tree
 
-    def __init__(self, bot_name: str = 'Botting Tree', pause_on_combat: bool = True, isolation_enabled: bool = True):
+    def __init__(
+        self,
+        bot_name: str = 'Botting Tree',
+        pause_on_combat: bool = True,
+        multi_account: bool = False,
+        auto_loot: bool = True,
+        auto_resurrection_scroll: bool = False,
+        activate_widget_list: Sequence[str] | None = None,
+        deactivate_widget_list: Sequence[str] | None = None,
+        isolation_enabled: bool | None = None,
+        account_config: BottingTreeAccountConfig | dict[str, object] | str | None = None,
+    ):
         self.bot_name = bot_name
         self._previous_isolation_state: bool | None = None
         self._previous_isolation_group_id: int | None = None
@@ -89,15 +118,27 @@ class BottingTree(
         self._last_planner_gate_state = None
         self._last_heroai_state = None
         self.Config = _BottingTreeConfig(self)
-        self.Templates = _BottingTreeTemplates(self)
         self.UI = _BottingTreeUI(self)
 
         self.pause_on_combat = pause_on_combat
-        self.isolation_enabled = isolation_enabled
+        self.account_config = BottingTreeAccountConfig.coerce(
+            account_config,
+            multi_account=multi_account,
+            isolation_enabled=isolation_enabled,
+        )
+        self.isolation_enabled = self.account_config.resolve_isolation_enabled()
         self.restore_isolation_on_stop = True
         self.headless_heroai_enabled = True
         self._headless_disabled_heroai_widget = False
-        self.looting_enabled = True
+        self._last_multibox_heroai_widget_state = None
+        self.looting_enabled = bool(auto_loot)
+        self.resurrection_scroll_enabled = bool(auto_resurrection_scroll)
+        self.widget_enabled_policies: dict[str, bool] = {}
+        self.restore_widget_states_on_stop = True
+        self._widget_restore_snapshot: dict[str, bool] | None = None
+        self.auto_inventory_handler_enabled_policy: bool | None = None
+        self.restore_auto_inventory_handler_on_stop = True
+        self._auto_inventory_handler_restore_state: bool | None = None
         self.planner_repeat = False
         self.started = False
         self.paused = False
@@ -110,17 +151,26 @@ class BottingTree(
         self.heroai_state_logging_enabled = True
         self.heroai_state_log_interval_ms = 5000
         self._last_heroai_log_ms = 0
+        self.headless_heroai.SetResurrectionScrollEnabled(self.resurrection_scroll_enabled)
+        self.ConfigureWidgets(
+            activate_widget_list=list(activate_widget_list or ()),
+            deactivate_widget_list=list(deactivate_widget_list or ()),
+            restore_on_stop=True,
+            clear_existing=True,
+        )
 
     def Start(self):
         self.Reset()
-        if self.IsHeadlessHeroAIEnabled():
-            self._disable_heroai_widget_for_headless()
-            self.RestoreHeroAIOptions()
         self.ClearPendingMessages()
         self._capture_isolation_state_for_restore()
         self.ApplyAccountIsolation()
         self.started = True
         self.paused = False
+        if self.IsHeadlessHeroAIEnabled():
+            self._disable_heroai_widget_for_headless()
+            self._sync_multibox_heroai_widget(True)
+        self._apply_widget_policies()
+        self._apply_auto_inventory_handler_policy()
 
         Py4GW.Console.Log('BottingTree', 'Botting tree started.', Py4GW.Console.MessageType.Info)
 
@@ -131,7 +181,10 @@ class BottingTree(
             self.ClearPendingMessages()
             self.RestoreAccountIsolation()
             self.Reset()
+            self.RestoreWidgetStates()
+            self.RestoreAutoInventoryHandlerState()
             self._restore_heroai_widget_after_headless()
+            self._sync_multibox_heroai_widget(False)
 
             Py4GW.Console.Log('BottingTree', 'Botting tree stopped and reset.', Py4GW.Console.MessageType.Info)
 
@@ -151,11 +204,9 @@ class BottingTree(
         self.tree.blackboard.clear()
         self._last_planner_gate_state = None
         self._last_heroai_state = None
-        if self.IsHeadlessHeroAIEnabled():
+        if self.IsHeadlessHeroAIEnabled() and self.started and not self.paused:
             self._disable_heroai_widget_for_headless()
-            self.RestoreHeroAIOptions()
-        else:
-            self._restore_heroai_widget_after_headless()
+            self._sync_multibox_heroai_widget(True)
         self.ClearPendingMessages()
 
         Py4GW.Console.Log('BottingTree', 'Botting tree reset.', Py4GW.Console.MessageType.Info)
@@ -163,9 +214,14 @@ class BottingTree(
     def Pause(self, pause: bool = True):
         if pause and not self.paused:
             self.paused = True
+            self._restore_heroai_widget_after_headless()
+            self._sync_multibox_heroai_widget(False)
             Py4GW.Console.Log('BottingTree', 'Botting tree paused.', Py4GW.Console.MessageType.Info)
         elif not pause and self.paused:
             self.paused = False
+            if self.started and self.IsHeadlessHeroAIEnabled():
+                self._disable_heroai_widget_for_headless()
+                self._sync_multibox_heroai_widget(True)
             Py4GW.Console.Log('BottingTree', 'Botting tree unpaused.', Py4GW.Console.MessageType.Info)
 
     def IsPaused(self) -> bool:
@@ -197,10 +253,11 @@ class BottingTree(
 
 __all__ = [
     'BottingTree',
-    'BottingTreeTemplates',
     'HeroAIStatus',
     'PlannerStatus',
     '_BottingTreeConfig',
-    '_BottingTreeTemplates',
     '_BottingTreeUI',
+    'BottingTreeAccountConfig',
+    'BottingTreeAccountMode',
+    'constants',
 ]

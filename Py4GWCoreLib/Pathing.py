@@ -143,6 +143,7 @@ class NavMesh:
         self.map_id = map_id
         self.trapezoids: Dict[int, PathingTrapezoid] = {}
         self.portal_graph: Dict[int, List[int]] = {}  # Adjacency graph for pathfinding
+        self.portal_costs: Dict[int, Dict[int, float]] = {}
         self.trap_id_to_layer: Dict[int, int] = {}  # Trap ID -> layer index
 
         for i, layer in enumerate(pathing_maps):
@@ -207,6 +208,12 @@ class NavMesh:
         # Add bidirectional adjacency to portal graph
         self.portal_graph.setdefault(pt1.id, []).append(pt2.id)
         self.portal_graph.setdefault(pt2.id, []).append(pt1.id)
+        transition_cost = 0.0 if side is None else math.hypot(
+            self.get_position(pt2.id)[0] - self.get_position(pt1.id)[0],
+            self.get_position(pt2.id)[1] - self.get_position(pt1.id)[1],
+        )
+        self.portal_costs.setdefault(pt1.id, {})[pt2.id] = transition_cost
+        self.portal_costs.setdefault(pt2.id, {})[pt1.id] = transition_cost
         return True
 
     def create_all_local_portals(self):
@@ -297,6 +304,14 @@ class NavMesh:
     def get_neighbors(self, t_id: int) -> List[int]:
         return self.portal_graph.get(t_id, [])
 
+    def get_transition_cost(self, from_id: int, to_id: int) -> float:
+        explicit_cost = self.portal_costs.get(from_id, {}).get(to_id)
+        if explicit_cost is not None:
+            return explicit_cost
+        fx, fy = self.get_position(from_id)
+        tx, ty = self.get_position(to_id)
+        return math.hypot(tx - fx, ty - fy)
+
     def find_trapezoid_id_by_coord(self, point: Tuple[float, float], tol: float = 20.0) -> Optional[int]:
         """Return trapezoid ID containing point, or None."""
         return self._bsp.find(point[0], point[1], tol)
@@ -386,6 +401,7 @@ class NavMesh:
         data = {
             "map_id": self.map_id,
             "portal_graph": self.portal_graph,
+            "portal_costs": self.portal_costs,
             "trap_id_to_layer": self.trap_id_to_layer
         }
         with open(filepath, "wb") as f:
@@ -401,6 +417,7 @@ class NavMesh:
         nav.map_id = map_id
         nav.trapezoids = {}
         nav.portal_graph = {}
+        nav.portal_costs = {}
         nav.trap_id_to_layer = {}
 
         for i, layer in enumerate(pathing_maps):
@@ -414,6 +431,8 @@ class NavMesh:
             data = pickle.load(f)
 
         nav.portal_graph = data["portal_graph"]
+        if "portal_costs" in data:
+            nav.portal_costs = data["portal_costs"]
         if "trap_id_to_layer" in data:
             nav.trap_id_to_layer = data["trap_id_to_layer"]
 
@@ -483,7 +502,7 @@ class AStar:
                 return True
 
             for neighbor in self.navmesh.get_neighbors(current.id):
-                new_cost = cost_so_far[current.id] + self.heuristic(current.id, neighbor)
+                new_cost = cost_so_far[current.id] + self.navmesh.get_transition_cost(current.id, neighbor)
                 if neighbor not in cost_so_far or new_cost < cost_so_far[neighbor]:
                     cost_so_far[neighbor] = new_cost
                     priority = new_cost + self.heuristic(neighbor, goal_id)
@@ -685,6 +704,27 @@ class AutoPathing:
         if navmesh and navmesh.trapezoids:
             self.pathing_map_cache[group_key] = navmesh
         yield
+
+    def clear_navmesh_cache(self, map_id: Optional[int] = None):
+        if map_id is None:
+            self.pathing_map_cache.clear()
+            self._last_group_key = None
+            return
+
+        group_key = self._get_group_key(map_id)
+        self.pathing_map_cache.pop(group_key, None)
+        if self._last_group_key == group_key:
+            self._last_group_key = None
+
+    def force_reload_navmesh(self):
+        map_id = Map.GetMapID()
+        if not map_id or not Map.IsMapReady():
+            yield
+            return
+
+        Map.Pathing.ClearPathingCache(map_id=map_id, include_live=True)
+        self.clear_navmesh_cache(map_id)
+        yield from self.load_pathing_maps()
 
 
     def get_navmesh(self) -> Optional[NavMesh]:

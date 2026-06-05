@@ -39,6 +39,7 @@ class CastConditions:
         self.IsHoldingItem = False
         self.RequiresSpiritInEarshot = False
         self.SharedEffects = []
+        self.RequireWeapon = ""
 
         # Targeting Rules
         self.TargetingStrict = True
@@ -98,7 +99,7 @@ class CastConditions:
     @EnemiesInRangeArea.setter
     def EnemiesInRangeArea(self, value):
         self.EnemiesInRange = value
-            
+
 class CustomSkill:
     def __init__(self):
         self.SkillID = 0

@@ -9,11 +9,17 @@ This file is both:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
+from ...Agent import Agent
+from ...GlobalCache import GLOBAL_CACHE
 from ...Map import Map
 from ...Party import Party
 from ...Player import Player
 from ...Py4GWcorelib import ConsoleLog, Console
+from ...Skillbar import SkillBar
 from ...py4gwcorelib_src.BehaviorTree import BehaviorTree
+from .composite import BTComposite
 
 
 def _log(source: str, message: str, *, log: bool = False, message_type=Console.MessageType.Info) -> None:
@@ -22,6 +28,35 @@ def _log(source: str, message: str, *, log: bool = False, message_type=Console.M
 
 def _fail_log(source: str, message: str, message_type=Console.MessageType.Warning) -> None:
     ConsoleLog(source, message, message_type, log=True)
+
+
+def _apply_multibox_all_flag(x: float, y: float) -> None:
+    leader_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(0)
+    if leader_options is None:
+        return
+    leader_id = int(GLOBAL_CACHE.Party.GetPartyLeaderID() or 0)
+    leader_options.AllFlag.x = float(x)
+    leader_options.AllFlag.y = float(y)
+    leader_options.IsFlagged = True
+    leader_options.FlagFacingAngle = float(Agent.GetRotationAngle(leader_id) if leader_id > 0 else 0.0)
+
+
+def _clear_multibox_all_flags() -> None:
+    party_id = int(GLOBAL_CACHE.Party.GetPartyID() or 0)
+    for account, options in GLOBAL_CACHE.ShMem.GetAllActiveAccountHeroAIPairs(sort_results=False):
+        if (
+            not account
+            or options is None
+            or not account.IsSlotActive
+            or int(account.AgentPartyData.PartyID or 0) != party_id
+        ):
+            continue
+        options.IsFlagged = False
+        options.FlagPos.x = 0.0
+        options.FlagPos.y = 0.0
+        options.AllFlag.x = 0.0
+        options.AllFlag.y = 0.0
+        options.FlagFacingAngle = 0.0
 
 
 class BTParty:
@@ -91,6 +126,53 @@ class BTParty:
         )
 
     @staticmethod
+    def FlagHero(hero_position: int, x: float, y: float, log: bool = False, aftercast_ms: int = 125) -> BehaviorTree:
+        """
+        Build an action tree that flags one hero at a world coordinate.
+
+        Meta:
+          Expose: true
+          Audience: intermediate
+          Display: Flag Hero
+          Purpose: Flag a single local hero at a given position.
+          UserDescription: Use this when you need to place one hero at a specific flag position.
+          Notes: The hero selector uses party position and resolves to the current hero agent id at runtime.
+        """
+
+        def _flag_hero() -> BehaviorTree.NodeState:
+            resolved_position = int(hero_position)
+            if resolved_position <= 0:
+                _fail_log(
+                    "BTParty.FlagHero",
+                    f"Failed to flag hero: invalid party position {resolved_position}.",
+                )
+                return BehaviorTree.NodeState.FAILURE
+
+            hero_agent_id = int(Party.Heroes.GetHeroAgentIDByPartyPosition(resolved_position) or 0)
+            if hero_agent_id <= 0:
+                _fail_log(
+                    "BTParty.FlagHero",
+                    f"Failed to flag hero: no hero found at party position {resolved_position}.",
+                )
+                return BehaviorTree.NodeState.FAILURE
+
+            Party.Heroes.FlagHero(hero_agent_id, float(x), float(y))
+            _log(
+                "BTParty.FlagHero",
+                f"FlagHero party_position={resolved_position}, agent_id={hero_agent_id}, x={x:.2f}, y={y:.2f}",
+                log=log,
+            )
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree(
+            BehaviorTree.ActionNode(
+                name="FlagHero",
+                action_fn=_flag_hero,
+                aftercast_ms=max(0, int(aftercast_ms)),
+            )
+        )
+
+    @staticmethod
     def FlagAllHeroes(x: float, y: float, log: bool = False, aftercast_ms: int = 125) -> BehaviorTree:
         """
         Build an action tree that flags all heroes at a world coordinate.
@@ -106,6 +188,7 @@ class BTParty:
 
         def _flag_all_heroes() -> BehaviorTree.NodeState:
             Party.Heroes.FlagAllHeroes(float(x), float(y))
+            _apply_multibox_all_flag(float(x), float(y))
             _log("BTParty.FlagAllHeroes", f"FlagAllHeroes x={x:.2f}, y={y:.2f}", log=log)
             return BehaviorTree.NodeState.SUCCESS
 
@@ -115,6 +198,63 @@ class BTParty:
                 action_fn=_flag_all_heroes,
                 aftercast_ms=max(0, int(aftercast_ms)),
             )
+        )
+
+    @staticmethod
+    def FlagHeroesFromList(
+        hero_positions: Sequence[int | str] | None,
+        x: float,
+        y: float,
+        flag_all: bool = False,
+        log: bool = False,
+        aftercast_ms: int = 125,
+    ) -> BehaviorTree:
+        """
+        Build a composite tree that flags selected heroes at a world coordinate.
+
+        Meta:
+          Expose: true
+          Audience: intermediate
+          Display: Flag Heroes From List
+          Purpose: Flag several local heroes in sequence using party positions, or all heroes with an explicit flag.
+          UserDescription: Use this when a step should flag one hero, many heroes, or all heroes through one shared entrypoint.
+          Notes: When `flag_all` is true, the composite collapses to the all-heroes flag routine and ignores `hero_positions`.
+        """
+        normalized_positions: list[int] = []
+        if flag_all:
+            return BTParty.FlagAllHeroes(x=float(x), y=float(y), log=log, aftercast_ms=aftercast_ms)
+
+        for raw_value in hero_positions or []:
+            if isinstance(raw_value, str):
+                stripped_value = raw_value.strip()
+                if not stripped_value:
+                    continue
+                try:
+                    resolved_position = int(stripped_value)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid hero position value {raw_value!r}; expected positive integer.") from exc
+            else:
+                resolved_position = int(raw_value)
+
+            if resolved_position <= 0:
+                raise ValueError(f"Invalid hero position value {raw_value!r}; expected positive integer.")
+            normalized_positions.append(resolved_position)
+
+        if not normalized_positions:
+            raise ValueError("FlagHeroesFromList requires at least one hero position unless flag_all is true.")
+
+        return BTComposite.Sequence(
+            *[
+                BTParty.FlagHero(
+                    hero_position=hero_position,
+                    x=float(x),
+                    y=float(y),
+                    log=log,
+                    aftercast_ms=aftercast_ms,
+                )
+                for hero_position in normalized_positions
+            ],
+            name="FlagHeroesFromList",
         )
 
     @staticmethod
@@ -133,6 +273,7 @@ class BTParty:
 
         def _unflag_all_heroes() -> BehaviorTree.NodeState:
             Party.Heroes.UnflagAllHeroes()
+            _clear_multibox_all_flags()
             _log("BTParty.UnflagAllHeroes", "UnflagAllHeroes dispatched.", log=log)
             return BehaviorTree.NodeState.SUCCESS
 
@@ -353,6 +494,89 @@ class BTParty:
         )
 
     @staticmethod
+    def SetHeroSkillAI(
+        hero_positions: int | Sequence[int],
+        skill_ids: int | Sequence[int],
+        enabled: bool = False,
+        log: bool = False,
+        aftercast_ms: int = 125,
+    ) -> BehaviorTree:
+        """
+        Build an action tree that enables or disables native hero AI use for skill ids.
+
+        Meta:
+          Expose: true
+          Audience: intermediate
+          Display: Set Hero Skill AI
+          Purpose: Enable or disable native hero AI auto-use for selected skill ids on selected heroes.
+          UserDescription: Use this when heroes should keep a skill on their bar but native hero AI must not auto-cast it.
+          Notes: Hero positions are 1-7. Resolve skill names before calling, e.g. Skill.GetID("Gaze_of_Fury").
+        """
+
+        def _as_positions(value: int | Sequence[int]) -> list[int]:
+            if isinstance(value, int):
+                return [int(value)]
+            return [int(position) for position in value]
+
+        def _as_skill_ids(value: int | Sequence[int]) -> list[int]:
+            if isinstance(value, int):
+                values = [value]
+            else:
+                values = list(value)
+
+            return [int(skill_id) for skill_id in values if int(skill_id) > 0]
+
+        def _set_hero_skill_ai() -> BehaviorTree.NodeState:
+            positions = _as_positions(hero_positions)
+            desired_skill_ids = _as_skill_ids(skill_ids)
+            if not positions or not desired_skill_ids:
+                return BehaviorTree.NodeState.FAILURE
+
+            desired_enabled = bool(enabled)
+            matched = 0
+            for hero_position in positions:
+                if hero_position < 1 or hero_position > 7:
+                    _fail_log("BTParty.SetHeroSkillAI", f"Invalid hero position: {hero_position}.")
+                    return BehaviorTree.NodeState.FAILURE
+
+                hero_agent_id = int(Party.Heroes.GetHeroAgentIDByPartyPosition(hero_position) or 0)
+                if hero_agent_id <= 0:
+                    _fail_log("BTParty.SetHeroSkillAI", f"No hero agent id for position {hero_position}.")
+                    return BehaviorTree.NodeState.FAILURE
+
+                hero_skillbar = SkillBar.GetHeroSkillbar(hero_position)
+                found_for_hero = False
+                for slot, hero_skill in enumerate(hero_skillbar, start=1):
+                    hero_skill_id = int(getattr(getattr(hero_skill, "id", None), "id", 0) or 0)
+                    if hero_skill_id not in desired_skill_ids:
+                        continue
+                    if not Party.Heroes.SetSkillAIEnabled(hero_agent_id, slot, desired_enabled):
+                        _fail_log(
+                            "BTParty.SetHeroSkillAI",
+                            f"Failed to update hero {hero_position} skill slot {slot}.",
+                        )
+                        return BehaviorTree.NodeState.FAILURE
+                    found_for_hero = True
+                    matched += 1
+
+                if not found_for_hero:
+                    ids = ", ".join(str(skill_id) for skill_id in desired_skill_ids)
+                    _fail_log("BTParty.SetHeroSkillAI", f"Hero {hero_position} does not have skill id(s): {ids}.")
+                    return BehaviorTree.NodeState.FAILURE
+
+            state = "enabled" if desired_enabled else "disabled"
+            _log("BTParty.SetHeroSkillAI", f"{state} {matched} hero skill AI flag(s).", log=log)
+            return BehaviorTree.NodeState.SUCCESS
+
+        return BehaviorTree(
+            BehaviorTree.ActionNode(
+                name="SetHeroSkillAI",
+                action_fn=_set_hero_skill_ai,
+                aftercast_ms=max(0, int(aftercast_ms)),
+            )
+        )
+
+    @staticmethod
     def DropBundle(log: bool = False) -> BehaviorTree:
         """
         Build an action tree that drops the currently held bundle.
@@ -361,16 +585,20 @@ class BTParty:
           Expose: true
           Audience: intermediate
           Display: Drop Bundle
-          Purpose: Press the standard keys used to drop a held bundle.
+          Purpose: Press the configured drop-item control action used to drop a held bundle.
           UserDescription: Use this when a route needs to release a bundle before continuing.
-          Notes: Sends F2 then F1 with short waits between key presses.
+          Notes: Uses the native drop-item keybind action instead of raw function keys.
         """
-        from ...enums_src.IO_enums import Key
-        from ...py4gwcorelib_src.Keystroke import Keystroke
+        from ...UIManager import UIManager
+        from ...enums_src.UI_enums import ControlAction
 
-        def _press(key_value: int, label: str) -> BehaviorTree.NodeState:
-            Keystroke.PressAndRelease(key_value)
-            _log("BTParty.DropBundle", f"Pressed {label}.", log=log)
+        def _keydown() -> BehaviorTree.NodeState:
+            UIManager.Keydown(ControlAction.ControlAction_DropItem.value, 0)
+            _log("BTParty.DropBundle", "Pressed drop-item control action.", log=log)
+            return BehaviorTree.NodeState.SUCCESS
+
+        def _keyup() -> BehaviorTree.NodeState:
+            UIManager.Keyup(ControlAction.ControlAction_DropItem.value, 0)
             return BehaviorTree.NodeState.SUCCESS
 
         return BehaviorTree(
@@ -378,14 +606,14 @@ class BTParty:
                 name="DropBundle",
                 children=[
                     BehaviorTree.ActionNode(
-                        name="DropBundleF2",
-                        action_fn=lambda: _press(getattr(Key, "F2").value, "F2"),
-                        aftercast_ms=200,
+                        name="DropBundleKeyDown",
+                        action_fn=_keydown,
+                        aftercast_ms=75,
                     ),
                     BehaviorTree.ActionNode(
-                        name="DropBundleF1",
-                        action_fn=lambda: _press(getattr(Key, "F1").value, "F1"),
-                        aftercast_ms=200,
+                        name="DropBundleKeyUp",
+                        action_fn=_keyup,
+                        aftercast_ms=50,
                     ),
                 ],
             )

@@ -206,18 +206,16 @@ class Settings:
     def set_runtime_combat_range_mode_override(self, mode: str | None) -> None:
         self._combat_range_mode_override = None if mode is None else self.normalize_combat_range_mode(mode)
     
-    def ensure_initialized(self) -> bool: 
+    def ensure_initialized(self) -> bool:
         account_email = Player.GetAccountEmail()
-        
+
         if not account_email:
             return True
-         
-        initialized = True if account_email and account_email == self.account_email else False
-        
-        if not initialized or not self._initialized:
+
+        if not self._initialized or self.account_email != account_email:
             self.initialize_account_config()
-        
-        return self._initialized == initialized
+
+        return self._initialized and self.account_email == account_email
 
     def initialize_account_config(self):
         base_path = Console.get_projects_path()        
@@ -406,3 +404,44 @@ class Settings:
             self.save_requested = True
         
         return info
+
+    def _get_account_settings_handler(self, account_email: str | None = None) -> IniHandler | None:
+        resolved_email = str(account_email or Player.GetAccountEmail() or "").strip()
+        if not resolved_email:
+            return None
+
+        if (
+            self.account_ini_handler is not None
+            and self.account_email
+            and self.account_email.lower() == resolved_email.lower()
+        ):
+            return self.account_ini_handler
+
+        base_path = Console.get_projects_path()
+        config_dir = os.path.join(base_path, "Widgets", "Config", "Accounts", resolved_email)
+        os.makedirs(config_dir, exist_ok=True)
+        return IniHandler(os.path.join(config_dir, "HeroAI.ini"))
+
+    def get_account_resurrection_scroll_enabled(self, account_email: str | None = None) -> bool:
+        ini_handler = self._get_account_settings_handler(account_email)
+        if ini_handler is None:
+            return False
+        return ini_handler.read_bool("ResurrectionScroll", "Enabled", False)
+
+    def set_account_resurrection_scroll_enabled(self, enabled: bool, account_email: str | None = None) -> None:
+        ini_handler = self._get_account_settings_handler(account_email)
+        if ini_handler is None:
+            return
+        ini_handler.write_key("ResurrectionScroll", "Enabled", str(bool(enabled)))
+
+    def get_account_resurrection_scroll_skip_if_res_available(self, account_email: str | None = None) -> bool:
+        ini_handler = self._get_account_settings_handler(account_email)
+        if ini_handler is None:
+            return False
+        return ini_handler.read_bool("ResurrectionScroll", "SkipIfResAvailable", False)
+
+    def set_account_resurrection_scroll_skip_if_res_available(self, enabled: bool, account_email: str | None = None) -> None:
+        ini_handler = self._get_account_settings_handler(account_email)
+        if ini_handler is None:
+            return
+        ini_handler.write_key("ResurrectionScroll", "SkipIfResAvailable", str(bool(enabled)))

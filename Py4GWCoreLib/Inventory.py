@@ -2,6 +2,8 @@ import Py4GW
 import PyInventory
 from typing import TypedDict, cast
 
+from Py4GWCoreLib.enums_src.Item_enums import Bags
+
 from .Item import Item
 from .ItemArray import ItemArray
 
@@ -197,6 +199,24 @@ class Inventory:
         return total_quantity
     
     @staticmethod
+    def GetModelCountInMaterialStorage(model_id):
+        """
+        Purpose: Count the number of items with the specified model_id in material storage.
+        Args:
+            model_id (int): The model ID of the item to count.
+        Returns: int: The total number of items matching the model_id in material storage.
+        """
+        bags_to_check = ItemArray.CreateBagList(Bags.MaterialStorage)
+        item_array = ItemArray.GetItemArray(bags_to_check)
+        
+        # Filter items by the specified model_id using Item.GetModelID
+        matching_items = ItemArray.Filter.ByCondition(item_array, lambda item_id: Item.GetModelID(item_id) == model_id)
+        # Sum the quantity of each matching item using Item.Properties.GetQuantity
+        total_quantity = sum(Item.Properties.GetQuantity(item_id) for item_id in matching_items)
+
+        return total_quantity
+    
+    @staticmethod
     def GetModelCountInEquipped(model_id):
         """
         Purpose: Count the number of items with the specified model_id in storage.
@@ -375,7 +395,6 @@ class Inventory:
         Returns:
             bool: True if click was performed, False otherwise.
         """
-        from .GWUI import GWUI
         from .UIManager import UIManager
 
         parent_hash = 140452905
@@ -1510,11 +1529,12 @@ class Inventory:
         return moved_any
 
     @staticmethod
-    def WithdrawItemFromStorage(item_id):
+    def WithdrawItemFromStorage(item_id, quantity=250):
         """
         Moves the specified item from storage to player inventory, filling partial stacks first.
         Args:
             item_id (int): ID of the item to withdraw.
+            quantity (int): Amount of the item to withdraw. Defaults to 250.
         Returns:
             bool: True if moved at least some of the items, False otherwise.
         """
@@ -1522,7 +1542,7 @@ class Inventory:
         MAX_STACK_SIZE = 250
 
         is_stackable = Item.Customization.IsStackable(item_id)
-        quantity = Item.Properties.GetQuantity(item_id)
+        quantity = min(quantity, Item.Properties.GetQuantity(item_id))
 
         if quantity == 0:
             return False  # Nothing to move

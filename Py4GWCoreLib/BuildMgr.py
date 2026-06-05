@@ -225,6 +225,124 @@ class BuildMgr:
             return None
         return self.GetCustomSkill(skill_id)
 
+    @staticmethod
+    def _normalize_weapon_requirement_name(value: str) -> str:
+        text = ''.join(ch for ch in str(value or '') if ch.isalnum()).lower()
+        if text.startswith('weapon'):
+            text = text[6:]
+        return text
+
+    def _matches_required_weapon(self, required_weapon: str) -> bool:
+        from Py4GWCoreLib import Agent, Player
+
+        normalized_required_weapon = self._normalize_weapon_requirement_name(required_weapon)
+        if not normalized_required_weapon:
+            return True
+
+        player_id = Player.GetAgentID()
+        if Agent.IsHoldingItem(player_id):
+            return False
+
+        if normalized_required_weapon in {"melee", "closecombat", "close"}:
+            return Agent.IsMelee(player_id)
+
+        if normalized_required_weapon in {"rangedmelee", "rangedmartial", "martialranged"}:
+            return Agent.IsRanged(player_id)
+
+        if normalized_required_weapon == "caster":
+            return Agent.IsCaster(player_id)
+
+        if normalized_required_weapon == "ranged":
+            return Agent.IsRanged(player_id) or Agent.IsCaster(player_id)
+
+        _, current_weapon_name = Agent.GetWeaponType(player_id)
+        return self._normalize_weapon_requirement_name(current_weapon_name) == normalized_required_weapon
+
+    def _meets_custom_skill_weapon_requirement(self, skill_id: int) -> bool:
+        custom_skill = self.GetCustomSkill(skill_id)
+        if custom_skill is None:
+            return True
+        required_weapon = str(getattr(custom_skill.Conditions, "RequireWeapon", "") or "").strip()
+        if not required_weapon:
+            return True
+        return self._matches_required_weapon(required_weapon)
+
+    def _meets_custom_skill_shared_conditions(self, skill_id: int) -> bool:
+        custom_skill = self.GetCustomSkill(skill_id)
+        if custom_skill is None:
+            return True
+
+        conditions = custom_skill.Conditions
+
+        from Py4GWCoreLib import Agent, AgentArray, Player, Range, Routines
+
+        player_id = Player.GetAgentID()
+        player_x, player_y = Player.GetXY()
+
+        if conditions.CloseToAggro and not (self.IsInAggro() or self.IsCloseToAggro()):
+            return False
+
+        if conditions.LessSelfEnergyPercentage != 0:
+            if Agent.GetEnergy(player_id) > conditions.LessSelfEnergyPercentage:
+                return False
+
+        if conditions.Overcast != 0:
+            if Agent.GetOvercast(player_id) < conditions.Overcast:
+                return False
+
+        if conditions.RequiresSpiritInEarshot:
+            spirit_array = AgentArray.GetSpiritPetArray()
+            spirit_array = AgentArray.Filter.ByDistance(
+                spirit_array,
+                (player_x, player_y),
+                Range.Earshot.value,
+            )
+            spirit_array = AgentArray.Filter.ByCondition(
+                spirit_array,
+                lambda agent_id: Agent.IsAlive(agent_id),
+            )
+            if not spirit_array:
+                return False
+
+        if conditions.EnemyCount != 0:
+            enemy_array = Routines.Agents.GetFilteredEnemyArray(
+                player_x,
+                player_y,
+                conditions.EnemiesInRange,
+            )
+            if len(enemy_array or []) < conditions.EnemyCount:
+                return False
+
+        if conditions.AlliesInRange != 0:
+            ally_array = Routines.Agents.GetFilteredAllyArray(
+                player_x,
+                player_y,
+                conditions.AlliesInRangeArea,
+                other_ally=True,
+            )
+            if len(ally_array or []) < conditions.AlliesInRange:
+                return False
+
+        if conditions.SpiritsInRange != 0:
+            spirit_array = Routines.Agents.GetFilteredSpiritArray(
+                player_x,
+                player_y,
+                conditions.SpiritsInRangeArea,
+            )
+            if len(spirit_array or []) < conditions.SpiritsInRange:
+                return False
+
+        if conditions.MinionsInRange != 0:
+            minion_array = Routines.Agents.GetFilteredMinionArray(
+                player_x,
+                player_y,
+                conditions.MinionsInRangeArea,
+            )
+            if len(minion_array or []) < conditions.MinionsInRange:
+                return False
+
+        return True
+
     def _get_shared_skill_toggle(self, slot: int) -> bool:
         if not (1 <= int(slot) <= 8):
             return False
@@ -253,6 +371,8 @@ class BuildMgr:
             return True
 
     def IsSharedSkillToggleEnabled(self, slot: int) -> bool:
+        if not self.is_combat_automator_compatible:
+            return True
         return self._get_shared_skill_toggle(slot)
     
     def GetActiveScanRange(self) -> float:
@@ -597,7 +717,7 @@ class BuildMgr:
         from Py4GWCoreLib.Agent import Agent
         from Py4GWCoreLib.Player import Player
 
-        if not Agent.IsValid(target_agent_id) or Agent.IsDead(target_agent_id):
+        if not self._is_valid_enemy_target_candidate(target_agent_id):
             return False
 
         _, allegiance = Agent.GetAllegiance(target_agent_id)
@@ -612,6 +732,24 @@ class BuildMgr:
 
     def ResetTarget(self) -> None:
         self.current_target_id = 0
+
+    def _is_blacklisted_enemy(self, agent_id: int) -> bool:
+        if not agent_id:
+            return False
+
+        from Py4GWCoreLib.EnemyBlacklist import EnemyBlacklist
+
+        return EnemyBlacklist().is_blacklisted(agent_id)
+
+    def _is_valid_enemy_target_candidate(self, agent_id: int) -> bool:
+        from Py4GWCoreLib.Agent import Agent
+
+        return (
+            bool(agent_id)
+            and Agent.IsValid(agent_id)
+            and not Agent.IsDead(agent_id)
+            and not self._is_blacklisted_enemy(agent_id)
+        )
 
     def ResetPartyHealthMonitor(self) -> None:
         self._party_health_monitor.clear()
@@ -899,18 +1037,18 @@ class BuildMgr:
                 combat_distance,
                 preferred_condition=lambda agent_id: Agent.IsHexed(agent_id) or Agent.IsEnchanted(agent_id),
             )
-            if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
+            if not self._is_valid_enemy_target_candidate(return_target):
                 return_target = GetEnemyInjured(combat_distance)
         elif target_type == "EnemyAttackingClustered":
             return_target = Routines.Targeting.PickClusteredTarget(
                 combat_distance,
                 preferred_condition=lambda agent_id: Agent.IsAttacking(agent_id),
             )
-            if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
+            if not self._is_valid_enemy_target_candidate(return_target):
                 return_target = GetEnemyInjured(combat_distance)
         elif target_type == "EnemyAttacking":
             return_target = GetEnemyAttacking(combat_distance)
-            if not (Agent.IsValid(return_target) and not Agent.IsDead(return_target)):
+            if not self._is_valid_enemy_target_candidate(return_target):
                 return_target = GetEnemyInjured(combat_distance)
                   
         elif target_type == "EnemyInjured":
@@ -918,7 +1056,7 @@ class BuildMgr:
 
         return_target = self._prefer_melee_nearest_enemy(return_target)
 
-        if Agent.IsValid(return_target) and not Agent.IsDead(return_target):
+        if self._is_valid_enemy_target_candidate(return_target):
             return return_target 
         return 0
 
@@ -944,7 +1082,7 @@ class BuildMgr:
 
         # Party target is an explicit caller directive and must override every
         # other targeting heuristic. If one exists, stop here and use it.
-        if Agent.IsValid(party_target) and not Agent.IsDead(party_target):
+        if self._is_valid_enemy_target_candidate(party_target):
             desired_target = party_target
             target_source = "party"
         # Melee gets first claim on its current live target only when no party
@@ -953,7 +1091,7 @@ class BuildMgr:
         # immediate melee range, prefer that contact target over a farther
         # current target so skills do not keep failing on a body-blocked enemy
         # behind the front line.
-        elif is_melee_player and Agent.IsValid(self.current_target_id) and not Agent.IsDead(self.current_target_id):
+        elif is_melee_player and self._is_valid_enemy_target_candidate(self.current_target_id):
             current_target_distance = Utils.Distance(player_pos, Agent.GetXY(self.current_target_id))
             if nearest_contact_enemy and current_target_distance > Range.Adjacent.value:
                 desired_target = self._prefer_melee_nearest_enemy(nearest_contact_enemy)
@@ -961,14 +1099,14 @@ class BuildMgr:
             else:
                 desired_target = self.current_target_id
                 target_source = "current"
-        elif Agent.IsValid(self.current_target_id) and not Agent.IsDead(self.current_target_id):
+        elif self._is_valid_enemy_target_candidate(self.current_target_id):
             desired_target = self.current_target_id
             target_source = "current"
         else:
             desired_target = self._pick_fallback_target(target_type)
             target_source = "fallback"
 
-        if Agent.IsValid(desired_target) and not Agent.IsDead(desired_target):
+        if self._is_valid_enemy_target_candidate(desired_target):
             target_changed = desired_target != self.current_target_id
             self.current_target_id = desired_target
             if target_changed:
@@ -1372,6 +1510,9 @@ class BuildMgr:
     def _validate_target_for_skill_cast(self, skill_id: int, target_agent_id: int) -> bool:
         from HeroAI.types import Skilltarget, SkillType
         from Py4GWCoreLib import Routines
+        from Py4GWCoreLib.Agent import Agent
+        from Py4GWCoreLib.Skill import Skill
+        from Py4GWCoreLib.enums_src.GameData_enums import Allegiance
 
         if not target_agent_id:
             return True
@@ -1379,6 +1520,21 @@ class BuildMgr:
         custom_skill = self.GetCustomSkill(skill_id)
         if custom_skill is None:
             return True
+
+        target_allegiance_value, _ = Agent.GetAllegiance(target_agent_id)
+        if (
+            target_allegiance_value == Allegiance.Enemy.value
+            and self._is_blacklisted_enemy(target_agent_id)
+        ):
+            return False
+
+        # Hex spells must never be cast on spirits.
+        if custom_skill.SkillType == SkillType.Hex.value:
+            if Agent.IsSpirit(target_agent_id) or (
+                target_allegiance_value == Allegiance.Enemy.value
+                and Agent.IsSpawned(target_agent_id)
+            ):
+                return False
 
         target_allegiance = custom_skill.TargetAllegiance
         if target_allegiance == Skilltarget.NonWeaponSpelledAlly.value:
@@ -1413,6 +1569,15 @@ class BuildMgr:
             elif Routines.Checks.Agents.IsWeaponSpelled(target_agent_id):
                 return False
 
+        blood_is_power_id = Skill.GetID("Blood_is_Power")
+        blood_ritual_id = Skill.GetID("Blood_Ritual")
+        if skill_id in (blood_is_power_id, blood_ritual_id):
+            if (
+                Routines.Checks.Agents.HasEffect(target_agent_id, blood_is_power_id)
+                or Routines.Checks.Agents.HasEffect(target_agent_id, blood_ritual_id)
+            ):
+                return False
+
         return True
 
     #region Whiteboard (cross-hero cast-intent coordination)
@@ -1445,7 +1610,13 @@ class BuildMgr:
         if skill_id <= 0 or target_agent_id <= 0:
             return False
         try:
-            from Py4GWCoreLib import GLOBAL_CACHE, Player
+            from Py4GWCoreLib import Agent, GLOBAL_CACHE, Player, Routines
+
+            if not Routines.Checks.Map.MapValid():
+                return False
+            if not Agent.IsValid(target_agent_id) or Agent.IsDead(target_agent_id):
+                return False
+
             email = Player.GetAccountEmail() or ""
             if not email:
                 return False
@@ -1466,10 +1637,16 @@ class BuildMgr:
         if skill_id <= 0 or target_agent_id <= 0:
             return
         try:
-            from Py4GWCoreLib import GLOBAL_CACHE, Player
+            from Py4GWCoreLib import Agent, GLOBAL_CACHE, Player, Routines
             from Py4GWCoreLib.GlobalCache.shared_memory_src.Globals import (
                 SHMEM_INTENT_DEFAULT_PING_BUDGET_MS,
             )
+
+            if not Routines.Checks.Map.MapValid():
+                return
+            if not Agent.IsValid(target_agent_id) or Agent.IsDead(target_agent_id):
+                return
+
             email = Player.GetAccountEmail() or ""
             if not email:
                 return
@@ -1518,7 +1695,8 @@ class BuildMgr:
         skill_id: int,
         extra_condition: bool | Callable[[], bool] = True,
     ) -> bool:
-        from Py4GWCoreLib import Player, Routines, SkillBar
+        from HeroAI.types import SkillType
+        from Py4GWCoreLib import GLOBAL_CACHE, Player, Routines, SkillBar
 
         if not Routines.Checks.Map.IsExplorable():
             return False
@@ -1530,11 +1708,25 @@ class BuildMgr:
             return False
         if not Routines.Checks.Skills.IsSkillIDReady(skill_id):
             return False
+        skill_type, _ = GLOBAL_CACHE.Skill.GetType(skill_id)
+        if skill_type == SkillType.Shout.value:
+            player_id = Player.GetAgentID()
+            vocal_minority_id = GLOBAL_CACHE.Skill.GetID("Vocal_Minority")
+            well_of_silence_id = GLOBAL_CACHE.Skill.GetID("Well_of_Silence")
+            if (
+                Routines.Checks.Agents.HasEffect(player_id, vocal_minority_id)
+                or Routines.Checks.Agents.HasEffect(player_id, well_of_silence_id)
+            ):
+                return False
 
         slot = SkillBar.GetSlotBySkillID(skill_id)
         if not (1 <= slot <= 8):
             return False
         if not self.IsSharedSkillToggleEnabled(slot):
+            return False
+        if not self._meets_custom_skill_weapon_requirement(skill_id):
+            return False
+        if not self._meets_custom_skill_shared_conditions(skill_id):
             return False
         if not Routines.Checks.Skills.HasEnoughAdrenalineBySlot(slot):
             return False
@@ -1548,7 +1740,8 @@ class BuildMgr:
         slot: int,
         extra_condition: bool | Callable[[], bool] = True,
     ) -> bool:
-        from Py4GWCoreLib import Player, Routines, SkillBar
+        from HeroAI.types import SkillType
+        from Py4GWCoreLib import GLOBAL_CACHE, Player, Routines, SkillBar
 
         if not Routines.Checks.Map.IsExplorable():
             return False
@@ -1562,7 +1755,21 @@ class BuildMgr:
         skill_id = SkillBar.GetSkillIDBySlot(slot)
         if not skill_id:
             return False
+        skill_type, _ = GLOBAL_CACHE.Skill.GetType(skill_id)
+        if skill_type == SkillType.Shout.value:
+            player_id = Player.GetAgentID()
+            vocal_minority_id = GLOBAL_CACHE.Skill.GetID("Vocal_Minority")
+            well_of_silence_id = GLOBAL_CACHE.Skill.GetID("Well_of_Silence")
+            if (
+                Routines.Checks.Agents.HasEffect(player_id, vocal_minority_id)
+                or Routines.Checks.Agents.HasEffect(player_id, well_of_silence_id)
+            ):
+                return False
         if not self.IsSharedSkillToggleEnabled(slot):
+            return False
+        if not self._meets_custom_skill_weapon_requirement(skill_id):
+            return False
+        if not self._meets_custom_skill_shared_conditions(skill_id):
             return False
         if not Routines.Checks.Skills.HasEnoughEnergy(Player.GetAgentID(), skill_id):
             return False
@@ -1588,6 +1795,8 @@ class BuildMgr:
             yield
 
         if not self.CanCastSkillID(skill_id, extra_condition=extra_condition):
+            return False
+        if not self._meets_custom_skill_weapon_requirement(skill_id):
             return False
         if not self._validate_target_for_skill_cast(skill_id, target_agent_id):
             return False
@@ -1663,6 +1872,8 @@ class BuildMgr:
         if not target_agent_id:
             return False
         if not self.CanCastSkillID(skill_id, extra_condition=extra_condition):
+            return False
+        if not self._meets_custom_skill_weapon_requirement(skill_id):
             return False
 
         previous_enemy_target = Player.GetTargetID()

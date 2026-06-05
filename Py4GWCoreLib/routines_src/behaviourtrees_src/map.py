@@ -63,6 +63,7 @@ _MAPS_REQUIRING_EXTRA_CONFIRM: set[int] = {
     21,   # The Frost Gate
     14,   # Gates of Kryta
 }
+_ENTER_CHALLENGE_CONFIRM_TIMEOUT_MS = 1000
 
 
 def _log(source: str, message: str, *, log: bool = False, message_type=Console.MessageType.Info) -> None:
@@ -182,6 +183,39 @@ class BTMap:
                 timeout_ms=timeout_ms,
             )
         )
+        
+    @staticmethod
+    def WaitUntilOnOutpost(timeout_ms: int = 15000, log: bool = False) -> BehaviorTree:
+        """
+        Build a tree that waits until the current map is a valid outpost instance.
+
+        Meta:
+          Expose: true
+          Audience: beginner
+          Display: Wait Until On Outpost
+          Purpose: Wait until the current map becomes a valid outpost map.
+          UserDescription: Use this when a step should pause until the party is fully inside an outpost.
+          Notes: Requires both a valid map context and outpost mode.
+        """
+        from ..Checks import Checks
+        state = {"logged_success": False}
+
+        def _wait_until_on_outpost() -> BehaviorTree.NodeState:
+            if Checks.Map.MapValid() and Checks.Map.IsOutpost():
+                if not state["logged_success"]:
+                    _log("WaitUntilOnOutpost", "Outpost map is ready.", log=log)
+                    state["logged_success"] = True
+                return BehaviorTree.NodeState.SUCCESS
+            return BehaviorTree.NodeState.RUNNING
+
+        return BehaviorTree(
+            BehaviorTree.WaitUntilNode(
+                name="WaitUntilOnOutpost",
+                condition_fn=_wait_until_on_outpost,
+                throttle_interval_ms=500,
+                timeout_ms=timeout_ms,
+            )
+        )
 
     @staticmethod
     def TravelToOutpost(
@@ -275,7 +309,7 @@ class BTMap:
         return BehaviorTree(tree)
 
     @staticmethod
-    def TravelToRegion(outpost_id, region, district, language=0, log:bool=False, timeout: int = 10000):
+    def TravelToRegion(outpost_id, region:int, district:int =1, language:int=0, log:bool=False, timeout: int = 10000):
         """
         Build a tree that travels to a specific outpost, region, district, and language combination.
 
@@ -287,6 +321,12 @@ class BTMap:
           UserDescription: Use this when you need to travel to a map with a specific region, district, or language.
           Notes: Treats matching map id, region, district, and language as early success.
         """
+        _real_district = district -1
+        #district = district +1
+        target_region = int(region)
+        target_district = int(district)
+        target_language = int(language)
+
         # 1. EARLY ARRIVAL CHECK
         def arrived_early() -> bool:
             """
@@ -301,9 +341,9 @@ class BTMap:
               Notes: Logs the destination on early success.
             """
             if (Map.IsMapIDMatch(0, outpost_id) and
-                Map.GetRegion() == region and
-                Map.GetDistrict() == district and
-                Map.GetLanguage() == language):
+                int(Map.GetRegion()[0]) == target_region and
+                int(Map.GetDistrict()) == target_district and
+                int(Map.GetLanguage()[0]) == target_language):
 
                 _log("TravelToRegion", f"Already at {Map.GetMapName(outpost_id)}", log=log)
                 return True
@@ -323,7 +363,7 @@ class BTMap:
               Notes: Returns success immediately after dispatching the travel request.
             """
             _log("TravelToRegion", f"Travelling to {Map.GetMapName(outpost_id)}", log=log)
-            Map.TravelToRegion(outpost_id, region, district, language)
+            Map.TravelToRegion(outpost_id, region, _real_district, language)
             return BehaviorTree.NodeState.SUCCESS
         # 3. ARRIVAL CHECK
         def map_arrival() -> BehaviorTree.NodeState:
@@ -341,9 +381,9 @@ class BTMap:
             if (Map.IsMapReady() and
                 GLOBAL_CACHE.Party.IsPartyLoaded() and
                 Map.IsMapIDMatch(0, outpost_id) and
-                Map.GetRegion() == region and
-                Map.GetDistrict() == district and
-                Map.GetLanguage() == language):
+                int(Map.GetRegion()[0]) == target_region and
+                int(Map.GetDistrict()) == target_district and
+                int(Map.GetLanguage()[0]) == target_language):
 
                 _log("TravelToRegion", f"Arrived at {Map.GetMapName(outpost_id)}", log=log)
                 return BehaviorTree.NodeState.SUCCESS
@@ -579,9 +619,9 @@ class BTMap:
             if not Map.IsOutpost():
                 return BehaviorTree.NodeState.SUCCESS
 
-            if state["confirm_elapsed_ms"] >= 5000:
-                _fail_log("EnterChallenge", "Timed out waiting for the extra confirm dialog.")
-                return BehaviorTree.NodeState.FAILURE
+            if state["confirm_elapsed_ms"] >= _ENTER_CHALLENGE_CONFIRM_TIMEOUT_MS:
+                _log("EnterChallenge", "Extra confirm dialog did not appear; continuing to map-load wait.", log=True)
+                return BehaviorTree.NodeState.SUCCESS
 
             Map.ConfirmEnterChallenge()
             state["confirm_elapsed_ms"] += 100

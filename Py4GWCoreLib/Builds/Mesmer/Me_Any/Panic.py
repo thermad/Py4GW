@@ -18,6 +18,9 @@ Power_Drain_ID = Skill.GetID("Power_Drain")
 Shatter_Hex_ID = Skill.GetID("Shatter_Hex")
 Flesh_of_My_Flesh_ID = Skill.GetID("Flesh_of_My_Flesh")
 Breath_of_the_Great_Dwarf_ID = Skill.GetID("Breath_of_the_Great_Dwarf")
+Ebon_Battle_Standard_of_Courage_ID = Skill.GetID("Ebon_Battle_Standard_of_Courage")
+Ebon_Battle_Standard_of_Honor_ID = Skill.GetID("Ebon_Battle_Standard_of_Honor")
+Tryptophan_Signet_ID = Skill.GetID("Tryptophan_Signet")
 
 
 @dataclass(slots=True)
@@ -27,7 +30,6 @@ class _PanicBarSnapshot:
     enemy_casting: bool = False
     enemy_casting_spell: bool = False
     enemy_casting_spell_or_chant: bool = False
-    dead_ally_in_spellcast: int = 0
     player_energy_pct: float = 1.0
 
 
@@ -51,7 +53,10 @@ class Panic(BuildMgr):
                 Shatter_Hex_ID,
                 Overload_ID,
                 Flesh_of_My_Flesh_ID,
-                Breath_of_the_Great_Dwarf_ID
+                Breath_of_the_Great_Dwarf_ID,
+                Ebon_Battle_Standard_of_Courage_ID,
+                Ebon_Battle_Standard_of_Honor_ID,
+                Tryptophan_Signet_ID,
             ],
         )
         if match_only:
@@ -69,6 +74,9 @@ class Panic(BuildMgr):
             Overload_ID,
             Power_Drain_ID,
             Shatter_Hex_ID,
+            Ebon_Battle_Standard_of_Courage_ID,
+            Ebon_Battle_Standard_of_Honor_ID,
+            Tryptophan_Signet_ID,
         ])
         self.SetSkillCastingFn(self._run_local_skill_logic)
         self.skills: SkillsTemplate = SkillsTemplate(self)
@@ -76,7 +84,6 @@ class Panic(BuildMgr):
     def _get_bar_snapshot(self) -> _PanicBarSnapshot:
         snapshot = _PanicBarSnapshot()
         snapshot.in_aggro = bool(self.IsInAggro())
-        snapshot.dead_ally_in_spellcast = int(Routines.Agents.GetDeadAlly(Range.Spellcast.value) or 0)
         snapshot.player_energy_pct = float(Agent.GetEnergy(Player.GetAgentID()))
 
         if not snapshot.in_aggro:
@@ -104,7 +111,7 @@ class Panic(BuildMgr):
             return True
 
         if self.IsSkillEquipped(Flesh_of_My_Flesh_ID):
-            dead_ally_id = snapshot.dead_ally_in_spellcast
+            dead_ally_id = Routines.Agents.GetDeadAlly(Range.Spellcast.value) or 0
             if dead_ally_id and (yield from self.CastSkillIDAndRestoreTarget(
                 skill_id=Flesh_of_My_Flesh_ID,
                 target_agent_id=dead_ally_id,
@@ -112,6 +119,12 @@ class Panic(BuildMgr):
                 aftercast_delay=250,
             )):
                 return True
+
+        if self.IsSkillEquipped(Ebon_Battle_Standard_of_Courage_ID) and (yield from self.skills.Any.NoAttribute.Ebon_Battle_Standard_of_Courage()):
+            return True
+
+        if self.IsSkillEquipped(Ebon_Battle_Standard_of_Honor_ID) and (yield from self.skills.Any.NoAttribute.Ebon_Battle_Standard_of_Honor()):
+            return True
 
         if not snapshot.in_aggro:
             return False
@@ -123,6 +136,9 @@ class Panic(BuildMgr):
             return True
 
         if snapshot.enemy_in_spellcast and (yield from self.skills.Any.PvE.Ebon_Vanguard_Assassin_Support()):
+            return True
+        
+        if self.IsSkillEquipped(Tryptophan_Signet_ID) and (yield from self.skills.Any.PvE.Tryptophan_Signet()):
             return True
 
         if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Panic()):
@@ -137,13 +153,13 @@ class Panic(BuildMgr):
         if snapshot.player_energy_pct >= 0.50 and (yield from self.skills.Mesmer.DominationMagic.Shatter_Hex(min_priority=HexRemovalPriority.MEDIUM)):
             return True
 
+        if snapshot.enemy_casting_spell and (yield from self.skills.Mesmer.DominationMagic.Mistrust()):
+            return True
+
         if snapshot.enemy_casting and (yield from self.skills.Mesmer.DominationMagic.Overload()):
             return True
 
         if snapshot.enemy_casting and (yield from self.skills.Any.PvE.Cry_of_Pain(require_mesmer_hex=True)):
-            return True
-
-        if snapshot.enemy_casting_spell and (yield from self.skills.Mesmer.DominationMagic.Mistrust()):
             return True
 
         if snapshot.enemy_in_spellcast and (yield from self.skills.Mesmer.DominationMagic.Unnatural_Signet()):

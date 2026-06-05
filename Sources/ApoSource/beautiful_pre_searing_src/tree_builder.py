@@ -18,14 +18,15 @@ def ensure_botting_tree() -> BottingTree:
     global botting_tree
     if botting_tree is None:
         botting_tree = BottingTree.Create(
-            configure_fn=lambda tree: tree.Config.ConfigureUpkeepTrees(
-                disable_looting=False,
+            bot_name="Beautiful Pre-Searing",
+            repeat=False,
+            reset=False,
+            multi_account=False,
+            configure_fn=lambda tree: tree.Config.ConfigureUpkeep(
+                looting_enabled=True,
                 restore_isolation_on_stop=True,
                 enable_outpost_imp_service=True,
                 enable_explorable_imp_service=True,
-                imp_target_bag=1,
-                imp_slot=0,
-                imp_log=False,
                 enable_party_wipe_recovery=False,
             ),
         )

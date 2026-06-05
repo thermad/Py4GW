@@ -262,6 +262,21 @@ class Agents:
         return Utils.GetFirstFromArray(enemy_array)
 
     @staticmethod
+    def GetNearestEnemyOutsideRange(min_distance=0.0, max_distance=4500.0, aggressive_only=False):
+        from ..AgentArray import AgentArray
+        from ..Py4GWcorelib import Utils
+        from ..EnemyBlacklist import EnemyBlacklist
+
+        bl = EnemyBlacklist()
+        player_pos = Player.GetXY()
+        enemy_array = Agents.GetFilteredEnemyArray(player_pos[0], player_pos[1], max_distance, aggressive_only)
+        if not bl.is_empty():
+            enemy_array = AgentArray.Filter.ByCondition(enemy_array, lambda agent_id: not bl.is_blacklisted(agent_id))
+        enemy_array = AgentArray.Filter.ByDistance(enemy_array, player_pos, min_distance, negate=True)
+        enemy_array = AgentArray.Sort.ByDistance(enemy_array, player_pos)
+        return Utils.GetFirstFromArray(enemy_array)
+
+    @staticmethod
     def GetFilteredAllyArray(x, y, max_distance=4500.0, other_ally=False):
         from ..AgentArray import AgentArray
         from ..Agent import Agent
@@ -325,19 +340,23 @@ class Agents:
         from ..Py4GWcorelib import Utils
 
         dead_ally_array = Agents.GetDeadAllyArray(max_distance)
-        try:
-            from ..GlobalCache.WhiteboardLocks import filter_unlocked_resurrection_targets
-            dead_ally_array = filter_unlocked_resurrection_targets(dead_ally_array)
-        except Exception:
-            pass
-        selected = Utils.GetFirstFromArray(dead_ally_array)
-        if selected and reserve:
+        if reserve:
             try:
-                from ..GlobalCache.WhiteboardLocks import post_resurrection_lock
-                post_resurrection_lock(selected, skill_id=skill_id, aftercast_delay=aftercast_delay)
+                from ..GlobalCache.WhiteboardLocks import claim_resurrection_target
+                return claim_resurrection_target(
+                    dead_ally_array,
+                    skill_id=skill_id,
+                    aftercast_delay=aftercast_delay,
+                )
             except Exception:
                 pass
-        return selected
+        else:
+            try:
+                from ..GlobalCache.WhiteboardLocks import filter_unlocked_resurrection_targets
+                dead_ally_array = filter_unlocked_resurrection_targets(dead_ally_array)
+            except Exception:
+                pass
+        return Utils.GetFirstFromArray(dead_ally_array)
 
     @staticmethod
     def GetCorpses(max_distance=4500.0):

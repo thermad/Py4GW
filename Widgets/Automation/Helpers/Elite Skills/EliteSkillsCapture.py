@@ -1,3 +1,4 @@
+from itertools import chain
 from typing import List, Tuple, Generator, Any, Optional, Dict
 from dataclasses import dataclass
 from enum import Enum
@@ -179,31 +180,6 @@ def find_textures_directory(script_path: str) -> Optional[str]:
             pass
     
     return None
-def _on_party_defeated(bot: Botting, step_name: str):
-    """Party wiped: wait for rez, then resume from current position in map."""
-    bot.Properties.ApplyNow("pause_on_danger", "active", False)
-    bot.ResetHeroAICombatState(active=False, following=False, targeting=False, combat=False)
-    ConsoleLog("Defeat", "Party defeated - waiting for resurrection...", log=True)
-    
-    # Wait for party to be resurrected (either by rez shrine or skills)
-    while True:
-        yield from Routines.Yield.wait(1000)
-        if not Routines.Checks.Map.MapValid():
-            continue
-        # Check if player is alive
-        player_id = Player.GetAgentID()
-        if player_id and Agent.IsAlive(player_id):
-            break
-    
-    ConsoleLog("Defeat", "Party resurrected - resuming capture...", log=True)
-    fsm = bot.config.FSM
-    
-    # Resume from the current step without resetting
-    fsm.resume()
-    
-    bot.Templates.Aggressive()
-    bot.ResetHeroAICombatState(active=True)
-    yield
 
 
 def _get_mission_header_step(fsm):
@@ -220,13 +196,6 @@ def _get_mission_header_step(fsm):
     return None
 
 
-def on_party_defeated(bot: Botting):
-    fsm = bot.config.FSM
-    current_step = _get_mission_header_step(fsm) or (fsm.current_state.name if fsm.current_state else "")
-    ConsoleLog("PartyDefeated", "Party defeated. Returning to outpost and retrying current step...", log=True)
-    ActionQueueManager().ResetAllQueues()
-    fsm.pause()
-    fsm.AddManagedCoroutine("OnPartyDefeated", _on_party_defeated(bot, current_step))
 
 # ============================================================================
 #region DATA MODEL - Elite Skills Definitions
@@ -282,16 +251,16 @@ SECONDARY_BUILDS = {
         Profession.DERVISH:      "OQoREZaX0mEAAAAAAAAAYAA",        # W/D
     },
     Profession.RANGER: {
-        Profession.WARRIOR:      "OgEUUDLe1MHKOA+W4AYA0WAA",       # R/W 
-        Profession.RANGER:       "OgUUIELe1MHKWD+W4AYA0WAA",       # R 
-        Profession.MONK:         "OgMU4ELe1MHKGl+W4AYA0WAA",       # R/Mo 
-        Profession.NECROMANCER:  "OgQUUELe1MHKON+W4AYA0WAA",       # R/N 
-        Profession.MESMER:       "OgUUIELe1MHKWD+W4AYA0WAA",       # R/Me
-        Profession.ELEMENTALIST: "OgYUoELe1MHKuY+W4AYA0WAA",       # R/E 
-        Profession.ASSASSIN:     "OgcUYxrm5vIKmL7bCHAMA0mAAA",     # R/A 
-        Profession.RITUALIST:    "OggkYhXXGDijiRd6bEOAgBAtRAA",    # R/Rt
-        Profession.PARAGON:      "OgkkYhXaGfKjiRF7bEOAgBAtRAA",    # R/P 
-        Profession.DERVISH:      "OgokYhXaGrKjip66bEOAgBAtRAA",    # R/D 
+        Profession.WARRIOR:      "OgEUUDLe1MTKGj1ghMGoSUNDA0GA",       # R/W 
+        Profession.RANGER:       "OgEUUDLe1MTKGj1ghMGoSUNDA0GA",       # R 
+        Profession.MONK:         "OgMU8CLe1MTKGj1ghMGoSUNDA0GA",       # R/Mo 
+        Profession.NECROMANCER:  "OgQUcCLe1MTKGj1ghMGoSUNDA0GA",       # R/N 
+        Profession.MESMER:       "OgUUMCLe1MTKGj1ghMGoSUNDA0GA",       # R/Me
+        Profession.ELEMENTALIST: "OgYUsCLe1MTKGj1ghMGoSUNDA0GA",       # R/E 
+        Profession.ASSASSIN:     "OgcUYxrm5fQKGj1ghMGoSUNDA0GA",     # R/A 
+        Profession.RITUALIST:    "OggkYhXaGDGkixYNYIjBqEVzAAtB",    # R/Rt
+        Profession.PARAGON:      "OgkkYhXaGXGkixYNYIjBqEVzAAtB",    # R/P 
+        Profession.DERVISH:      "OgokYhXaGnGkixYNYIjBqEVzAAtB",    # R/D 
     },
     Profession.MESMER: {
         Profession.WARRIOR:      "OQFUAWBPsaQoAaAXADBEB9A2gDAA",       # Me/W
@@ -306,28 +275,28 @@ SECONDARY_BUILDS = {
         Profession.DERVISH:      "OQBDArwjRoAaAXADBEB9A2gDAA",     # Me/D
     }, 
     Profession.MONK: {
-        Profession.WARRIOR:      "OwEU04nA3qRNgbE3N3ETfQgBADAA",   # Mo/W
-        Profession.RANGER:       "OwIU04nAXsRNgbE3N3ETfQg+GDAA",   # Mo/R
-        Profession.MONK:         "OwUUMsG/E4SNgbE3N3ETfQgAADAA",   # Mo
-        Profession.NECROMANCER:  "OwQUcsG/E4SNgbE3N3ETfQgfCDAA",   # Mo/N
-        Profession.MESMER:       "OwUUMsG/E4SNgbE3N3ETfQgAADAA",   # Mo/Me
-        Profession.ELEMENTALIST: "OwYUosG/E4SNgbE3N3ETfQgFDDAA",   # Mo/E
-        Profession.ASSASSIN:     "OwcU04nA3vRNgbE3N3ETfQguMDAA",   # Mo/A
-        Profession.RITUALIST:    "OAhjQwGcYMZC3wjoqyJGErwBAA",   # Mo/Rt
-        Profession.PARAGON:      "Owkk0wPC0eaUD4GxdzNx0HEoK2AA",   # Mo/P
-        Profession.DERVISH:      "OApjQwG8aMZC3wjoqyJGErwBAA",   # Mo/D
+        Profession.WARRIOR:      "OwEU04nA5aQNgbE3N3ETfQgdRDAA",   # Mo/W
+        Profession.RANGER:       "OwIU04nA5cQNgbE3N3ETfQgdRDAA",   # Mo/R
+        Profession.MONK:         "OwQUciG/EITNgbE3N3ETfQgdRDAA",   # Mo
+        Profession.NECROMANCER:  "OwQUciG/EITNgbE3N3ETfQgdRDAA",   # Mo/N
+        Profession.MESMER:       "OwUUMiG/EITNgbE3N3ETfQgdRDAA",   # Mo/Me
+        Profession.ELEMENTALIST: "OwYUsiG/EITNgbE3N3ETfQgdRDAA",   # Mo/E
+        Profession.ASSASSIN:     "OwcU04nA5fQNgbE3N3ETfQgdRDAA",   # Mo/A
+        Profession.RITUALIST:    "Owgk0wPCEDGUD4GxdzNx0HEYX0AA",   # Mo/Rt
+        Profession.PARAGON:      "Owkk0wPCEXGUD4GxdzNx0HEYX0AA",   # Mo/P
+        Profession.DERVISH:      "Owok0wPCEnGUD4GxdzNx0HEYX0AA",   # Mo/D
     },
     Profession.NECROMANCER: {
-        Profession.WARRIOR:      "OAFTQYDTjJT4GeEVVOxgYFOAAA",    # N/W
-        Profession.RANGER:       "OAJTQYDnjJT4GeEVVOxgYFOAAA",    # N/R
-        Profession.MONK:         "OANDQsxfMZC3wjoqyJGErwBA",     # N/Mo
-        Profession.NECROMANCER:  "OAVDIBxGPZC3wjoqyJGErwBA",     # N
-        Profession.MESMER:       "OAVDIBxGPZC3wjoqyJGErwBA",     # N/Me
-        Profession.ELEMENTALIST: "OAZDQsxYMZC3wjoqyJGErwBA",     # N/E
-        Profession.ASSASSIN:     "OAdTQYD3jJT4GeEVVOxgYFOAAA",   # N/A
-        Profession.RITUALIST:    "OAhjQwGcYMZC3wjoqyJGErwBAA",   # N/Rt
-        Profession.PARAGON:      "OAljQwGcZMZC3wjoqyJGErwBAA",   # N/P
-        Profession.DERVISH:      "OApjQwGcaMZC3wjoqyJGErwBAA",   # N/D
+        Profession.WARRIOR:      "OAFUQ0ia2aQ0Bf1VVqiDC2QuBDAA",    # N/W
+        Profession.RANGER:       "OAJUQ0iaWcQ0Bf1VVqiDC2QuBDAA",    # N/R
+        Profession.MONK:         "OANEQap22BRH8VXVpKOIYD5GMAA",     # N/Mo
+        Profession.NECROMANCER:  "OAVEIBplaLRH8VXVpKOIYD5GMAA",     # N
+        Profession.MESMER:       "OAVEIBplaLRH8VXVpKOIYD5GMAA",     # N/Me
+        Profession.ELEMENTALIST: "OAZEQap2qBRH8VXVpKOIYD5GMAA",     # N/E
+        Profession.ASSASSIN:     "OAdUQ0ia2fQ0Bf1VVqiDC2QuBDAA",   # N/A
+        Profession.RITUALIST:    "OAhkQoFqxKGEdwXdVlq4ggNkbwAA",   # N/Rt
+        Profession.PARAGON:      "OAlkQoFqxWGEdwXdVlq4ggNkbwAA",   # N/P
+        Profession.DERVISH:      "OApkQoFqxmGEdwXdVlq4ggNkbwAA",   # N/D
     },
     Profession.ELEMENTALIST: {
         Profession.WARRIOR:      "OgFToYGXHaX0msYQYgWAZIAYAAA",    # E/W
@@ -366,16 +335,16 @@ SECONDARY_BUILDS = {
         Profession.DERVISH:      "OAqkAyiMpoGT18a+NLnnNm5mbAA",    # Rt/D
     },
     Profession.PARAGON: {
-        Profession.WARRIOR:      "OQGkUFliJjy0uoNJP2OmJ2NWN2AA",   # P/W
-        Profession.RANGER:       "OQKkkFliJjy0uoNJP2OmJ2NWN2AA",   # P/R
-        Profession.MONK:         "OQOk0EliJjy0uoNJP2OmJ2NWN2AA",   # P/Mo
-        Profession.NECROMANCER:  "OQSkcEliJjy0uoNJP2OmJ2NWN2AA",   # P/N
-        Profession.MESMER:       "OQWkMEliJjy0uoNJP2OmJ2NWN2AA",   # P/Me
-        Profession.ELEMENTALIST: "OQakoEliJjy0uoNJP2OmJ2NWN2AA",   # P/E
-        Profession.ASSASSIN:     "OQek8FliJjy0uoNJP2OmJ2NWN2AA",   # P/A
-        Profession.RITUALIST:    "OQCjUKmMKT7i2k8Y7YmY3Y1YDAA",   # P/Rt
-        Profession.PARAGON:      "OQCjUOmMKT7i2k8Y7YmY3Y1YDAA",   # P
-        Profession.DERVISH:      "OQqkUKmMKvG0uoNJP2OmJ2NWN2AA",   # P/D
+        Profession.WARRIOR:      "OQGkUFlopiyUNGQ4OmF2AQPm72ZN",   # P/W
+        Profession.RANGER:       "OQKkkFlopiyUNGQ4OmF2AQPm72ZN",   # P/R
+        Profession.MONK:         "OQOk8ElopiyUNGQ4OmF2AQPm72ZN",   # P/Mo
+        Profession.NECROMANCER:  "OQSkcElopiyUNGQ4OmF2AQPm72ZN",   # P/N
+        Profession.MESMER:       "OQWkMElopiyUNGQ4OmF2AQPm72ZN",   # P/Me
+        Profession.ELEMENTALIST: "OQaksElopiyUNGQ4OmF2AQPm72ZN",   # P/E
+        Profession.ASSASSIN:     "OQek8FlopiyUNGQ4OmF2AQPm72ZN",   # P/A
+        Profession.RITUALIST:    "OQikAGlopiyUNGQ4OmF2AQPm72ZN",   # P/Rt
+        Profession.PARAGON:      "OQCjUimKKT1YAh7YWYDA9Yubn1A",   # P
+        Profession.DERVISH:      "OQqkUimKKnGUNGQ4OmF2AQPm72ZN",   # P/D
     },
     Profession.DERVISH: { 
         Profession.WARRIOR:      "OgGkUFp5Kzmk513m4VMJB2+F71AA",   # D/W
@@ -394,6 +363,7 @@ SECONDARY_BUILDS = {
 # Session storage for save/load/restore
 _saved_build_template = None
 _starting_map_id = None
+_build_saved_once = False
 
 # ============================================================================
 #endregion
@@ -579,7 +549,7 @@ ELITE_SKILLS = [
         step_name="[H]Signet of Judgement",
         capture_function="Signet_of_Judgement",
         start_map=155,
-        icon_filename="[294] - Signet of Judgment.jpg",
+        icon_filename="[294] - Signet of Judgment.jpg", 
     ),
     EliteSkill(
         id="skill_33",
@@ -590,7 +560,7 @@ ELITE_SKILLS = [
         step_name="[H]Illusionary Weaponry",
         capture_function="Illusionary_Weaponry",
         start_map=155,
-        icon_filename="[33] - Illusionary Weaponry.jpg",
+        icon_filename="[33] - Illusionary Weaponry.jpg", 
     ),
     EliteSkill(
         id="skill_826",
@@ -722,7 +692,7 @@ ELITE_SKILLS = [
         step_name="[H]Greater Conflagration",
         capture_function="GreaterConflagration",
         start_map=124,
-        icon_filename="[465] - Greater Conflagration.jpg",
+        icon_filename="[465] - Greater Conflagration.jpg",   
     ),
     EliteSkill(
         id="skill_114",
@@ -733,7 +703,7 @@ ELITE_SKILLS = [
         step_name="[H]Aura of the Lich",
         capture_function="AuraOfTheLich",
         start_map=124,
-        icon_filename="[114] - Aura of the Lich.jpg",
+        icon_filename="[114] - Aura of the Lich.jpg",   
     ),
     EliteSkill(
         id="skill_52",
@@ -744,7 +714,7 @@ ELITE_SKILLS = [
         step_name="[H]Panic",
         capture_function="Panic",
         start_map=124,
-        icon_filename="[52] - Panic.jpg",
+        icon_filename="[52] - Panic.jpg",  
     ),
     EliteSkill(
         id="skill_185",
@@ -754,8 +724,8 @@ ELITE_SKILLS = [
         type=EliteSkillType.ELITE_SKILL,
         step_name="[H]Mind Burn",
         capture_function="MindBurn",
-        start_map=124,
-        icon_filename="[185] - Mind Burn.jpg",
+        start_map=217,
+        icon_filename="[185] - Mind Burn.jpg",   
     ),
     EliteSkill(
         id="skill_1035",
@@ -777,7 +747,7 @@ ELITE_SKILLS = [
         step_name="[H]Unyielding Aura",
         capture_function="UnyieldingAura",
         start_map=158,
-        icon_filename="[268] - Unyielding Aura.jpg",
+        icon_filename="[268] - Unyielding Aura.jpg",  
     ),
     EliteSkill(
         id="skill_365",
@@ -788,7 +758,7 @@ ELITE_SKILLS = [
         step_name="[H]Victory is Mine",
         capture_function="VictoryIsMine",
         start_map=158,
-        icon_filename="[365] - Victory is Mine!.jpg",
+        icon_filename="[365] - Victory is Mine!.jpg", 
     ),
     EliteSkill(
         id="skill_404",
@@ -799,7 +769,7 @@ ELITE_SKILLS = [
         step_name="[H]Poison Arrow",
         capture_function="PoisonArrow",
         start_map=158,
-        icon_filename="[404] - Poison Arrow.jpg",
+        icon_filename="[404] - Poison Arrow.jpg",  
     ),
     EliteSkill(
         id="skill_132",
@@ -821,7 +791,7 @@ ELITE_SKILLS = [
         step_name="[H]Glimmering Mark",
         capture_function="GlimmeringMark",
         start_map=158,
-        icon_filename="[227] - Glimmering Mark.jpg",
+        icon_filename="[227] - Glimmering Mark.jpg",   
     ),
     EliteSkill(
         id="skill_273",
@@ -832,7 +802,7 @@ ELITE_SKILLS = [
         step_name="[H]Spell Breaker",
         capture_function="SpellBreaker",
         start_map=155,
-        icon_filename="[273] - Spell Breaker.jpg",
+        icon_filename="[273] - Spell Breaker.jpg",    
     ),
     EliteSkill(
         id="skill_82",
@@ -843,7 +813,7 @@ ELITE_SKILLS = [
         step_name="[H]Mantra of Recall",
         capture_function="MantraOfRecall",
         start_map=155,
-        icon_filename="[82] - Mantra of Recall.jpg",
+        icon_filename="[82] - Mantra of Recall.jpg", 
     ),
     EliteSkill(
         id="skill_226",
@@ -854,7 +824,7 @@ ELITE_SKILLS = [
         step_name="[H]Mind Shock",
         capture_function="MindShock",
         start_map=155,
-        icon_filename="[226] - Mind Shock.jpg",
+        icon_filename="[226] - Mind Shock.jpg",  
     ),
     EliteSkill(
         id="skill_1517",
@@ -1310,6 +1280,28 @@ ELITE_SKILLS = [
         icon_filename="[1759] - Vow of Strength.jpg",
     ),
     EliteSkill(
+        id="skill_1737",
+        display_name="Wielder's Zeal",
+        skill_id=1737,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Wielder's Zeal",
+        capture_function="WieldersZeal",
+        start_map=376,
+        icon_filename="[1737] - Wielder's Zeal.jpg",
+    ),
+    EliteSkill(
+        id="skill_1350",
+        display_name="Simple Thievery",
+        skill_id=1350,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Simple Thievery",
+        capture_function="SimpleThievery",
+        start_map=376,
+        icon_filename="[1350] - Simple Thievery.jpg",
+    ),
+    EliteSkill(
         id="skill_1536",
         display_name="Wounding Strike",
         skill_id=1536,
@@ -1334,7 +1326,7 @@ ELITE_SKILLS = [
     EliteSkill(
         id="skill_941",
         display_name="Blessed Light",
-        skill_id=1768,
+        skill_id=941,
         profession=Profession.MONK,
         type=EliteSkillType.ELITE_SKILL,
         step_name="[H]Blessed Light",
@@ -1372,7 +1364,7 @@ ELITE_SKILLS = [
         type=EliteSkillType.ELITE_SKILL,
         step_name="[H]Healer's Boon",
         capture_function="HealersBoon",
-        start_map=388,
+        start_map=403,
         icon_filename="[1393] - Healer's Boon.jpg",
     ), 
     EliteSkill(
@@ -1417,7 +1409,7 @@ ELITE_SKILLS = [
         step_name="[H]Healing Hands",
         capture_function="HealingHands",
         start_map=35,
-        icon_filename="[285] - Healing Hands.jpg",
+        icon_filename="[285] - Healing Hands.jpg", 
     ),
     EliteSkill(
         id="skill_1397",
@@ -1462,6 +1454,7 @@ ELITE_SKILLS = [
         capture_function="AuraofFaith",
         start_map=23,
         icon_filename="[260] - Aura of Faith.jpg",
+         
     ), 
     EliteSkill(
         id="skill_1692",
@@ -1671,6 +1664,7 @@ ELITE_SKILLS = [
         capture_function="BullsCharge",
         start_map=35,
         icon_filename="[379] - Bull's Charge.jpg",
+         
     ),
     EliteSkill(
         id="skill_1405",
@@ -1726,6 +1720,7 @@ ELITE_SKILLS = [
         capture_function="DefyPain",
         start_map=24,
         icon_filename="[318] - Defy Pain.jpg",
+         
     ),
     EliteSkill(
         id="skill_355",
@@ -1759,39 +1754,17 @@ ELITE_SKILLS = [
         capture_function="DwarvenBattleStance",
         start_map=639,
         icon_filename="[375] - Dwarven Battle Stance.jpg",
-#    ),
-#    EliteSkill(
-#        id="skill_354",
-#        display_name="Earth Shaker",
-#        skill_id=354,
-#        profession=Profession.WARRIOR,
-#        type=EliteSkillType.ELITE_SKILL,
-#        step_name="[H]Earth Shaker",
-#        capture_function="EarthShaker",
-#        start_map=,
-#        icon_filename="[354] - Earth Shaker.jpg",
    ),
    EliteSkill(
-       id="skill_993",
-       display_name="Enraged Smash",
-       skill_id=993,
-       profession=Profession.WARRIOR,
-       type=EliteSkillType.ELITE_SKILL,
-       step_name="[H]Enraged Smash",
-       capture_function="EnragedSmash",
-       start_map=274,
-       icon_filename="[993] - Enraged Smash.jpg",
-#    ),
-#    EliteSkill(
-#        id="skill_389",
-#        display_name="Flourish",
-#        skill_id=389,
-#        profession=Profession.WARRIOR,
-#        type=EliteSkillType.ELITE_SKILL,
-#        step_name="[H]Flourish",
-#        capture_function="Flourish",
-#        start_map=,
-#        icon_filename="[389] - Flourish.jpg",
+        id="skill_993",
+        display_name="Enraged Smash",
+        skill_id=993,
+        profession=Profession.WARRIOR,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Enraged Smash",
+        capture_function="EnragedSmash",
+        start_map=274,
+        icon_filename="[993] - Enraged Smash.jpg",
     ),
     EliteSkill(
         id="skill_889",
@@ -1804,17 +1777,6 @@ ELITE_SKILLS = [
         start_map=272,
         icon_filename="[889] - Forceful Blow.jpg",
     ),
-#    EliteSkill(
-#        id="skill_372",
-#        display_name="Gladiator's Defense",
-#        skill_id=372,
-#        profession=Profession.WARRIOR,
-#        type=EliteSkillType.ELITE_SKILL,
-#        step_name="[H]Gladiator's Defense",
-#        capture_function="GladiatorsDefense",
-#        start_map=,
-#        icon_filename="[372] - Gladiator's Defense.jpg",
-#    ),
     EliteSkill(
         id="skill_1406",
         display_name="Headbutt",
@@ -1968,6 +1930,7 @@ ELITE_SKILLS = [
         capture_function="LifeBarrier",
         start_map=24,
         icon_filename="[270] - Life Barrier.jpg",
+         
     ), 
     EliteSkill(
         id="skill_1649",
@@ -2364,6 +2327,28 @@ ELITE_SKILLS = [
         capture_function="Lingering_Curse",
         start_map=272,
         icon_filename="[142] - Lingering Curse.jpg"
+    ),  
+    EliteSkill(
+        id="skill-126",
+        display_name="Life Transfer",
+        skill_id=126,
+        profession=Profession.NECROMANCER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Life Transfer",
+        capture_function="Life_Transfer",
+        start_map=650,
+        icon_filename="[126] - Life Transfer.jpg",
+    ),
+    EliteSkill(
+        id="skill-228",
+        display_name="Thunderclap",
+        skill_id=228,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Thunderclap",
+        capture_function="Thunderclap",
+        start_map=23,
+        icon_filename="[228] - Thunderclap.jpg",
     ),
     EliteSkill(
         id="skill-901",
@@ -2474,7 +2459,898 @@ ELITE_SKILLS = [
         capture_function="Weaken_Knees",
         start_map=129,
         icon_filename="[822] - Weaken Knees.jpg"
-    )
+    ), 
+    EliteSkill(
+        id="skill-395", 
+        display_name="Barrage",
+        skill_id=395,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Barrage",
+        capture_function="Barrage",
+        start_map=349,
+        icon_filename="[395] - Barrage.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1466",
+        display_name="Burning Arrow",
+        skill_id=1466,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Burning Arrow",
+        capture_function="Burning_Arrow",
+        start_map=381,
+        icon_filename="[1466] - Burning Arrow.jpg"
+    ),
+    EliteSkill(
+        id="skill-393",
+        display_name="Crippling Shot",
+        skill_id=393,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Crippling Shot",
+        capture_function="Crippling_Shot",
+        start_map=640,
+        icon_filename="[393] - Crippling Shot.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1202",
+        display_name="Enraged Lunge",
+        skill_id=1202,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Enraged Lunge",
+        capture_function="Enraged_Lunge",
+        start_map=51,
+        icon_filename="[1202] - Enraged Lunge.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1212",
+        display_name="Equinox",
+        skill_id=1212,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Equinox",
+        capture_function="Equinox",
+        start_map=284,
+        icon_filename="[1212] - Equinox.jpg"
+    ), 
+    EliteSkill(
+        id="skill-448",
+        display_name="Escape",
+        skill_id=448,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Escape",
+        capture_function="Escape",
+        start_map=224,
+        icon_filename="[448] - Escape.jpg"
+    ),
+    EliteSkill(
+        id="skill-1724",
+        display_name="Expert's Dexterity",
+        skill_id=1724,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Expert's Dexterity",
+        capture_function="Experts_Dexterity",
+        start_map=407,
+        icon_filename="[1724] - Expert's Dexterity.jpg"
+    ),
+    EliteSkill(
+        id="skill-997",
+        display_name="Famine",
+        skill_id=997,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Famine",
+        capture_function="Famine",
+        start_map=407,
+        icon_filename="[997] - Famine.jpg"
+    ), 
+    EliteSkill(
+        id="skill-442",
+        display_name="Ferocious Strike",
+        skill_id=442,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Ferocious Strike",
+        capture_function="Ferocious_Strike",
+        start_map=273,
+        icon_filename="[442] - Ferocious Strike.jpg"
+    ),
+    EliteSkill(
+        id="skill-1199",
+        display_name="Glass Arrows",
+        skill_id=1199,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Glass Arrows",
+        capture_function="Glass_Arrows",
+        start_map=130,
+        icon_filename="[1199] - Glass Arrows.jpg"
+    ),
+    EliteSkill(
+        id="skill-1195",
+        display_name="Heal as One",
+        skill_id=1195,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Heal as One",
+        capture_function="Heal_as_One",
+        start_map=390,
+        icon_filename="[1195] - Heal as One.jpg"
+    ),
+    EliteSkill(
+        id="skill-1730",
+        display_name="Infuriating Heat",
+        skill_id=1730,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Infuriating Heat",
+        capture_function="InfuriatingHeat",
+        start_map=424,
+        icon_filename="[1730] - Infuriating Heat.jpg"
+    ),
+    EliteSkill(
+        id="skill-961",
+        display_name="Lacerate",
+        skill_id=961,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Lacerate",
+        capture_function="Lacerate",
+        start_map=424,
+        icon_filename="[961] - Lacerate.jpg"
+    ),
+    EliteSkill(
+        id="skill-1726",
+        display_name="Magebane Shot",
+        skill_id=1726,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Magebane Shot",
+        capture_function="MagebaneShot",
+        start_map=442,
+        icon_filename="[1726] - Magebane Shot.jpg"
+    ),
+    EliteSkill(
+        id="skill-430",
+        display_name="Marksman's Wager",
+        skill_id=430,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Marksman's Wager",
+        capture_function="MarksmansWager",
+        start_map=117,
+        icon_filename="[430] - Marksman's Wager.jpg"
+    ),
+    EliteSkill(
+        id="skill-429",
+        display_name="Melandru's Arrows",
+        skill_id=429,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Melandru's Arrows",
+        capture_function="MelandrusArrows",
+        start_map=159,
+        icon_filename="[429] - Melandru's Arrows.jpg",
+    ),
+    EliteSkill(
+        id="skill-853",
+        display_name="Melandru's Shot",
+        skill_id=853,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Melandru's Shot",
+        capture_function="MelandrusShot",
+        start_map=193,
+        icon_filename="[853] - Melandru's Shot.jpg"
+    ),
+    EliteSkill(
+        id="skill-405",
+        display_name="Oath Shot",
+        skill_id=405,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Oath Shot",
+        capture_function="OathShot",
+        start_map=23,
+        icon_filename="[405] - Oath Shot.jpg",
+    ),
+    EliteSkill(
+        id="skill-397",
+        display_name="Quick Shot",
+        skill_id=397,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Quick Shot",
+        capture_function="QuickShot",
+        start_map=425,
+        icon_filename="[397] - Quick Shot.jpg"
+    ),
+    EliteSkill(
+        id="skill-1473",
+        display_name="Quicksand",
+        skill_id=1473,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Quicksand",
+        capture_function="Quicksand",
+        start_map=442,
+        icon_filename="[1473] - Quicksand.jpg"
+    ),
+    EliteSkill(
+        id="skill-1721",
+        display_name="Rampage as One",
+        skill_id=1721,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Rampage as One",
+        capture_function="RampageAsOne",
+        start_map=387,
+        icon_filename="[1721] - Rampage as One.jpg"
+    ),
+    EliteSkill(
+        id="skill-1471",
+        display_name="Scavenger's Focus",
+        skill_id=1471,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Scavenger's Focus",
+        capture_function="ScavengersFocus",
+        start_map=440,
+        icon_filename="[1471] - Scavenger's Focus.jpg"
+    ),
+    EliteSkill(
+        id="skill-1729",
+        display_name="Smoke Trap",
+        skill_id=1729,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Smoke Trap",
+        capture_function="SmokeTrap",
+        start_map=442,
+        icon_filename="[1729] - Smoke Trap.jpg"
+    ),
+    EliteSkill(
+        id="skill-461",
+        display_name="Spike Trap",
+        skill_id=461,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Spike Trap",
+        capture_function="SpikeTrap",
+        start_map=219,
+        icon_filename="[461] - Spike Trap.jpg"
+    ),
+    EliteSkill(
+        id="skill-1468",
+        display_name="Strike as One",
+        skill_id=1468,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Strike as One",
+        capture_function="StrikeAsOne",
+        start_map=421,
+        icon_filename="[1468] - Strike as One.jpg"
+    ),
+    EliteSkill(
+        id="skill-946",
+        display_name="Trapper's Focus",
+        skill_id=946,
+        profession=Profession.RANGER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Trapper's Focus",
+        capture_function="TrappersFocus",
+        start_map=389,
+        icon_filename="[946] - Trapper's Focus.jpg"
+    ),
+    EliteSkill(
+        id="skill-1732",
+        display_name="Destructive Was Glaive",
+        skill_id=1732,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Destructive Was Glaive",
+        capture_function="DestructiveWasGlaive",
+        start_map=387,
+        icon_filename="[1732] - Destructive Was Glaive.jpg"
+    ),
+    EliteSkill(
+        id="skill-789",
+        display_name="Grasping Was Kuurong",
+        skill_id=789,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Grasping Was Kuurong",
+        capture_function="GraspingWasKuurong",
+        start_map=391,
+        icon_filename="[789] - Grasping Was Kuurong.jpg"
+    ),
+    EliteSkill(
+        id="skill-1479",
+        display_name="Offering of Spirit",
+        skill_id=1479,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Offering of Spirit",
+        capture_function="OfferingOfSpirit",
+        start_map=495,
+        icon_filename="[1479] - Offering of Spirit.jpg"
+    ),
+    EliteSkill(
+        id="skill-1250",
+        display_name="Preservation",
+        skill_id=1250,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Preservation",
+        capture_function="Preservation",
+        start_map=279,
+        icon_filename="[1250] - Preservation.jpg"
+    ),
+    EliteSkill(
+        id="skill-1482",
+        display_name="Reclaim Essence",
+        skill_id=1482,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Reclaim Essence",
+        capture_function="ReclaimEssence",
+        start_map=442,
+        icon_filename="[1482] - Reclaim Essence.jpg"
+    ),
+    EliteSkill(
+        id="skill-1217",
+        display_name="Ritual Lord",
+        skill_id=1217,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Ritual Lord",
+        capture_function="RitualLord",
+        start_map=289,
+        icon_filename="[1217] - Ritual Lord.jpg"
+    ),
+    EliteSkill(
+        id="skill-1742",
+        display_name="Signet of Ghostly Might",
+        skill_id=1742,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Signet of Ghostly Might",
+        capture_function="SignetOfGhostlyMight",
+        start_map=427,
+        icon_filename="[1742] - Signet of Ghostly Might.jpg"
+    ),
+    EliteSkill(
+        id="skill-1231",
+        display_name="Spirit Channeling",
+        skill_id=1231,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Spirit Channeling",
+        capture_function="SpiritChanneling",
+        start_map=283,
+        icon_filename="[1231] - Spirit Channeling.jpg"
+    ),
+    EliteSkill(
+        id="skill-1257",
+        display_name="Spirit Light Weapon",
+        skill_id=1257,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Spirit Light Weapon",
+        capture_function="SpiritLightWeapon",
+        start_map=390,
+        icon_filename="[1257] - Spirit Light Weapon.jpg"
+    ),
+    EliteSkill(
+        id="skill-1736",
+        display_name="Spirit's Strength",
+        skill_id=1736,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Spirit's Strength",
+        capture_function="SpiritsStrength",
+        start_map=428,
+        icon_filename="[1736] - Spirit's Strength.jpg"
+    ),
+    EliteSkill(
+        id="skill-913",
+        display_name="Tranquil Was Tanasen",
+        skill_id=913,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Tranquil Was Tanasen",
+        capture_function="TranquilWasTanasen",
+        start_map=51,
+        icon_filename="[913] - Tranquil Was Tanasen.jpg"
+    ),
+    EliteSkill(
+        id="skill-790",
+        display_name="Vengeful Was Khanhei",
+        skill_id=790,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Vengeful Was Khanhei",
+        capture_function="VengefulWasKhanhei",
+        start_map=287,
+        icon_filename="[790] - Vengeful Was Khanhei.jpg"
+    ),
+    EliteSkill(
+        id="skill-1255",
+        display_name="Wanderlust",
+        skill_id=1255,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Wanderlust",
+        capture_function="Wanderlust",
+        start_map=284,
+        icon_filename="[1255] - Wanderlust.jpg"
+    ),
+    EliteSkill(
+        id="skill-1749",
+        display_name="Weapon of Fury",
+        skill_id=1749,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Weapon of Fury",
+        capture_function="WeaponOfFury",
+        start_map=424,
+        icon_filename="[1749] - Weapon of Fury.jpg"
+    ),
+    EliteSkill(
+        id="skill-1268",
+        display_name="Weapon of Quickening",
+        skill_id=1268,
+        profession=Profession.RITUALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Weapon of Quickening",
+        capture_function="WeaponOfQuickening",
+        start_map=219,
+        icon_filename="[1268] - Weapon of Quickening.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1091",
+        display_name="Double Dragon",
+        skill_id=1091,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Double Dragon",
+        capture_function="Double_Dragon",
+        start_map=303,
+        icon_filename="[1091] - Double Dragon.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1367",
+        display_name="Blinding Surge",
+        skill_id=1367,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Blinding Surge",
+        capture_function="Blinding_Surge",
+        start_map=433,
+        icon_filename="[1367] - Blinding Surge.jpg"
+    ), 
+    EliteSkill(
+        id="skill-164",
+        display_name="Elemental Attunemente",
+        skill_id=164,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Elemental Attunement",
+        capture_function="Elemental_Attunement",
+        start_map=477,
+        icon_filename="[164] - Elemental Attunement.jpg" 
+    ),
+    EliteSkill(
+        id="skill-843",
+        display_name="Gust",
+        skill_id= 843,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Gust",
+        capture_function="Gust",
+        start_map=287,
+        icon_filename="[843] - Gust.jpg"
+    ),
+    EliteSkill(
+        id="skill-205",
+        display_name="Lightning Surge",
+        skill_id=205,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Lightning Surge",
+        capture_function="Lightning_Surge",
+        start_map=288,
+        icon_filename="[205] - Lightning Surge.jpg"
+    ), 
+    EliteSkill(
+        id="skill-836",
+        display_name="Ride the Lightning",
+        skill_id=836,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Ride the Lightning",
+        capture_function="Ride_the_Lightning",
+        start_map=650,
+        icon_filename="[836] - Ride the Lightning.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1372",
+        display_name="Sandstorm",
+        skill_id=1372,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Sandstorm",
+        capture_function="Sandstorm",
+        start_map=440,
+        icon_filename="[1372] - Sandstorm.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1373",
+        display_name="Stone Sheath",
+        skill_id=1373,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Stone Sheath",
+        capture_function="Stone_Sheath",
+        start_map=427,
+        icon_filename="[1373] - Stone Sheath.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1083",
+        display_name="Unsteady Ground",
+        skill_id=1083,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Unsteady Ground",
+        capture_function="Unsteady_Ground",
+        start_map=288,
+        icon_filename="[1083] - Unsteady Ground.jpg"
+    ), 
+    EliteSkill(
+        id="skill-837",
+        display_name="Energy Boon",
+        skill_id=837,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Energy Boon",
+        capture_function="Energy_Boon",
+        start_map=388,
+        icon_filename="[837] - Energy Boon.jpg"  
+    ),
+    EliteSkill( 
+        id="skill-1377",
+        display_name="Ether Prism",
+        skill_id=1377,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Ether Prism",
+        capture_function="Ether_Prism",
+        start_map=442,
+        icon_filename="[1377] - Ether Prism.jpg"
+    ),    
+    EliteSkill( 
+        id="skill-181",
+        display_name="Ether Renewal",
+        skill_id=181,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Ether Renewal",
+        capture_function="Ether_Renewal",
+        start_map=117,
+        icon_filename="[181] - Ether Renewal.jpg"  
+    ),
+    EliteSkill(
+        id="skill-1662",
+        display_name="Mind Blast",
+        skill_id=1662,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Mind Blast",
+        capture_function="Mind_Blast",
+        start_map=495,
+        icon_filename="[1662] - Mind Blast.jpg"
+    ), 
+    EliteSkill(
+        id="skill-1380",
+        display_name="Savannah Heat",
+        skill_id=1380,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Savannah Heat",
+        capture_function="Savannah_Heat",
+        start_map=545,
+        icon_filename="[1380] - Savannah Heat.jpg"  
+    ), 
+    EliteSkill(
+        id="skill-884",
+        display_name="Searing Flames",
+        skill_id=884,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Searing Flames",
+        capture_function="Searing_Flames",
+        start_map=403,
+        icon_filename="[884] - Searing Flames.jpg"
+    ),
+    EliteSkill(
+        id="skill-1095",
+        display_name="Star Burst",
+        skill_id=1095,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Star Burst",
+        capture_function="Star_Burst",
+        start_map=226,
+        icon_filename="[1095] - Star Burst.jpg"
+    ),
+    EliteSkill(
+        id="skill-939",
+        display_name="Icy Shackles",
+        skill_id=939,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Icy Shackles",
+        capture_function="Icy_Shackles",
+        start_map=424,
+        icon_filename="[939] - Icy Shackles.jpg"
+    ),
+    EliteSkill(
+        id="skill-209",
+        display_name="Mind Freeze",
+        skill_id=209,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Mind Freeze",
+        capture_function="Mind_Freeze",
+        start_map=469,
+        icon_filename="[209] - Mind Freeze.jpg"
+    ),
+    EliteSkill(
+        id="skill-1098",
+        display_name="Mirror of Ice",
+        skill_id=1098,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Mirror of Ice",
+        capture_function="Mirror_of_Ice",
+        start_map=284,
+        icon_filename="[1098] - Mirror of Ice.jpg"
+    ),
+    EliteSkill(
+        id="skill-809",
+        display_name="Shatterstone",
+        skill_id=809,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Shatterstone",
+        capture_function="Shatterstone",
+        start_map=130,
+        icon_filename="[809] - Shatterstone.jpg"
+    ),
+    EliteSkill(
+        id="skill-237",
+        display_name="Water Trident",
+        skill_id=237,
+        profession=Profession.ELEMENTALIST,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Water Trident",
+        capture_function="Water_Trident",
+        start_map=642,
+        icon_filename="[237] - Water Trident.jpg"
+    ),
+    EliteSkill(
+        id="skill_1345",
+        display_name="Enchanter's Conundrum",
+        skill_id=1345,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Enchanter's Conundrum",
+        capture_function="Enchanters_Conundrum",
+        start_map=426,
+        icon_filename="[1345] - Enchanter's Conundrum.jpg",
+    ),
+    EliteSkill(
+        id="skill_1348",
+        display_name="Hex Eater Vortex",
+        skill_id=1348,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Hex Eater Vortex",
+        capture_function="Hex_Eater_Vortex",
+        start_map=480,
+        icon_filename="[1348] - Hex Eater Vortex.jpg",
+    ),
+    EliteSkill(
+        id="skill_5",
+        display_name="Power Block",
+        skill_id=5,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Power Block",
+        capture_function="Power_Block",
+        start_map=650,
+        icon_filename="[5] - Power Block.jpg",
+    ),
+    EliteSkill(
+        id="skill_953",
+        display_name="Power Flux",
+        skill_id=953,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Power Flux",
+        capture_function="Power_Flux",
+        start_map=469,
+        icon_filename="[953] - Power Flux.jpg",
+    ),
+    EliteSkill(
+        id="skill_1053",
+        display_name="Psychic Distraction",
+        skill_id=1053,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Psychic Distraction",
+        capture_function="Psychic_Distraction",
+        start_map=284,
+        icon_filename="[1053] - Psychic Distraction.jpg",
+    ),
+    EliteSkill(
+        id="skill_804",
+        display_name="Arcane Languor",
+        skill_id=804,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Arcane Languor",
+        capture_function="Arcane_Languor",
+        start_map=226,
+        icon_filename="[804] - Arcane Languor.jpg",
+    ),
+    EliteSkill(
+        id="skill_63",
+        display_name="Keystone Signet",
+        skill_id=63,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Keystone Signet",
+        capture_function="Keystone_Signet",
+        start_map=156,
+        icon_filename="[63] - Keystone Signet.jpg",
+    ),
+    EliteSkill(
+        id="skill_13",
+        display_name="Mantra of Recovery",
+        skill_id=13,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Mantra of Recovery",
+        capture_function="Mantra_of_Recovery",
+        start_map=349,
+        icon_filename="[13] - Mantra of Recovery.jpg",
+    ),
+    EliteSkill(
+        id="skill_880",
+        display_name="Stolen Speed",
+        skill_id=880,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Stolen Speed",
+        capture_function="Stolen_Speed",
+        start_map=283,
+        icon_filename="[880] - Stolen Speed.jpg",
+    ),
+    EliteSkill(
+        id="skill_1339",
+        display_name="Symbols of Inspiration",
+        skill_id=1339,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Symbols of Inspiration",
+        capture_function="Symbols_of_Inspiration",
+        start_map=473,
+        icon_filename="[1339] - Symbols of Inspiration.jpg",
+    ),
+    EliteSkill(
+        id="skill_1656",
+        display_name="Air of Disenchantment",
+        skill_id=1656,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Air of Disenchantment",
+        capture_function="Air_of_Disenchantment",
+        start_map=428,
+        icon_filename="[1656] - Air of Disenchantment.jpg",
+    ),
+    EliteSkill(
+        id="skill_1055",
+        display_name="Recurring Insecurity",
+        skill_id=1055,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Recurring Insecurity",
+        capture_function="Recurring_Insecurity",
+        start_map=287,
+        icon_filename="[1055] - Recurring Insecurity.jpg",
+    ),
+    EliteSkill(
+        id="skill_900",
+        display_name="Shared Burden",
+        skill_id=900,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Shared Burden",
+        capture_function="Shared_Burden",
+        start_map=287,
+        icon_filename="[900] - Shared Burden.jpg",
+    ),
+    EliteSkill(
+        id="skill_1346",
+        display_name="Signet of Illusions",
+        skill_id=1346,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Signet of Illusions",
+        capture_function="Signet_of_Illusions",
+        start_map=494,
+        icon_filename="[1346] - Signet of Illusions.jpg",
+    ),
+    EliteSkill(
+        id="skill_79",
+        display_name="Energy Drain",
+        skill_id=79,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Energy Drain",
+        capture_function="Energy_Drain",
+        start_map=193,
+        icon_filename="[79] - Energy Drain.jpg",
+    ),
+    EliteSkill(
+        id="skill_1333",
+        display_name="Extend Conditions",
+        skill_id=1333,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Extend Conditions",
+        capture_function="Extend_Conditions",
+        start_map=381,
+        icon_filename="[1333] - Extend Conditions.jpg",
+    ),
+    EliteSkill(
+        id="skill_813",
+        display_name="Lyssa's Aura",
+        skill_id=813,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Lyssa's Aura",
+        capture_function="Lyssas_Aura",
+        start_map=643,
+        icon_filename="[813] - Lyssa's Aura.jpg",
+    ),
+    EliteSkill(
+        id="skill_74",
+        display_name="Echo",
+        skill_id=74,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Echo",
+        capture_function="Echo",
+        start_map=130,
+        icon_filename="[74] - Echo.jpg",
+    ),
+    EliteSkill(
+        id="skill_954",
+        display_name="Expel Hexes",
+        skill_id=954,
+        profession=Profession.MESMER,
+        type=EliteSkillType.ELITE_SKILL,
+        step_name="[H]Expel Hexes",
+        capture_function="Expel_Hexes",
+        start_map=292,
+        icon_filename="[954] - Expel Hexes.jpg",
+    ),
 ]
 
 def get_elite_skill_by_id(skill_id: str) -> Optional[EliteSkill]:
@@ -2507,9 +3383,6 @@ bot = Botting(BOT_NAME,
 # Enable Hero AI combat system
 bot.Properties.Enable("hero_ai")
 # auto_loot now works properly with Hero AI since upkeepers.py was fixed
-
-# Configure party defeated handler for automatic recovery
-bot.Events.OnPartyDefeatedCallback(lambda: on_party_defeated(bot))
 
 # At the top of your file or in an init section
 DefaultSkillBar = None
@@ -2573,10 +3446,17 @@ def GetPrimaryProfession() -> Profession:
 
 def SaveCurrentBuild():
     """Save player's current skill template."""
-    global _saved_build_template
+    global _saved_build_template, _build_saved_once
     try:
+        # Only save once per session to preserve original build
+        if _saved_build_template and _build_saved_once:
+            ConsoleLog("Build", "Build already saved, preserving original", log=True)
+            yield from Routines.Yield.wait(500)
+            return
+            
         _saved_build_template = Utils.GenerateSkillbarTemplate()
         if _saved_build_template:
+            _build_saved_once = True
             ConsoleLog("Build", f"Current build saved: {_saved_build_template[:30]}...", log=True)
         else:
             ConsoleLog("Build", "ERROR: GenerateSkillbarTemplate returned None/empty", log=True)
@@ -2705,9 +3585,14 @@ def IsSignetUnlocked() -> bool:
 
 def BuySignetOfCapture():
     """Travel to Eye of the North and buy Signet of Capture."""
+    # Check if player already has a signet equipped
+    if HasSignetOfCapture():
+        ConsoleLog("Signet", "Signet of Capture already equipped - skipping purchase", log=True)
+        return
+    
     # Note: Allow buying even if unlocked - players can stack signets
     if IsSignetUnlocked():
-        ConsoleLog("Signet", "Signet of Capture already unlocked - buying another...", log=True)
+        ConsoleLog("Signet", "Signet of Capture unlocked but not equipped - buying one...", log=True)
     
     # Record current map before traveling
     starting_map = Map.GetMapID()
@@ -2978,11 +3863,15 @@ def Energy_Surge():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
+    bot.Wait.ForTime(2000)  # Wait for party leave to complete
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Wait.ForTime(3000)  # Wait for hero team setup to complete
     bot.Move.XYAndExitMap(-833, 4980, 419)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-20867.55, -9056.55)
     bot.Move.XY(-19999.87, -4514.18)
@@ -3002,17 +3891,22 @@ def Pious_Renewal():
     bot.States.AddHeader("Pious Renewal")
     target_prof = Profession.DERVISH
     start_map = 493
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
     bot.Party.LeaveParty()
+    bot.Wait.ForTime(2000)  # Wait for party leave to complete
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(DunkoroHeroTeam, "Dunkoro Hero Team")
+    bot.Wait.ForTime(3000)  # Wait for hero team setup to complete
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XYAndDialog(-1508.00, 16739.00, 0x81)
     bot.Move.XYAndDialog(-1508.00, 16739.00, 0x84)
     bot.Wait.ForTime(10000)
+    bot.Move.XY(-15271.60, -11910.33)
+    bot.Move.XY(-14876.34, -11912.82)
     bot.Move.XY(-14816, -11739)
     bot.Move.XY(-14924, -9280)
     bot.Move.XY(-14605, -8548)
@@ -3034,14 +3928,17 @@ def Blood_is_Power():
     bot.States.AddHeader("Blood is Power")
     target_prof = Profession.NECROMANCER
     start_map = 393
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necro Build")
     bot.Party.LeaveParty()
+    bot.Wait.ForTime(2000)  # Wait for party leave to complete
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Wait.ForTime(3000)  # Wait for hero team setup to complete
     bot.Move.XYAndExitMap(-6066, -1583, 392)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-1695, -374)
     bot.Move.XY(1297, 2931)
@@ -3059,19 +3956,19 @@ def VowOfStrengthLocals():
     bot.States.AddHeader("Vow of Strength Locals")
     target_prof = Profession.DERVISH
     start_map = 479
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XYAndDialog(22884, 7641, 0x84)
     bot.Wait.ForMapLoad(target_map_id=447)
     bot.Wait.ForTime(100)
     bot.Move.XY(14435, 1664)
-    bot.Move.XY(14871, 2611)
     bot.Move.XY(9758.36, -1667.53)
     bot.Wait.UntilOnCombat()
     bot.Wait.UntilOutOfCombat()
@@ -3087,14 +3984,15 @@ def Ineptitude():
     bot.States.AddHeader("Ineptitude")
     target_prof = Profession.MESMER
     start_map = 641
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(19072, -10584, 572)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XYAndDialog(18975.00, -7661.00, 0x84)
     bot.Move.XY(13678.05, -7953.19)
@@ -3113,15 +4011,16 @@ def Migraine():
     bot.States.AddHeader("Migraine")
     target_prof = Profession.MESMER
     start_map = 638
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-9738.66, -21663.27)
     bot.Move.XYAndExitMap(-9605, -19938, 558)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-11074.98, -14619.83)
     bot.Move.XY(-11022.09, -10608.68)
@@ -3140,15 +4039,16 @@ def Spoil_Victor():
     bot.States.AddHeader("Spoil Victor")
     target_prof = Profession.NECROMANCER
     start_map = 230
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necro Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-4247.07, 3886.89)
     bot.Move.XYAndExitMap(-4663, 4805, 209)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-19692, -6351)
     bot.Move.XY(-23447, -4835)
@@ -3166,18 +4066,19 @@ def Signet_of_Spirits():
     bot.States.AddHeader("Signet of Spirits")
     target_prof = Profession.RITUALIST
     start_map = 388
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-8152, -8703, 210)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(10536, 17699)
     bot.Move.XY(3726, 7910)
-    bot.Move.XY(6946, 4113)
+    bot.Move.XY(5956, 4177)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -3191,14 +4092,15 @@ def Spiteful_Spirit():
     bot.States.AddHeader("Spiteful Spirit")
     target_prof = Profession.NECROMANCER
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necro Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(7565, -45115, 26)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-18688, 12186)
     bot.Wait.UntilOutOfCombat()
@@ -3206,35 +4108,23 @@ def Spiteful_Spirit():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(121), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [121]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(Spiteful_Spirit, "[H]Spiteful Spirit")
-    yield  
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
     
 def Mist_Form():
     bot.States.AddHeader("Mist Form")
     target_prof = Profession.ELEMENTALIST
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ele Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(7565, -45115, 26)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-18688, 12186)
     bot.Wait.UntilOutOfCombat()
@@ -3242,35 +4132,23 @@ def Mist_Form():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(236), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [236]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(Mist_Form, "[H]Mist Form")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
 def Signet_of_Judgement():
     bot.States.AddHeader("Signet of Judgement")
     target_prof = Profession.MONK
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(7565, -45115, 26)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-18688, 12186)
     bot.Wait.UntilOutOfCombat()
@@ -3278,35 +4156,23 @@ def Signet_of_Judgement():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(294), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [294]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(Signet_of_Judgement, "[H]Signet of Judgement")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
 def Illusionary_Weaponry():
     bot.States.AddHeader("Illusionary Weaponry")
     target_prof = Profession.MESMER
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(7565, -45115, 26)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-18688, 12186)
     bot.Wait.UntilOutOfCombat()
@@ -3314,39 +4180,27 @@ def Illusionary_Weaponry():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(33), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [33]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(Illusionary_Weaponry, "[H]Illusionary Weaponry")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
 def Shadow_Form():
     bot.States.AddHeader("Shadow Form")
     target_prof = Profession.ASSASSIN
     start_map = 284
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Sin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11664.37, -18732.13)
     bot.Move.XYAndExitMap(11637, -20480, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12054, 10092)
-    bot.Move.XY(11646.67, 5173.43)
+    bot.Move.XY(11784, 6581)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -3360,15 +4214,16 @@ def Shadow_Form_WoC():
     bot.States.AddHeader("Shadow Form - WoC")
     target_prof = Profession.ASSASSIN
     start_map = 284
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Sin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11664.37, -18732.13)
     bot.Move.XYAndExitMap(11637, -20480, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12054, 10092)
     bot.Move.XY(12438.57, -2243.74)
@@ -3388,15 +4243,16 @@ def BroadHeadArrow():
     bot.States.AddHeader("Broadhead Arrow")
     target_prof = Profession.RANGER
     start_map = 284
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11664.37, -18732.13)
     bot.Move.XYAndExitMap(11637, -20480, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12054, 10092)
     bot.Move.XY(12438.57, -2243.74)
@@ -3415,15 +4271,16 @@ def SoulTwisting():
     bot.States.AddHeader("Soul Twisting")
     target_prof = Profession.RITUALIST
     start_map = 298
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-11511, -4836)
     bot.Move.XYAndExitMap(-14412, -8139, 205)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(18907.74, 13014.72)
     bot.Wait.UntilOutOfCombat()
@@ -3439,15 +4296,16 @@ def PrimalRage():
     bot.States.AddHeader("Primal Rage")
     target_prof = Profession.WARRIOR
     start_map = 298
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-11511, -4836)
     bot.Move.XYAndExitMap(-14412, -8139, 205)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(18907.74, 13014.72)
     bot.Move.XY(16910.72, 11775.83)
@@ -3464,14 +4322,15 @@ def ShadowPrison():
     bot.States.AddHeader("Shadow Prison")
     target_prof = Profession.ASSASSIN
     start_map = 398
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Sin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Sin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4284, -615, 437)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(18745.25, 10039.62)
     bot.Move.XY(16146.25, 5758.00)
@@ -3491,14 +4350,15 @@ def SoldiersFury():
     bot.States.AddHeader("Soldier's Fury")
     target_prof = Profession.PARAGON
     start_map = 438
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-14638, 2927, 437)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10841.79, 4156.87)
     bot.Wait.ForTime(8000)
@@ -3520,16 +4380,17 @@ def ObsidianFlesh():
     bot.States.AddHeader("Obsidian Flesh")
     target_prof = Profession.ELEMENTALIST
     start_map = 438
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ele Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ele Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-14638, 2927, 437)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-11118, 3848)
+    bot.Move.XY(-10867.00, 4322.00)
     bot.Wait.ForTime(5000)
     bot.Move.XYAndInteractGadget(-10867.00, 4322.00)
     bot.Wait.ForTime(2000)
@@ -3549,14 +4410,15 @@ def Eviscerate():
     bot.States.AddHeader("Eviscerate")
     target_prof = Profession.WARRIOR
     start_map = 650
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-27552, 16937, 482)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12886.46, -15018.20)
     bot.Move.XY(9134.72, -13706.59)
@@ -3577,206 +4439,141 @@ def Eviscerate():
 def GreaterConflagration():
     bot.States.AddHeader("Greater Conflagration")
     target_prof = Profession.RANGER
-    start_map = 124
-    
+    start_map = 35 #Will set Ember light Camp as Start since Hell's Precipice Mission and outpost have the same Map ID
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
     bot.Party.LeaveParty()
-    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.Travel_To_Random_District(target_map_id=124)
+    bot.Wait.ForTime(2000)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-    bot.Map.EnterChallenge(6000, target_map_id=start_map)
+    bot.Map.EnterChallenge(6000, target_map_id=124)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2573, 134)
     bot.Move.XY(3009, -4916)
     bot.Wait.ForTime(7000)
-    bot.Move.XY(6322, -8114)
-    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(5043.89, -7425.06)
     bot.Move.XY(9299, -9728)
-    bot.Wait.UntilOutOfCombat()
     bot.Move.XY(7827.06, -13540.96)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(465), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [465]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(GreaterConflagration, "[H]Greater Conflagration")
-    yield 
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def AuraOfTheLich():
     bot.States.AddHeader("Aura of the Lich")
     target_prof = Profession.NECROMANCER
-    start_map = 124
-    
+    start_map = 35 #Will set Ember light Camp as Start since Hell's Precipice Mission and outpost have the same Map ID
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necro Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necro Build")
     bot.Party.LeaveParty()
-    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.Travel_To_Random_District(target_map_id=124)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-    bot.Map.EnterChallenge(6000, target_map_id=start_map)
+    bot.Map.EnterChallenge(6000, target_map_id=124)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2573, 134)
     bot.Move.XY(3009, -4916)
     bot.Wait.ForTime(7000)
-    bot.Move.XY(6322, -8114)
-    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(5043.89, -7425.06)
     bot.Move.XY(9299, -9728)
-    bot.Wait.UntilOutOfCombat()
     bot.Move.XY(7827.06, -13540.96)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(114), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [114]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Aura of the Lich captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Aura of the Lich capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(AuraOfTheLich, "[H]Aura of the Lich")
-    yield 
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def Panic():
     bot.States.AddHeader("Panic")
     target_prof = Profession.MESMER
-    start_map = 124
-    
+    start_map = 35 #Will set Ember light Camp as Start since Hell's Precipice Mission and outpost have the same Map ID #Will set Ember light Camp as Start since Hell's Precipice Mission and outpost have the same Map ID
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
-    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.Travel_To_Random_District(target_map_id=124)
+    bot.Wait.ForTime(2000)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-    bot.Map.EnterChallenge(6000, target_map_id=start_map)
+    bot.Map.EnterChallenge(6000, target_map_id=124)
+    bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2573, 134)
     bot.Move.XY(3009, -4916)
     bot.Wait.ForTime(7000)
-    bot.Move.XY(6322, -8114)
-    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(5043.89, -7425.06)
     bot.Move.XY(9299, -9728)
-    bot.Wait.UntilOutOfCombat()
     bot.Move.XY(7827.06, -13540.96)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(52), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [52]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Panic captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Panic capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(Panic, "[H]Panic")
-    yield 
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def MindBurn():
     bot.States.AddHeader("Mind Burn")
     target_prof = Profession.ELEMENTALIST
-    start_map = 124
-    
+    start_map = 217
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ele Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ele Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.Wait.ForTime(2000)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-    bot.Map.EnterChallenge(6000, target_map_id=start_map)
+    bot.Move.XYAndExitMap(-11644, -15830, 197)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(2573, 134)
-    bot.Move.XY(3009, -4916)
-    bot.Wait.ForTime(7000)
-    bot.Move.XY(6322, -8114)
-    bot.Wait.UntilOutOfCombat()
-    bot.Move.XY(9299, -9728)
-    bot.Wait.UntilOutOfCombat()
-    bot.Move.XY(7827.06, -13540.96)
+    bot.Move.XY(-1976, 10596)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(185), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [185]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Mind Burn captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Mind Burn capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(MindBurn, "[H]Mind Burn")
-    yield 
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def AssassinsPromise():
     bot.States.AddHeader("Assassin's Promise")
     target_prof = Profession.ASSASSIN
     start_map = 640
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Sin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Sin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(18003.32, 16753.06)
     bot.Move.XYAndExitMap(20243, 16910, 501)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-21519, -7404)
     bot.Move.XY(-19032.91, -10978.03)
     bot.Move.XY(-20351.51, -11994.78)
     bot.Move.XY(-21815.37, -12821.15)
-    bot.Move.XY(-23521.56, -11545.54)
+    bot.Move.XY(-22919.58, -12014.80)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -3790,137 +4587,90 @@ def UnyieldingAura():
     bot.States.AddHeader("Unyielding Aura")
     target_prof = Profession.MONK
     start_map = 158
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7392, -2618, 95)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3347.47, 2503.66)
-    bot.Move.XY(-4790.01, 2923.01)
+    bot.Move.XY(-5052.62, 2948.76)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(268), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [268]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Unyielding Aura captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Unyielding Aura capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(UnyieldingAura, "[H]Unyielding Aura")
-    yield 
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
     
 def VictoryIsMine():
     bot.States.AddHeader("Victory is Mine")
     target_prof = Profession.WARRIOR
     start_map = 158
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7392, -2618, 95)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3347.47, 2503.66)
-    bot.Move.XY(-4790.01, 2923.01)
+    bot.Move.XY(-5052.62, 2948.76)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(365), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [365]  
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Victory is Mine captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Victory is Mine capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(VictoryIsMine, "[H]Victory is Mine")
-    yield     
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
 
 def PoisonArrow():
     bot.States.AddHeader("Poison Arrow")
     target_prof = Profession.RANGER
     start_map = 158
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7392, -2618, 95)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3347.47, 2503.66)
-    bot.Move.XY(-4790.01, 2923.01)
+    bot.Move.XY(-5052.62, 2948.76)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(404), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [404]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Poison Arrow captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Poison Arrow capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(PoisonArrow, "[H]Poison Arrow")
-    yield    
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield   
 
 def PlagueSignet():
     bot.States.AddHeader("Plague Signet")
     target_prof = Profession.NECROMANCER
     start_map = 640
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necro Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necro Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(16363, 13124, 569)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12400, 9817)
     bot.Move.XY(8632, 6437)
@@ -3939,56 +4689,41 @@ def GlimmeringMark():
     bot.States.AddHeader("Glimmering Mark")
     target_prof = Profession.ELEMENTALIST
     start_map = 158
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ele Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ele Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7392, -2618, 95)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3347.47, 2503.66)
-    bot.Move.XY(-4790.01, 2923.01)
+    bot.Move.XY(-5052.62, 2948.76)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(227), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [227]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Glimmering Mark captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Glimmering Mark capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(GlimmeringMark, "[H]Glimmering Mark")
-    yield  
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield 
 
 
 def SpellBreaker():
     bot.States.AddHeader("Spell Breaker")
     target_prof = Profession.MONK
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6038, -41402, 91)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1526.63, -39178.76)
     bot.Move.XY(592.26, -43048.45)
@@ -3999,39 +4734,23 @@ def SpellBreaker():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(273), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [273]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Spell Breaker captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Spell Breaker capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(SpellBreaker, "[H]Spell Breaker")
-    yield  
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def MantraOfRecall():
     bot.States.AddHeader("Mantra of Recall")
     target_prof = Profession.MESMER
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6038, -41402, 91)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1526.63, -39178.76)
     bot.Move.XY(592.26, -43048.45)
@@ -4042,39 +4761,23 @@ def MantraOfRecall():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(82), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [82]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Mantra of Recall captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Mantra of Recall capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(MantraOfRecall, "[H]Mantra of Recall")
-    yield 
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def MindShock():
     bot.States.AddHeader("Mind Shock")
     target_prof = Profession.ELEMENTALIST
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ele Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ele Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6038, -41402, 91)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1526.63, -39178.76)
     bot.Move.XY(592.26, -43048.45)
@@ -4085,40 +4788,82 @@ def MindShock():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(226), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [226]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        # Success: Return to outpost normally like other skills
-        ConsoleLog("Capture", "Mind Shock captured successfully!", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        # Failure: Return to start map and retry
-        ConsoleLog("Capture", "Mind Shock capture failed, retrying...", log=True)
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(MindShock, "[H]Mind Shock")
-    yield   
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Life_Transfer():
+    bot.States.AddHeader("Life Transfer")
+    target_prof = Profession.NECROMANCER
+    start_map = 650
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-21630, 12565, 649) #Exit to Gothmar Wardowns
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-4163, -203, "Res Shrine 1")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(11385, 2228, "Res Shrine 2")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(19190, -12141, "Res Shrine 3")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XYAndExitMap(23054, -13225, 651)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-16333, 16622, "Res Shrine 4")
+    bot.Move.XY(-9609, 11059)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(126), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Thunderclap():
+    bot.States.AddHeader("Thunderclap")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 23
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-12507, -23517, 94)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(7408, 15741)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(228), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
 
 def VowOfSilence():
     bot.States.AddHeader("Vow of Silence")
     target_prof = Profession.DERVISH
     start_map = 478
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4817, 5097, 444)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
     bot.Move.XY(22749, -5468)
     bot.Move.XY(17736, -5503)
     bot.Wait.UntilOutOfCombat()
@@ -4134,14 +4879,15 @@ def GlimmerOfLight():
     bot.States.AddHeader("Glimmer of Light")
     target_prof = Profession.MONK
     start_map = 421
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(26133, 17180, 386)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(3337, -12769)
     bot.Wait.UntilOutOfCombat()
@@ -4157,14 +4903,15 @@ def Onslaught():
     bot.States.AddHeader("Onslaught")
     target_prof = Profession.DERVISH
     start_map = 643
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(13591, 19148, 513)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(13883, 2057)
     bot.Move.XY(8414, -1814)
@@ -4186,14 +4933,15 @@ def EbonDustAura():
     bot.States.AddHeader("Ebon Dust Aura")
     target_prof = Profession.DERVISH
     start_map = 414
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-820, 5147, 419)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1457, -14317)
     bot.Wait.UntilOutOfCombat()
@@ -4209,15 +4957,16 @@ def AvatarOfBalthazar():
     bot.States.AddHeader("Avatar of Balthazar")
     target_prof = Profession.DERVISH
     start_map = 387
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-225, 4336, 436)
     bot.Move.XYAndExitMap(5342, 7723, 369)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6895, 9930)
     bot.Move.XY(-3407, 6775)
@@ -4237,14 +4986,15 @@ def AvatarOfMelandru():
     bot.States.AddHeader("Avatar of Melandru")
     target_prof = Profession.DERVISH
     start_map = 477
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-15535, -3754, 371)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10797, -1490)
     bot.Move.XY(-7581, -255)
@@ -4263,14 +5013,15 @@ def AvatarOfDwayna():
     bot.States.AddHeader("Avatar of Dwayna")
     target_prof = Profession.DERVISH
     start_map = 424
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3805, -4766, 379)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4402, 17178)
     bot.Move.XY(-4890, 7205)
@@ -4290,14 +5041,15 @@ def AvatarOfLyssa():
     bot.States.AddHeader("Avatar of Lyssa")
     target_prof = Profession.DERVISH
     start_map = 554
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4094, 5856, 373)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-16524, -8868)
     bot.Move.XY(-9692, -7130)
@@ -4316,17 +5068,18 @@ def AvatarOfGrenth():
     bot.States.AddHeader("Avatar of Grenth")
     target_prof = Profession.DERVISH
     start_map = 426
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4431, 5107, 380)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(16110, -13455)
-    bot.Move.XY(12158, -9198)
+    bot.Move.XY(11764, -10069)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -4340,15 +5093,16 @@ def XinraesWeapon():
     bot.States.AddHeader("Xinrae's Weapon")
     target_prof = Profession.RITUALIST
     start_map = 496
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(18267, -6197)
     bot.Move.XYAndExitMap(19693, -7411, 466)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-8329, -10361)
     bot.Move.XY(-6013, -5332)
@@ -4370,15 +5124,17 @@ def Incoming():
     bot.States.AddHeader("Incoming!")
     target_prof = Profession.PARAGON
     start_map = 414
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-5134, -5006, 399)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
     bot.Move.XYAndDialog(6243.00, 10755.00, 0x81EB01)
     bot.Move.XY(-8550, 10603)
     bot.Move.XY(-10444, 5282)
@@ -4395,16 +5151,17 @@ def FocusedAnger():
     bot.States.AddHeader("Focused Anger")
     target_prof = Profession.PARAGON
     start_map = 427
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-13625.08, -11257.90)
     bot.Move.XYAndDialog(-13641.00, -10375.00, 0x84)
     bot.Wait.ForMapToChange(377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-7615, -5029)
     bot.Move.XY(-8597, -2378)
@@ -4424,14 +5181,15 @@ def MarkOfProtection():
     bot.States.AddHeader("Mark of Protection")
     target_prof = Profession.MONK
     start_map = 38
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-20530, -300, 113)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(11978, -12945)
     bot.Wait.UntilOutOfCombat()
@@ -4447,21 +5205,22 @@ def PreparedShot():
     bot.States.AddHeader("Prepared Shot")
     target_prof = Profession.RANGER
     start_map = 642
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(1250, 800, 499)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6931.01, 5348.25) #Johon the Oxflinger
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
-    bot.States.AddCustomState(lambda: ClickSkillFrame(269), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1465), "Click Skill Frame")
     bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield  
@@ -4470,23 +5229,24 @@ def TogetherAsOne():
     bot.States.AddHeader("Together as One")
     target_prof = Profession.RANGER
     start_map = 650
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
     ConfigureAggressiveEnv(bot)
     bot.Travel_To_Random_District(target_map_id=start_map) #Longeyes Ledge
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Items.Withdraw(38031, 1)
     bot.Move.XYAndExitMap(-21630, 12565, 649) #Exit to Gothmar Wardowns
+    ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3924.91, -572.00, "Res Shrine 1")
     bot.Wait.UntilOutOfCombat()
     bot.Move.XY(11385, 2228, "Res Shrine 2")
     bot.Wait.UntilOutOfCombat()
     bot.Move.XY(19190, -12141, "Res Shrine 3")
     bot.Wait.UntilOutOfCombat()
-    bot.Move.XYAndExitMap(23054, -13225, target_map_name="Sacnoth Valley")
+    bot.Move.XYAndExitMap(23054, -13225, 651)
     ConfigureAggressiveEnv(bot)
     bot.Items.UseAllConsumables()
     bot.Move.XY(-16333, 16622, "Res Shrine 4")
@@ -4512,10 +5272,10 @@ def HeroicRefrain():
     bot.States.AddHeader("Heroic Refrain")
     target_prof = Profession.PARAGON
     start_map = 440
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     ConfigureAggressiveEnv(bot)
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
@@ -4543,16 +5303,16 @@ def SoulTaker():
     bot.States.AddHeader("Soul Taker")
     target_prof = Profession.NECROMANCER
     start_map = 35
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.States.AddCustomState(WithdrawProofOfTriumph, "Withdraw Proof of Triumph")
     bot.Move.XYAndExitMap(3807, -8332, 121)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8100, -4094)
     bot.Move.XY(15507, -2022)
@@ -4573,16 +5333,16 @@ def OverTheLimit():
     bot.States.AddHeader("Over The Limit")
     target_prof = Profession.ELEMENTALIST
     start_map = 35
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Elementalist Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.States.AddCustomState(WithdrawProofOfTriumph, "Withdraw Proof of Triumph")
     bot.Move.XYAndExitMap(3807, -8332, 121)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8100, -4094)
     bot.Move.XY(15507, -2022)
@@ -4603,10 +5363,10 @@ def JudgmentStrike():
     bot.States.AddHeader("Judgment Strike")
     target_prof = Profession.MONK
     start_map = 440
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     ConfigureAggressiveEnv(bot)
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
@@ -4634,23 +5394,24 @@ def TimeWard():
     bot.States.AddHeader("Time Ward")
     target_prof = Profession.MESMER
     start_map = 650
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Mesmer")
     ConfigureAggressiveEnv(bot)
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Items.Withdraw(38031, 1)
     bot.Move.XYAndExitMap(-21630, 12565, 649) #Exit to Gothmar Wardowns
+    ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4163, -203, "Res Shrine 1")
     bot.Wait.UntilOutOfCombat()
     bot.Move.XY(11385, 2228, "Res Shrine 2")
     bot.Wait.UntilOutOfCombat()
     bot.Move.XY(19190, -12141, "Res Shrine 3")
     bot.Wait.UntilOutOfCombat()
-    bot.Move.XYAndExitMap(23054, -13225, target_map_name="Sacnoth Valley")
+    bot.Move.XYAndExitMap(23054, -13225, 651)
     ConfigureAggressiveEnv(bot)
     bot.Items.UseAllConsumables()
     bot.Move.XY(-16333, 16622, "Res Shrine 4")
@@ -4677,17 +5438,17 @@ def VowOfRevolution():
     bot.States.AddHeader("Vow of Revolution")
     target_prof = Profession.DERVISH
     start_map = 440
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Items.Withdraw(38031, 1)
     bot.Move.XYAndExitMap(-5108, -6684, 439)
     bot.Items.UseAllConsumables()
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-7311.32, -4854.25)
     bot.Move.XY(-14444, 3610)
@@ -4708,23 +5469,23 @@ def SevenWeaponStance():
     bot.States.AddHeader("Seven Weapon Stance")
     target_prof = Profession.WARRIOR
     start_map = 226
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Items.Withdraw(38031, 1)
-    bot.Move.XYAndExitMap(-5108, -6684, 439)
+    bot.Move.XYAndExitMap(-9662, 3084, 233)
     bot.Items.UseAllConsumables()
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-7311.32, -4854.25)
-    bot.Move.XY(-14444, 3610)
-    bot.Move.XY(-13457.71, 9154.56)
-    bot.Move.XY(-14566, 9921)
-    bot.Move.XY(-15264.96, 10763.86)
+    bot.Move.XY(16446, 261)
+    bot.Move.XY(15194, 299)
+    bot.Move.XY(14830, -2177)
+    bot.Move.XY(14690, -4412)
+    bot.Move.XY(12365, -5527)
+    bot.Move.XY(10957, -4475)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -4739,11 +5500,10 @@ def WeaponsOfThreeForges():
     bot.States.AddHeader("Weapons of Three Forges")
     target_prof = Profession.RITUALIST
     start_map = 226
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
@@ -4771,11 +5531,10 @@ def ShadowTheft():
     bot.States.AddHeader("Shadow Theft")
     target_prof = Profession.ASSASSIN
     start_map = 226
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
-    ConfigureAggressiveEnv(bot)
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.Party.LeaveParty()
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
@@ -4803,19 +5562,18 @@ def AnthemofGuidance():
     bot.States.AddHeader("Anthem of Guidance")
     target_prof = Profession.PARAGON
     start_map = 403
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-19999, 20176, 419)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(21678,-15544)
-    bot.Move.XY(18450,-15850)
-    bot.Move.XY(13733,-14403)
-    bot.Move.XY(10751,-15017)
+    bot.Move.XY(21678, -15544)
+    bot.Move.XY(10490, -14547)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -4829,14 +5587,15 @@ def CripplingAnthem():
     bot.States.AddHeader("Crippling Anthem")
     target_prof = Profession.PARAGON
     start_map = 376
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-13955, 18251, 375)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-11625,16880)
     bot.Move.XY(-6742,14805)    
@@ -4859,15 +5618,16 @@ def AngelicBond():
     bot.States.AddHeader("Angelic Bond")
     target_prof = Profession.PARAGON
     start_map = 434
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndDialog(1341.00, -20346.00, 0x81)
     bot.Move.XYAndDialog(1341.00, -20346.00, 0x84)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1205,-14695)
     bot.Move.XY(2156,-9851)
@@ -4893,20 +5653,21 @@ def AnthemofFury():
     bot.States.AddHeader("Anthem of Fury")
     target_prof = Profession.PARAGON
     start_map = 450
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7826, 13976, 465)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-2677,-10998)
     bot.Move.XY(-1780,-7409)   
     bot.Move.XY(1456,-7825)   
     bot.Move.XY(5413,-13296)
-    bot.Move.XY(4737,-114213)    
+    bot.Move.XY(4591, -14059)    
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -4920,15 +5681,16 @@ def DefensiveAnthem():
     bot.States.AddHeader("Defensive Anthem")
     target_prof = Profession.PARAGON
     start_map = 387
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-420, 3921, 436)
     bot.Move.XYAndExitMap(5233, 7646, 369)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4337,4183)
     bot.Move.XY(-7636,516)
@@ -4946,14 +5708,15 @@ def ItsJustaFleshWound():
     bot.States.AddHeader("It's Just a Flesh Wound.")
     target_prof = Profession.PARAGON
     start_map = 480
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-3265, 11584, 446)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-2498,5680)
     bot.Move.XY(-4497,5079)
@@ -4971,14 +5734,15 @@ def ThePowerIsYours():
     bot.States.AddHeader("The Power Is Yours!")
     target_prof = Profession.PARAGON
     start_map = 440
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(1814, -1774, 439)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-23,7080)
     bot.Wait.UntilOutOfCombat()
@@ -4994,14 +5758,15 @@ def SongofPurification():
     bot.States.AddHeader("Song of Purification")
     target_prof = Profession.PARAGON
     start_map = 403
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-18733, 13488, 402)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-16092,7570)
     bot.Wait.UntilOutOfCombat()
@@ -5017,16 +5782,17 @@ def SongofRestoration():
     bot.States.AddHeader("Song of Restoration")
     target_prof = Profession.PARAGON
     start_map = 428
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-2081, 14485, 399)
     bot.Move.XYAndDialog(-4552.00, 15863.00, 0x81)
     bot.Move.XYAndDialog(-4552.00, 15863.00, 0x84)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10332,-11807)
     bot.Move.XY(-16846,-5635)
@@ -5043,16 +5809,18 @@ def CruelSpear():
     bot.States.AddHeader("Cruel Spear")
     target_prof = Profession.PARAGON
     start_map = 427
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(DunkoroHeroTeam, "Dunkoro Hero Team")
     bot.Move.XYAndDialog(-13955.00, -12776.00, 0x81)
     bot.Move.XYAndDialog(-13955.00, -12776.00, 0x84)
     bot.Wait.ForTime(10000)
+    bot.Wait.ForMapLoad(427)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-9584,-7325)
     bot.Wait.ForTime(30000)
@@ -5072,16 +5840,18 @@ def StunningStrike():
     bot.States.AddHeader("Stunning Strike")
     target_prof = Profession.PARAGON
     start_map = 469
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(8150, 18933, 468)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(6162,14210)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(4636, 14852)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5095,14 +5865,15 @@ def CauterySignet():
     bot.States.AddHeader("Cautery Signet")
     target_prof = Profession.PARAGON
     start_map = 424
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Paragon Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Paragon Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3274, -4412, 379)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6308,13198)
     bot.Move.XY(-7341,5275)
@@ -5120,16 +5891,17 @@ def ArcaneZeal():
     bot.States.AddHeader("Arcane Zeal")
     target_prof = Profession.DERVISH
     start_map = 450
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndDialog(-1052.00, 10003.00, 0x82B801)
     bot.Travel_To_Random_District(target_map_id=559) #Gate of the Nightfallen Lands
     bot.Move.XYAndExitMap(-16114,18564, 465) #Nightfallen lands exit
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3338,-3747)#remove if from Nightfallen Lands
     bot.Move.XY(-4238,5991)#remove if from Nightfallen Lands
@@ -5149,14 +5921,15 @@ def GrenthsGrasp():
     bot.States.AddHeader("Grenth's Grasp")
     target_prof = Profession.DERVISH
     start_map = 477
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-15545, -4092, 371)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4241,-6589)
     bot.Wait.UntilOutOfCombat()
@@ -5172,14 +5945,15 @@ def ReapersSweep():
     bot.States.AddHeader("Reaper's Sweep")
     target_prof = Profession.DERVISH
     start_map = 421
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(22989,14206,373)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(18459,421)
     bot.Wait.UntilOutOfCombat()
@@ -5195,18 +5969,20 @@ def VowofStrength():
     bot.States.AddHeader("Vow of Strength")
     target_prof = Profession.DERVISH
     start_map = 376
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-13963,18264,375)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
     bot.Move.XY(-14487,14623)
     bot.Move.XY(-16605,1454)
-    bot.Move.XY(-9719,-11146)
+    bot.Move.XY(-10991, -11117)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5216,6 +5992,62 @@ def VowofStrength():
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
+def WieldersZeal():
+    bot.States.AddHeader("Wielder's Zeal")
+    target_prof = Profession.RITUALIST
+    start_map = 376
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-13963,18264,375)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(-14487,14623)
+    bot.Move.XY(-16605,1454)
+    bot.Move.XY(-8890, -12943)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1737), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def SimpleThievery():
+    bot.States.AddHeader("Simple Thievery")
+    target_prof = Profession.MESMER
+    start_map = 376
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-13963, 18264, 375)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(-14487, 14623)
+    bot.Move.XY(-16605, 1454)
+    bot.Move.XY(-10991, -11117)
+    bot.Move.XY(-9148, -9792)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1350), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+
 def WoundingStrike():
     bot.States.AddHeader("Wounding Strike")
     target_prof = Profession.DERVISH
@@ -5223,11 +6055,13 @@ def WoundingStrike():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4654,-2531,397)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(17786,844)
     bot.Wait.UntilOutOfCombat()
@@ -5243,14 +6077,15 @@ def ZealousVow():
     bot.States.AddHeader("Zealous Vow")
     target_prof = Profession.DERVISH
     start_map = 378
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Dervish Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Dervish Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(4856,3125,377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(15259,14877)
     bot.Wait.UntilOutOfCombat()
@@ -5265,15 +6100,16 @@ def BlessedLight():
     bot.States.AddHeader("Blessed Light")
     target_prof = Profession.MONK
     start_map = 193
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(5672, -4404)
     bot.Move.XYAndExitMap(6809, -7548, 198)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6044.61, 10084.75)
     bot.Move.XY(10710, 3833) #Healing Light 867
@@ -5293,18 +6129,19 @@ def HealingLight():
     bot.States.AddHeader("Healing Light")
     target_prof = Profession.MONK
     start_map = 193
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(5672, -4404)
     bot.Move.XYAndExitMap(6809, -7548, 198)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6044.61, 10084.75)
-    bot.Move.XY(10710, 3833) #Healing Light 867
+    bot.Move.XY(10271, 4880) 
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5318,19 +6155,20 @@ def BoonSignet():
     bot.States.AddHeader("Boon Signet")
     target_prof = Profession.MONK
     start_map = 388
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-7243.40, -8111.62)
     bot.Move.XYAndExitMap(-8040, -8675, 210)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(12619.55, 21320.75)
     bot.Move.XY(8350.78, 13316.25)
-    bot.Move.XY(7732.76, 11883.11)
+    bot.Move.XY(7732.76, 11883.11) 
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5344,14 +6182,15 @@ def HealersBoon():
     bot.States.AddHeader("Healer's Boon")
     target_prof = Profession.MONK
     start_map = 403
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-18733, 13488, 402)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-16092, 7570)
     bot.Move.XY(-18859.48, -543.13)
@@ -5371,14 +6210,15 @@ def PeaceandHarmony():
     bot.States.AddHeader("Peace and Harmony")
     target_prof = Profession.MONK
     start_map = 155
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5797, -41362, 91)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6758, -32813)
     bot.Move.XY(5448, -29156)
@@ -5397,14 +6237,15 @@ def WithdrawHexes():
     bot.States.AddHeader("Withdraw Hexes")
     target_prof = Profession.MONK
     start_map = 389
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-5840, 14320, 200)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-7252, -2700)
     bot.Move.XY(-8604, 8056)
@@ -5421,14 +6262,15 @@ def HealingBurst():
     bot.States.AddHeader("Healing Burst")
     target_prof = Profession.MONK
     start_map = 130
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(18153, 1880, 128)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(16632, -2766)
     bot.Wait.UntilOutOfCombat()
@@ -5444,15 +6286,16 @@ def HealingHands():
     bot.States.AddHeader("Healing Hands")
     target_prof = Profession.MONK
     start_map = 35
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(3695, -9914)
     bot.Move.XYAndExitMap(3772, -8096, 121)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(4435.06, 2104.76)
     bot.Wait.UntilOutOfCombat()
@@ -5460,35 +6303,23 @@ def HealingHands():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(285), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [285]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(HealingHands, "[H]Healing Hands")
-    yield    
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
 
 def LightofDeliverance():
     bot.States.AddHeader("Light of Deliverance")
     target_prof = Profession.MONK
     start_map = 554
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5721, -5353, 371)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3106, 9981)
     bot.Wait.UntilOutOfCombat()
@@ -5504,14 +6335,15 @@ def WordofHealing():
     bot.States.AddHeader("Word of Healing")
     target_prof = Profession.MONK
     start_map = 303
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(16596, 20549, 240)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-5836, -8676)
     bot.Move.XY(-4659, -17086)
@@ -5531,14 +6363,15 @@ def AirofEnchantment():
     bot.States.AddHeader("Air of Enchantment")
     target_prof = Profession.MONK
     start_map = 297
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(17214, 10919, 203)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(436, -14129)
     bot.Wait.UntilOutOfCombat()
@@ -5554,14 +6387,15 @@ def AuraofFaith():
     bot.States.AddHeader("Aura of Faith")
     target_prof = Profession.MONK
     start_map = 23
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-12507, -23517, 94)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(7408, 15741)
     bot.Wait.UntilOutOfCombat()
@@ -5569,35 +6403,23 @@ def AuraofFaith():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(260), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [260]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(AuraofFaith, "[H]Aura of Faith")
-    yield 
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def DivertHexes():
     bot.States.AddHeader("Divert Hexes")
     target_prof = Profession.MONK
     start_map = 480
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-3104, 11454, 446)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(590.94, 8003.54)
     bot.Move.XY(1281.14, 7621.92)
@@ -5617,15 +6439,16 @@ def LifeSheath():
     bot.States.AddHeader("Life Sheath")
     target_prof = Profession.MONK
     start_map = 284
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11581, -18462)
     bot.Move.XYAndExitMap(11729, -20248, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1667, 8179)
     bot.Wait.UntilOutOfCombat()
@@ -5641,15 +6464,16 @@ def ShieldOfRegeneration():
     bot.States.AddHeader("Shield of Regeneration")
     target_prof = Profession.MONK
     start_map = 648
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11581, -18462)
     bot.Move.XYAndExitMap(-15205, 13205, 647)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-5878, 4262)
     bot.Wait.UntilOutOfCombat()
@@ -5665,19 +6489,20 @@ def ZealousBenediction():
     bot.States.AddHeader("Zealous Benediction")
     target_prof = Profession.MONK
     start_map = 428
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-3, 12656, 399)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6079, 4930)
     bot.Move.XY(-7671, -3974)
     bot.Move.XY(-8311, -8169)
-    bot.Move.XY(2497, -12151)
+    bot.Move.XY(3971, -12376)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5691,14 +6516,15 @@ def DefendersZeal():
     bot.States.AddHeader("Defender's Zeal")
     target_prof = Profession.MONK
     start_map = 469
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(7784, 18756, 468)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8744, -3500)
     bot.Wait.UntilOutOfCombat()
@@ -5714,10 +6540,10 @@ def RayofJudgment():
     bot.States.AddHeader("Ray of Judgment")
     target_prof = Profession.MONK
     start_map = 303
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
@@ -5728,8 +6554,8 @@ def RayofJudgment():
     bot.Move.XY(3837.11, -11483.70)
     bot.Move.XY(6579.26, -15095.15)
     bot.Move.XYAndExitMap(4201, -17019, 241)
-    bot.Move.XY(-3172.72, 9102.06)
-    bot.Move.XY(9288.86, 11533.50)
+    bot.Items.UseAllConsumables() #uncomment for harder areas
+    bot.Move.XY(8936, 11691)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -5743,14 +6569,15 @@ def WordOfCensure():
     bot.States.AddHeader("Word of Censure")
     target_prof = Profession.MONK
     start_map = 303
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(10898, 14691, 239)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6662, 14738)
     bot.Move.XY(3888, 12848)
@@ -5771,14 +6598,15 @@ def EmpathicRemoval():
     bot.States.AddHeader("Empathic Removal")
     target_prof = Profession.MONK
     start_map = 129
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7622, 1811, 201)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10570, 9687)
     bot.Wait.UntilOutOfCombat()
@@ -5794,14 +6622,15 @@ def Martyr():
     bot.States.AddHeader("Martyr")
     target_prof = Profession.MONK
     start_map = 442
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-2263, -4568, 441)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1187.66, 7907.58)
     bot.Move.XY(-2401.63, 7256.86)
@@ -5819,14 +6648,15 @@ def SignetOfRemoval():
     bot.States.AddHeader("Signet of Removal")
     target_prof = Profession.MONK
     start_map = 427
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-16327, -16374, 384)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2931, 4745)
     bot.Move.XY(-1370, 647)
@@ -5844,14 +6674,15 @@ def BalthazarsPendulum():
     bot.States.AddHeader("Balthazar's Pendulum")
     target_prof = Profession.MONK
     start_map = 378
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5833, 4322, 377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-13138.58, 15124.79)
     bot.Move.XY(-10693, 13246)
@@ -5871,14 +6702,15 @@ def ReapersMark():
     bot.States.AddHeader("Reaper's Mark")
     target_prof = Profession.NECROMANCER
     start_map = 378
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5833, 4322, 377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-13138.58, 15124.79)
     bot.Move.XY(-10693, 13246)
@@ -5897,14 +6729,15 @@ def Charge():
     bot.States.AddHeader("Charge!")
     target_prof = Profession.WARRIOR
     start_map = 277
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3290,2443,227)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(11281,8015)
     bot.Move.XY(10870,7251)
@@ -5921,14 +6754,15 @@ def Coward():
     bot.States.AddHeader("Coward!")
     target_prof = Profession.WARRIOR
     start_map = 278
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(16913,-2081,200)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(14346,-7711)
     bot.Wait.UntilOutOfCombat()
@@ -5944,14 +6778,15 @@ def YoureAllAlone():
     bot.States.AddHeader("You're All Alone!")
     target_prof = Profession.WARRIOR
     start_map = 376
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-13898,18185,375)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-14670,15191)
     bot.Move.XY(-14442,10506)
@@ -5976,14 +6811,15 @@ def AuspiciousParry():
     bot.States.AddHeader("Auspicious Parry")
     target_prof = Profession.WARRIOR
     start_map = 225
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Map.EnterChallenge(6000, target_map_id=start_map)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XYAndDialog(-15350.00, -4400.00, 0x84)
     bot.Move.XYAndDialog(-15350.00, -4400.00, 0x85)
@@ -6004,10 +6840,10 @@ def Backbreaker():
     bot.States.AddHeader("Backbreaker")
     target_prof = Profession.WARRIOR
     start_map = 638
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
@@ -6015,6 +6851,7 @@ def Backbreaker():
     bot.Move.XYAndDialog(-8394.00, -23641.00, 0x834001)
     bot.Move.XYAndExitMap(-9566,-20185,558)
     bot.Wait.ForTime(10000)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-9510,-19617)
     bot.Move.XY(-7413,-18104)
@@ -6049,14 +6886,15 @@ def BattleRage():
     bot.States.AddHeader("Battle Rage")
     target_prof = Profession.WARRIOR
     start_map = 219
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-26066,2719,211)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(17237,-8492)
     bot.Wait.UntilOutOfCombat()
@@ -6072,14 +6910,15 @@ def BullsCharge():
     bot.States.AddHeader("Bull's Charge")
     target_prof = Profession.WARRIOR
     start_map = 35
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3814,-8534,121)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8603,1382)
     bot.Move.XY(6755,3414)
@@ -6088,37 +6927,26 @@ def BullsCharge():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(379), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [379]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(BullsCharge, "[H]Bull's Charge")
-    yield 
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def ChargingStrike():
     bot.States.AddHeader("Charging Strike")
     target_prof = Profession.WARRIOR
     start_map = 435
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(53,8080,419)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-7215,14308)
+    bot.Move.XY(-7215, 14308)
+    bot.Move.XY(-9600.94, 14110.81)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -6135,11 +6963,13 @@ def Cleave():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-11172,-18231,202)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-1743,-17222)
     bot.Wait.UntilOutOfCombat()
@@ -6158,11 +6988,13 @@ def CripplingSlash():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(15215,-6445,548)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(10809,-7205)
     bot.Move.XY(8277,-7408)
@@ -6188,11 +7020,13 @@ def Decapitate():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(4699,4435,384)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-17608,-14656)
     bot.Move.XY(-11839,-12101)
@@ -6215,11 +7049,14 @@ def DefyPain():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XY(-5062, -31650) #Anti Evenia stuck
     bot.Move.XYAndExitMap(-7469,-31762,98)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(13171,13137)
     bot.Move.XY(8538,10771)
@@ -6230,21 +7067,8 @@ def DefyPain():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(318), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [318]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(DefyPain, "[H]Defy Pain")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
 def DevastatingHammer():
@@ -6254,11 +7078,13 @@ def DevastatingHammer():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(8971,-26294,203)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-545,14262)
     bot.Wait.UntilOutOfCombat()
@@ -6277,11 +7103,13 @@ def DragonSlash():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3473,7390,247)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(15726,-6563)
     bot.Move.XY(17996,2023)
@@ -6301,13 +7129,15 @@ def DwarvenBattleStance():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndDialog(-24800.00, 11856.00, 0x833C01)
     bot.Travel_To_Random_District(target_map_id=624)
     bot.Move.XYAndExitMap(19682,19464,604)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-7303,-10429)
     bot.Wait.UntilOutOfCombat()
@@ -6319,30 +7149,6 @@ def DwarvenBattleStance():
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
-#def EarthShaker ():
-#    bot.States.AddHeader("Earth Shaker")
-#    target_prof = Profession.WARRIOR
-#    start_map = 
-#    
-#    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
-#    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-#    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
-#    bot.Party.LeaveParty()
-#    bot.Travel_To_Random_District(target_map_id=start_map)
-#    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-#    bot.Move.XY(,)
-#    bot.Move.XYAndExitMap(,,)
-#    ConfigureAggressiveEnv(bot)
-#    bot.Move.XY(,)
-#    bot.Wait.UntilOutOfCombat()
-#    ConfigurePacifistEnv(bot)
-#    bot.SkillBar.UseSkill(3)
-#    bot.Wait.ForTime(5000)
-#    bot.States.AddCustomState(lambda: ClickSkillFrame(354), "Click Skill Frame")
-#    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-#    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-#    yield
-#
 def EnragedSmash():
     bot.States.AddHeader("Enraged Smash")
     target_prof = Profession.WARRIOR
@@ -6350,11 +7156,13 @@ def EnragedSmash():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-12174,8693,232)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-149,18990)
     bot.Wait.UntilOutOfCombat()
@@ -6366,30 +7174,6 @@ def EnragedSmash():
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield 
 
-#def Flourish():
-#    bot.States.AddHeader("Flourish")
-#    target_prof = Profession.WARRIOR
-#    start_map = 
-#    
-#    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
-#    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-#    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
-#    bot.Party.LeaveParty()
-#    bot.Travel_To_Random_District(target_map_id=start_map)
-#    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-#    bot.Move.XY(,)
-#    bot.Move.XYAndExitMap(,,)
-#    ConfigureAggressiveEnv(bot)
-#    bot.Move.XY(,)
-#    bot.Wait.UntilOutOfCombat()
-#    ConfigurePacifistEnv(bot)
-#    bot.SkillBar.UseSkill(3)
-#    bot.Wait.ForTime(5000)
-#    bot.States.AddCustomState(lambda: ClickSkillFrame(389), "Click Skill Frame")
-#    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-#    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-#    yield
-#
 def ForcefulBlow():
     bot.States.AddHeader("Forceful Blow")
     target_prof = Profession.WARRIOR
@@ -6397,11 +7181,13 @@ def ForcefulBlow():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6229,7476,244)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(10145,-15669)
     bot.Move.XY(3550,-13376)
@@ -6417,30 +7203,6 @@ def ForcefulBlow():
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
 
-#def GladiatorsDefense():
-#    bot.States.AddHeader("Gladiator's Defense")
-#    target_prof = Profession.WARRIOR
-#    start_map = 
-#    
-#    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
-#    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-#    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
-#    bot.Party.LeaveParty()
-#    bot.Travel_To_Random_District(target_map_id=start_map)
-#    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-#    bot.Move.XY(,)
-#    bot.Move.XYAndExitMap(,,)
-#    ConfigureAggressiveEnv(bot)
-#    bot.Move.XY(,)
-#    bot.Wait.UntilOutOfCombat()
-#    ConfigurePacifistEnv(bot)
-#    bot.SkillBar.UseSkill(3)
-#    bot.Wait.ForTime(5000)
-#    bot.States.AddCustomState(lambda: ClickSkillFrame(372), "Click Skill Frame")
-#    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-#    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-#    yield
-#
 def Headbutt():
     bot.States.AddHeader("Headbutt")
     target_prof = Profession.WARRIOR
@@ -6448,11 +7210,13 @@ def Headbutt():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(4547,853,380)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10606,-13642)
     bot.Wait.UntilOutOfCombat()
@@ -6471,11 +7235,13 @@ def HundredBlades():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(11716,-20069,256)
+    bot.Items.UseAllConsumables() 
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4082,3681)
     bot.Wait.UntilOutOfCombat()
@@ -6494,11 +7260,13 @@ def MagehunterStrike():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3336,-4469,379)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-1995,7148)
     bot.Wait.UntilOutOfCombat()
@@ -6517,11 +7285,13 @@ def MagehuntersSmash():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(4718,-4659,399)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-20058,12400)
     bot.Move.XY(-18445,7220)
@@ -6543,11 +7313,13 @@ def QuiveringBlade():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(11511,15279,239)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(14588,-1653)
     bot.Wait.UntilOutOfCombat()
@@ -6566,12 +7338,14 @@ def RageoftheNtouka():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")   
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
-    bot.Move.XYAndExitMap(-411,3939,436)
-    bot.Move.XYAndExitMap(5096,3792,380)
+    bot.Move.XYAndExitMap(-411, 3939, 436)
+    bot.Move.XYAndExitMap(5096, 3792, 380)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3911,8256)
     bot.Wait.UntilOutOfCombat()
@@ -6590,11 +7364,13 @@ def Shove():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")   
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(10685,-1122,210)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6166,8228)
     bot.Wait.UntilOutOfCombat()
@@ -6613,11 +7389,13 @@ def SkullCrack():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(13656, 19140, 513)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(14398, 9923)
     bot.Move.XY(14181, 2399)
@@ -6643,11 +7421,13 @@ def SoldiersStance():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")   
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(1699, 4941, 437)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-4282.58, -13169.55)
     bot.Wait.ForTime(5000)
@@ -6671,13 +7451,15 @@ def SteadyStance():
     
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4941,702,406)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-3923,-11844)
+    bot.Move.XY(-4537, -11043)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -6691,14 +7473,15 @@ def TripleChop():
     bot.States.AddHeader("Triple Chop")
     target_prof = Profession.WARRIOR
     start_map = 303
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(16579,19653,240)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-1680,1957)
     bot.Wait.UntilOutOfCombat()
@@ -6714,15 +7497,16 @@ def WarriorsEndurance():
     bot.States.AddHeader("Warrior's Endurance")
     target_prof = Profession.WARRIOR
     start_map = 117
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=117)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Map.EnterChallenge(delay=1000, target_map_id=117)
     bot.Wait.ForMapToChange(target_map_id=117) # Thirsty River Mission
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-857, 8546) #Sand Giant 1
     bot.Move.XY(-2320, 5881)
@@ -6765,14 +7549,15 @@ def WhirlingAxe():
     bot.States.AddHeader("Whirling Axe")
     target_prof = Profession.WARRIOR
     start_map = 273
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3492,7460,247)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(9205,-8560)
     bot.Wait.UntilOutOfCombat()
@@ -6788,14 +7573,15 @@ def LifeBarrier():
     bot.States.AddHeader("Life Barrier")
     target_prof = Profession.MONK
     start_map = 24
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Monk Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Monk Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7469,-31762,98)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(13171,13137)
     bot.Move.XY(8538,10771)
@@ -6806,36 +7592,24 @@ def LifeBarrier():
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
     bot.States.AddCustomState(lambda: ClickSkillFrame(270), "Click Skill Frame")
-    bot.Wait.ForTime(2000)
-    REAL_CAPTURED_SKILLS = [270]
-    found_real_skill = False
-    for slot in range(1, 9):
-        skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
-        if skill_data and skill_data.id in REAL_CAPTURED_SKILLS:
-            found_real_skill = True
-            break
-    if found_real_skill:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
-        yield
-    else:
-        bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
-        bot.States.AddCustomState(LifeBarrier, "[H]Life Barrier")
-    yield  
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
 
 def Way_of_the_Assassin():
     bot.States.AddHeader("Way of the Assassin")
     target_prof = Profession.ASSASSIN
     start_map = 424
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(441, 861)
     bot.Move.XYAndExitMap(3676, -4703, 379)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(11129, 7553)
     bot.Wait.UntilOutOfCombat()
@@ -6851,14 +7625,15 @@ def Dark_Apostasy():
     bot.States.AddHeader("Dark Apostasy")
     target_prof = Profession.ASSASSIN
     start_map = 230
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-4459, 5455, 209)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-20168, -3708)
     bot.Wait.UntilOutOfCombat()
@@ -6874,14 +7649,15 @@ def Locusts_Fury():
     bot.States.AddHeader("Locust's Fury")
     target_prof = Profession.ASSASSIN
     start_map = 129
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-7585, 1955, 201)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3771, 10839)
     bot.Wait.UntilOutOfCombat()
@@ -6897,14 +7673,15 @@ def Palm_Strike():
     bot.States.AddHeader("Palm Strike")
     target_prof = Profession.ASSASSIN
     start_map = 303
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(16512, 20762, 240)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-5661.56, -8976.21)
     bot.Move.XY(-2649.35, -11041.71)
@@ -6926,14 +7703,15 @@ def Seeping_Wound():
     bot.States.AddHeader("Seeping Wound")
     target_prof = Profession.ASSASSIN
     start_map = 51
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5490, -12398, 31)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10625, -2757)
     bot.Move.XY(-11491.36, -3626.96)
@@ -6950,14 +7728,15 @@ def Flashing_Blades():
     bot.States.AddHeader("Flashing Blades")
     target_prof = Profession.ASSASSIN
     start_map = 220
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-14594, -3987, 197)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8270, -635)
     bot.Move.XY(9518.52, 2496.50)
@@ -6977,14 +7756,15 @@ def Foxs_Promise():
     bot.States.AddHeader("Fox's Promise")
     target_prof = Profession.ASSASSIN
     start_map = 396
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-1367, 5938, 395)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(6784.16, -14382.22)
     bot.Move.XY(-2183.42, -5759.83)
@@ -7006,11 +7786,13 @@ def Psychic_Instability():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3200, 2499, target_map_id=227)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(4599.85, 3940.26)
     bot.Move.XY(3039.05, 5503.06)
@@ -7039,11 +7821,13 @@ def Shadow_Shroud():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3200, 2499, target_map_id=227)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(4599.85, 3940.26)
     bot.Move.XY(3039.05, 5503.06)
@@ -7071,12 +7855,14 @@ def Shattering_Assault():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-3006.40, 13672.54)
     bot.Move.XYAndExitMap(-3042, 11398, target_map_id=446)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-2385.10, 5693.95)
     bot.Move.XY(-5785.96, 4816.62)
@@ -7103,12 +7889,14 @@ def AuraofDisplacement():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #House Zu Heltzer
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XY(8196.40, -1113.54)
     bot.Move.XYAndExitMap(10660, -1027, 210) #Ferndale
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-9358.26, 12733.01)
     bot.Move.XY(-1456.50, 19115.00)
@@ -7128,11 +7916,13 @@ def MarkofInsecurity():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #Gate of the Nightfallen Lands
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XYAndExitMap(-16693, 19103, 465) #Nightfallen Jahai
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-5746, 3318)
     bot.Move.XY(-7538, 825)
@@ -7152,11 +7942,13 @@ def HiddenCaltrops():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #Kodorur Crossroads
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XYAndExitMap(5018, 5107, 384) #Floodplain of Mahnkelon
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-13221, -11714)
     bot.Wait.UntilOutOfCombat()
@@ -7175,11 +7967,13 @@ def AssaultEnchantments():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #Gate of Torment
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XYAndExitMap(-7820, 14363, 465) #Floodplain of Mahnkelon
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-2950, -7871)
     bot.Move.XY(4153, -9215)
@@ -7201,11 +7995,13 @@ def ShadowMeld():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #Nundu Bay
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XYAndExitMap(-15570, -3834, 371) #Floodplain of Mahnkelon
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-13815, 3355)
     bot.Wait.UntilOutOfCombat()
@@ -7224,11 +8020,13 @@ def WastrelsCollapse():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build") 
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build") 
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map) #Yahnur Market
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XYAndExitMap(-5262, 635, 406) #Vehtendi Valley
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6604, -11438)
     bot.Wait.UntilOutOfCombat()
@@ -7244,15 +8042,16 @@ def GoldenSkullStrike():
     bot.States.AddHeader("Golden Skull Strike")
     target_prof = Profession.ASSASSIN
     start_map = 496
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(18267, -6197)
     bot.Move.XYAndExitMap(19693, -7411, 466)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-8329, -10361)
     bot.Move.XY(-6013, -5332)
@@ -7271,14 +8070,15 @@ def Temple_Strike():
     bot.States.AddHeader("Temple Strike")
     target_prof = Profession.ASSASSIN
     start_map = 289
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-14020, -19884, 203)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(9787, 5444)
     bot.Move.XY(7366.23, 4905.62)
@@ -7297,14 +8097,15 @@ def Moebius_Strike():
     bot.States.AddHeader("Moebius Strike")
     target_prof = Profession.ASSASSIN
     start_map = 130
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(18474, 1840, 128)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(9, 10587)
     bot.Wait.UntilOutOfCombat()
@@ -7321,14 +8122,15 @@ def Shroud_of_Silence():
     bot.States.AddHeader("Shroud of Silence")
     target_prof = Profession.ASSASSIN
     start_map = 226
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-9625, 3076, 233)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(24307.18, 1386.19)
     bot.Move.XY(10995.01, 4251.18)
@@ -7345,17 +8147,18 @@ def Siphon_Strength():
     bot.States.AddHeader("Siphon Strength")
     target_prof = Profession.ASSASSIN
     start_map = 288
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-16320, 13637, 199)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-19877.70, 3994.01)
-    bot.Move.XY(-18904.16, 3510.10)
+    bot.Move.XY(-19831, 2587)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -7369,14 +8172,15 @@ def Way_of_the_Empty_Palm():
     bot.States.AddHeader("Way of the Empty Palm")
     target_prof = Profession.ASSASSIN
     start_map = 273
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3473, 7390, 247)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(15726, -6563)
     bot.Move.XY(17996, 2023)
@@ -7394,14 +8198,15 @@ def Beguiling_Haze():
     bot.States.AddHeader("Beguiling Haze")
     target_prof = Profession.ASSASSIN
     start_map = 287
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Assassin Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Assassin Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(32538, 10966, 205)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(10599, -7793)
     bot.Move.XY(11896, -819)
@@ -7419,14 +8224,15 @@ def Animate_Flesh_Golem():
     bot.States.AddHeader("Animate Flesh Golem")
     target_prof = Profession.NECROMANCER
     start_map = 51
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5363, -12211, 31)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(5179, 2952)
     bot.Move.XY(3615, 7450)
@@ -7444,14 +8250,15 @@ def Contagion():
     bot.States.AddHeader("Contagion")
     target_prof = Profession.NECROMANCER
     start_map = 425
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-15149, 8672, 384)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-17954, 4393)
     bot.Wait.UntilOutOfCombat()
@@ -7467,14 +8274,15 @@ def Corrupt_Enchantment():
     bot.States.AddHeader("Corrupt Enchantment")
     target_prof = Profession.NECROMANCER
     start_map = 393
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6041, -1493, 392)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-11689, -11432)
     bot.Wait.UntilOutOfCombat()
@@ -7490,14 +8298,15 @@ def Tease():
     bot.States.AddHeader("Tease")
     target_prof = Profession.MESMER
     start_map = 393
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
     bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6041, -1493, 392)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-10388, -7828)
     bot.Wait.UntilOutOfCombat()
@@ -7513,14 +8322,15 @@ def Master_of_Magic():
     bot.States.AddHeader("Master of Magic")
     target_prof = Profession.ELEMENTALIST
     start_map = 393
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Elementalist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6041, -1493, 392)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6279, -8739)
     bot.Move.XY(-7868, -9560)
@@ -7537,16 +8347,17 @@ def Invoke_Lightning():
     bot.States.AddHeader("Invoke Lightning")
     target_prof = Profession.ELEMENTALIST
     start_map = 393
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Elementalist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6041, -1493, 392)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
-    bot.Move.XY(-13913, -17200)
+    bot.Move.XY(-13509, -17579)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -7560,14 +8371,15 @@ def Cultists_Fervor():
     bot.States.AddHeader("Cultist's Fervor")
     target_prof = Profession.NECROMANCER
     start_map = 234
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6654, 7301, 202)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(10855, -978)
     bot.Wait.UntilOutOfCombat()
@@ -7583,14 +8395,15 @@ def Tainted_Flesh():
     bot.States.AddHeader("Tainted Flesh")
     target_prof = Profession.NECROMANCER
     start_map = 287
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(32765, 10871, 205)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-3359, -4976)
     bot.Wait.UntilOutOfCombat()
@@ -7606,15 +8419,16 @@ def Depravity():
     bot.States.AddHeader("Depravity")
     target_prof = Profession.NECROMANCER
     start_map = 381
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(-1401, 1675)
     bot.Move.XYAndExitMap(4805, 943, 380)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1550, -11990)
     bot.Wait.UntilOutOfCombat()
@@ -7630,14 +8444,15 @@ def Discord():
     bot.States.AddHeader("Discord")
     target_prof = Profession.NECROMANCER
     start_map = 350
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(18483, 11343, 199)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(18504, 332)
     bot.Wait.UntilOutOfCombat()
@@ -7653,14 +8468,15 @@ def Icy_Veins():
     bot.States.AddHeader("Icy Veins")
     target_prof = Profession.NECROMANCER
     start_map = 222
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6840, 14641, 195)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-11535, -8301)
     bot.Wait.UntilOutOfCombat()
@@ -7676,14 +8492,15 @@ def Crippling_Anguish():
     bot.States.AddHeader("Crippling Anguish")
     target_prof = Profession.MESMER
     start_map = 222
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6840, 14641, 195)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-6719, -8760)
     bot.Wait.UntilOutOfCombat()
@@ -7699,17 +8516,18 @@ def Ravenous_Gaze():
     bot.States.AddHeader("Ravenous Gaze")
     target_prof = Profession.NECROMANCER
     start_map = 424
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-5400, 5435, 369)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(16919, -7990)
-    bot.Move.XY(10437, -5898)
+    bot.Move.XY(9744, -6408)
     bot.Wait.UntilOutOfCombat()
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
@@ -7724,14 +8542,15 @@ def Signet_of_Suffering():
     bot.States.AddHeader("Signet of Suffering")
     target_prof = Profession.NECROMANCER
     start_map = 442
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(3146, 5326, 443)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(26837, -9576)
     bot.Wait.UntilOutOfCombat()
@@ -7747,14 +8566,15 @@ def Lingering_Curse():
     bot.States.AddHeader("Lingering Curse")
     target_prof = Profession.NECROMANCER
     start_map = 272
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6741, 8137, 244)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1670, -16662)
     bot.Wait.UntilOutOfCombat()
@@ -7770,15 +8590,16 @@ def Soul_Bind():
     bot.States.AddHeader("Soul Bind")
     target_prof = Profession.NECROMANCER
     start_map = 284
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XY(11722, -18582)
     bot.Move.XYAndExitMap(11699, -20253, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-268, -3164)
     bot.Wait.UntilOutOfCombat()
@@ -7794,14 +8615,15 @@ def Vampiric_Spirit():
     bot.States.AddHeader("Vampiric Spirit")
     target_prof = Profession.NECROMANCER
     start_map = 272
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6741, 8137, 244)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1670, -16662)
     bot.Move.XY(-504.80, -16517.78)
@@ -7831,14 +8653,15 @@ def Shockwave():
     bot.States.AddHeader("Shockwave")
     target_prof = Profession.ELEMENTALIST
     start_map = 272
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Elementalist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(6741, 8137, 244)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1670, -16662)
     bot.Move.XY(-261, -16661) 
@@ -7856,14 +8679,15 @@ def Grenths_Balance():
     bot.States.AddHeader("Grenth's Balance")
     target_prof = Profession.NECROMANCER
     start_map = 378
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(5113, 3280, 377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-13774, 15792)
     bot.Move.XY(-10455, 13159)
@@ -7890,12 +8714,14 @@ def Jagged_Bones():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
     bot.Move.XY(14682, 22900)
     bot.Move.XYAndExitMap(17000, 22872, 546)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-9431, -20124)
     bot.Move.XY(-8441, -13685)
@@ -7919,11 +8745,13 @@ def Offering_of_Blood():
 
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Map.EnterChallenge(6000, target_map_id=22)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-11206.22, -8611.91)
     bot.Move.XY(-9682.32, -7021.72)
@@ -7944,15 +8772,16 @@ def Order_of_the_Vampire():
     bot.States.AddHeader("Order of the Vampire")
     target_prof = Profession.NECROMANCER
     start_map = 117
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=117)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Map.EnterChallenge(delay=1000, target_map_id=117)
     bot.Wait.ForMapToChange(target_map_id=117) # Thirsty River Mission
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-857, 8546) #Sand Giant 1
     bot.Move.XY(-2320, 5881)
@@ -7987,14 +8816,15 @@ def Toxic_Chill():
     bot.States.AddHeader("Toxic Chill")
     target_prof = Profession.NECROMANCER
     start_map = 433
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(5067, 1018, 404)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(659, 1838) 
     bot.Wait.UntilOutOfCombat()
@@ -8010,14 +8840,15 @@ def Wail_of_Doom():
     bot.States.AddHeader("Wail of Doom")
     target_prof = Profession.NECROMANCER
     start_map = 226
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(-9625, 3076, 233)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(8310, -7070) 
     bot.Move.XY(10629, -7757)
@@ -8034,14 +8865,15 @@ def Weaken_Knees():
     bot.States.AddHeader("Weaken Knees")
     target_prof = Profession.NECROMANCER
     start_map = 129
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Necromancer Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(-7622, 1811, 201)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(7851, -7812)
     bot.Wait.ForTime(25000) 
@@ -8049,7 +8881,7 @@ def Weaken_Knees():
     ConfigurePacifistEnv(bot)
     bot.SkillBar.UseSkill(3)
     bot.Wait.ForTime(5000)
-    bot.States.AddCustomState(lambda: ClickSkillFrame(764), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ClickSkillFrame(822), "Click Skill Frame")
     bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield  
@@ -8058,14 +8890,15 @@ def Archers_Signet():
     bot.States.AddHeader("Archer's Signet")
     target_prof = Profession.RANGER
     start_map = 129
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ranger Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(-7622, 1811, 201)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(7851, -7812)
     bot.Wait.ForTime(25000) 
@@ -8078,18 +8911,43 @@ def Archers_Signet():
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield  
 
+def GlassArrows():
+    bot.States.AddHeader("Glass Arrows")
+    target_prof = Profession.RANGER
+    start_map = 130
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(24085, 7289, 205)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-15388, 268)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1199), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
 def Attuned_Was_Songkai():
     bot.States.AddHeader("Attuned Was Songkai")
     target_prof = Profession.RITUALIST
     start_map = 222
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6866, 14696, 195)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2686, -9323)
     bot.Wait.UntilOutOfCombat()
@@ -8105,14 +8963,15 @@ def Clamor_of_Souls():
     bot.States.AddHeader("Clamor of Souls")
     target_prof = Profession.RITUALIST
     start_map = 222
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Warrior Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Warrior Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
     bot.Move.XYAndExitMap(-6866, 14696, 195)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(2686, -9323)
     bot.Wait.UntilOutOfCombat()
@@ -8128,14 +8987,15 @@ def Caretakers_Charge():
     bot.States.AddHeader("Caretaker's Charge")
     target_prof = Profession.RITUALIST
     start_map = 473
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(11591, -1382, 472)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(1670, 10780)
     bot.Wait.UntilOutOfCombat()
@@ -8151,14 +9011,15 @@ def Consume_Soul():
     bot.States.AddHeader("Consume Soul")
     target_prof = Profession.RITUALIST
     start_map = 389
-    
     bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
     bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
-    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Ritualist Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
     bot.Party.LeaveParty()
     bot.Travel_To_Random_District(target_map_id=start_map)
     bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
     bot.Move.XYAndExitMap(-5411, 13654, 200)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
     ConfigureAggressiveEnv(bot)
     bot.Move.XY(-14256, -2242)
     bot.Wait.UntilOutOfCombat()
@@ -8169,6 +9030,2118 @@ def Consume_Soul():
     bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
     bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
     yield
+
+def Barrage():
+    bot.States.AddHeader("Barrage")
+    target_prof = Profession.RANGER
+    start_map = 349
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-11143, -23655, 195)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-8262, 18124)
+    bot.Move.XY(-4299, 12125)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(395), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Burning_Arrow():
+    bot.States.AddHeader("Burning Arrow")
+    target_prof = Profession.RANGER
+    start_map = 381
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-5984, 5358, 371)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(17803, -13310)
+    bot.Move.XY(11578, -14143)
+    bot.Move.XY(7770.03, -16148.65)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1466), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Crippling_Shot():
+    bot.States.AddHeader("Crippling Shot")
+    target_prof = Profession.RANGER
+    start_map = 640
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XY(18003.32, 16753.06)
+    bot.Move.XYAndExitMap(20243, 16910, 501)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-5781, -9354)
+    bot.Move.XY(1762, -8654)
+    bot.Move.XY(19306, 6218)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(393), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Enraged_Lunge():
+    bot.States.AddHeader("Enraged Lunge")
+    target_prof = Profession.RANGER
+    start_map = 51
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(7316, -17027, 265)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(18687, 7650)
+    bot.Move.XY(14559, 2226)
+    bot.Move.XY(7167, -1901)
+    bot.Move.XY(4725, -142)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1202), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Equinox():
+    bot.States.AddHeader("Equinox")
+    target_prof = Profession.RANGER
+    start_map = 284
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XY(11722, -18582)
+    bot.Move.XYAndExitMap(11699, -20253, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(11908, 8425)
+    bot.Move.XY(11332, -6134)
+    bot.Move.XY(-1646, -6959)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1212), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Escape():
+    bot.States.AddHeader("Escape")
+    target_prof = Profession.RANGER
+    start_map = 224
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(4392, 26052, 199)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(8539, -7857)
+    bot.Move.XY(1276, -8157)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(448), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Experts_Dexterity():
+    bot.States.AddHeader("Expert's Dexterity")
+    target_prof = Profession.RANGER
+    start_map = 407
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(5023, 4589, 402)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(3202, -15474)
+    bot.Move.XY(4546, -17479)
+    bot.Move.XY(14600, -13203)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1724), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield   
+
+def Famine():
+    bot.States.AddHeader("Famine")
+    target_prof = Profession.RANGER
+    start_map = 226
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-9662, 3084, 233)
+    bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(16446, 261)
+    bot.Move.XY(15194, 299)
+    bot.Move.XY(14830, -2177)
+    bot.Move.XY(14690, -4412)
+    bot.Move.XY(12365, -5527) 
+    bot.Move.XY(10957, -4475)
+    bot.Move.XY(6532, -6607)
+    bot.Move.XY(6339, -4584)
+    bot.Move.XY(3023, -6434)
+    bot.Move.XY(2837, -4469)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(997), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield   
+
+def Ferocious_Strike():
+    bot.States.AddHeader("Ferocious Strike")
+    target_prof = Profession.RANGER
+    start_map = 273
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(3473, 7682, 247)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(13205, -8400)
+    bot.Move.XY(13860, -7537)
+    bot.Move.XY(19037, -9594)
+    bot.Move.XY(21925, -4834)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(442), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield   
+
+def HealAsOne():
+    bot.States.AddHeader("Heal as One")
+    target_prof = Profession.RANGER
+    start_map = 390
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-7023, -10645, 201)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(12634, 20424)
+    bot.Move.XY(8857, 16480)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1195), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield 
+
+def InfuriatingHeat():
+    bot.States.AddHeader("Infuriating Heat")
+    target_prof = Profession.RANGER
+    start_map = 424
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(3481, -4573, 379)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-4903, -328)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1730), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Lacerate():
+    bot.States.AddHeader("Lacerate")
+    target_prof = Profession.RANGER
+    start_map = 272
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XY(5487, 6623) #Anti-Stuck on Sign
+    bot.Move.XYAndExitMap(6566, 8093, 244)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(2950, -8661)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(961), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def MagebaneShot():
+    bot.States.AddHeader("Magebane Shot")
+    target_prof = Profession.RANGER
+    start_map = 442
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-2395, -4922, 441)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(12200, 5685)
+    bot.Wait.ForTime(10000)
+    bot.Move.XYAndInteractGadget(12294.00, 5674.00)
+    bot.Move.XY(24286, 10004)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1726), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def MarksmansWager():
+    bot.States.AddHeader("Marksman's Wager")
+    target_prof = Profession.RANGER
+    start_map = 117
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Map.EnterChallenge(delay=1000, target_map_id=117)
+    bot.Wait.ForMapToChange(target_map_id=117) # Thirsty River Mission
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-857, 8546) #Sand Giant 1
+    bot.Move.XY(-2320, 5881)
+    bot.Move.XY(-125.10, 3166.91)
+    bot.Move.XY(-50.19, 103.76)
+    bot.Move.XY(1417.27, -2503.34)
+    bot.Move.XY(4508.23, -3895.00)
+    bot.Move.XY(5735.68, -3615.36) #Ugly Bridge
+    bot.Move.XY(6548.60, -2597.65)
+    bot.Move.XY(6904.65, -1450.62)
+    bot.Move.XY(8282.06, -1424.29)
+    bot.Move.XYAndInteractNPC(8945.00, -2457.00)
+    bot.Wait.ForMapToChange(117) #Cutscene
+    bot.Wait.ForTime(6000)
+    bot.Move.XY(13091.00, -5283.00) #Goss Aleesh Boss and Priest
+    bot.Move.XY(10711.53, -4565.11)
+    bot.Wait.ForTime (7000)
+    bot.Move.XY(8666.88, -6085.35)
+    bot.Move.XY(9782.77, -9098.71)
+    bot.Wait.ForTime (11000)
+    bot.Move.XY(5899, -6912) #Hessper Sasso and Priest
+    bot.Move.XY(6407.00, -11845.00) #Issah Sshay and Priest
+    bot.Move.XY(6505.61, -9512.16)
+    bot.Wait.ForTime (7000)
+    bot.Move.XY(3947.58, -6702.45)
+    bot.Move.XY(1570.69, -7218.57)
+    bot.Wait.ForTime (11000)
+    bot.Move.XY(-1817.28, -10608.80)
+    bot.Move.XY(-2718.63, -11827.44) #Custodian Phebus and Priest
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(430), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def MelandrusArrows():
+    bot.States.AddHeader("Melandru's Arrows")
+    target_prof = Profession.RANGER
+    start_map = 159
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-18019, 9252, 98)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-7491, 2192)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(429), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def MelandrusShot():
+    bot.States.AddHeader("Melandru's Shot")
+    target_prof = Profession.RANGER
+    start_map = 193
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(6731, -7517, 198)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(3171, 5960)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(853), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def OathShot():
+    bot.States.AddHeader("Oath Shot")
+    target_prof = Profession.RANGER
+    start_map = 23
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Move.XYAndExitMap(-12507, -23517, 94)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(7408, 15741)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(405), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def QuickShot():
+    bot.States.AddHeader("Quick Shot")
+    target_prof = Profession.RANGER
+    start_map = 425
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-15203, 8909, 384)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-14169, 8080)
+    bot.Move.XY(-4754, 12871)
+    bot.Move.XY(-6485.16, 11917.93)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(397), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Quicksand():
+    bot.States.AddHeader("Quicksand")
+    target_prof = Profession.RANGER
+    start_map = 442
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-2395, -4922, 441)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(1161.45, 7977.44)
+    bot.Move.XY(-2115, 4646)
+    bot.Wait.ForTime(6500)
+    bot.Move.XYAndInteractGadget(-2288.00, 4524.00)
+    bot.Move.XY(5229, -1004)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1473), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def RampageAsOne():
+    bot.States.AddHeader("Rampage as One")
+    target_prof = Profession.RANGER
+    start_map = 387
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-411, 3939, 436)
+    bot.Move.XYAndExitMap(5342, 7723, 369) #Jahai Bluffs
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-5746, 2526)
+    bot.Move.XY(-14111, -1747)
+    bot.Move.XY(-18488, -8928)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1721), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def ScavengersFocus():
+    bot.States.AddHeader("Scavenger's Focus")
+    target_prof = Profession.RANGER
+    start_map = 440
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-5130, -6691, 439)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-11018, -3520)
+    bot.Move.XY(-13397, -9813)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1471), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def SmokeTrap():
+    bot.States.AddHeader("Smoke Trap")
+    target_prof = Profession.RANGER
+    start_map = 442
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-2395, -4922, 441)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(9908, 3523)
+    bot.Move.XY(9534, 327)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1729), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def SpikeTrap():
+    bot.States.AddHeader("Spike Trap")
+    target_prof = Profession.RANGER
+    start_map = 219
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-26272, 2836, 211)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(22084, 1779)
+    bot.Move.XY(13742, 902)
+    bot.Move.XY(13527, 9125)
+    bot.Move.XY(10140, 13606)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(461), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def StrikeAsOne():
+    bot.States.AddHeader("Strike as One")
+    target_prof = Profession.RANGER
+    start_map = 421
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(26345, 16978, 386)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(9456, -11034)
+    bot.Move.XY(9938, 4974)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1468), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def TrappersFocus():
+    bot.States.AddHeader("Trapper's Focus")
+    target_prof = Profession.RANGER
+    start_map = 389
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ranger Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-5778, 13986, 200)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-17887, -10440)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(946), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+    
+
+def DestructiveWasGlaive():
+    bot.States.AddHeader("Destructive Was Glaive")
+    target_prof = Profession.RITUALIST
+    start_map = 387
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-411, 3939, 436)
+    bot.Move.XYAndExitMap(5096, 3792, 380)
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(1295, 8044)
+    bot.Move.XY(12185, 8546)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1732), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def GraspingWasKuurong():
+    bot.States.AddHeader("Grasping Was Kuurong")
+    target_prof = Profession.RITUALIST
+    start_map = 391
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(6193, 17595, 198)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(5647, -6283)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(789), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def OfferingOfSpirit():
+    bot.States.AddHeader("Offering of Spirit")
+    target_prof = Profession.RITUALIST
+    start_map = 495
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-16837, -13647, 472)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(12048, -18141)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1479), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Preservation():
+    bot.States.AddHeader("Preservation")
+    target_prof = Profession.RITUALIST
+    start_map = 279
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(8538, -19837, 144)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-5850, -17503)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1250), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def ReclaimEssence():
+    bot.States.AddHeader("Reclaim Essence")
+    target_prof = Profession.RITUALIST
+    start_map = 442
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(3078, 5274, 443)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(7213, -5869)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1482), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def RitualLord():
+    bot.States.AddHeader("Ritual Lord")
+    target_prof = Profession.RITUALIST
+    start_map = 289
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-13995, -20044, 203)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    #bot.Move.XY(0, 0)
+    bot.Move.XY(9018, -11643)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1217), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def SignetOfGhostlyMight():
+    bot.States.AddHeader("Signet of Ghostly Might")
+    target_prof = Profession.RITUALIST
+    start_map = 480
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XY(-3006.40, 13672.54)
+    bot.Move.XYAndExitMap(-3042, 11398, target_map_id=446)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Items.UseAllConsumables()
+    bot.Move.XY(-2385.10, 5693.95)
+    bot.Move.XY(-5785.96, 4816.62)
+    bot.Move.XY(-9790.39, -6153.40)
+    bot.Move.XY(-14231.77, -5938.61)
+    bot.Move.XY(-18997.60, -1960.05)
+    bot.Move.XYAndExitMap(-19988, -3069, target_map_id=448)
+    bot.Move.XY(2100, -19557)
+    bot.Move.XY(-3528, -19879)
+    bot.Move.XY(-7089, -16108)
+    bot.Move.XY(-9079, -14954)
+    bot.Move.XY(-11733, -4433)
+    bot.Move.XY(-11537, -1719)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1634), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield   
+
+def SpiritChanneling():
+    bot.States.AddHeader("Spirit Channeling")
+    target_prof = Profession.RITUALIST
+    start_map = 283
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-17865, 16700, 197)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(4786, -14399)
+    bot.Move.XY(-6533, -16982)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1231), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def SpiritLightWeapon():
+    bot.States.AddHeader("Spirit Light Weapon")
+    target_prof = Profession.RITUALIST
+    start_map = 390
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-7023, -10645, 201)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(12634, 20424)
+    bot.Move.XY(3329, 20174)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1257), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def SpiritsStrength():
+    bot.States.AddHeader("Spirit's Strength")
+    target_prof = Profession.RITUALIST
+    start_map = 428
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-139, 12822, 399)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-6174, 5134)
+    bot.Move.XY(257, 2542)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1736), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def TranquilWasTanasen():
+    bot.States.AddHeader("Tranquil Was Tanasen")
+    target_prof = Profession.RITUALIST
+    start_map = 51
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(5939, -12643, 31)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(8321, -7866)
+    bot.Wait.UntilOnCombat()
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(913), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def VengefulWasKhanhei():
+    bot.States.AddHeader("Vengeful Was Khanhei")
+    target_prof = Profession.RITUALIST
+    start_map = 287
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(27438, 5576, 209)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(24420, -2651)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(790), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Wanderlust():
+    bot.States.AddHeader("Wanderlust")
+    target_prof = Profession.RITUALIST
+    start_map = 284
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(2770, -15781, 269)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(2916, -12704)
+    bot.Move.XY(189, -7370)
+    bot.Move.XY(5309, 3700)
+    bot.Move.XY(1018, 11378)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1255), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def WeaponOfFury():
+    bot.States.AddHeader("Weapon of Fury")
+    target_prof = Profession.RITUALIST
+    start_map = 424
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(3481, -4573, 379)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(2849, 13066)
+    bot.Move.XY(15425, 15994)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1749), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def WeaponOfQuickening():
+    bot.States.AddHeader("Weapon of Quickening")
+    target_prof = Profession.RITUALIST
+    start_map = 219
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Ritualist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-26272, 2836, 211)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(22084, 1779)
+    bot.Move.XY(13527, 9125)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1268), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Double_Dragon():
+    bot.States.AddHeader("Double Dragon")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 303
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(10814, 14589, 239)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(4035, 10701)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1091), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Blinding_Surge():
+    bot.States.AddHeader("Blinding Surge")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 433
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(5045, 1052, 404)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-7018, -8461)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1367), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Elemental_Attunement():
+    bot.States.AddHeader("Elemental Attunement")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 477
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-15629, -3751, 371)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-4598, -10651)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(164), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield 
+
+def Gust():
+    bot.States.AddHeader("Gust")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 287
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(27258, 5426, 209)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(24360, 5664)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(843), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+    
+def Lightning_Surge():
+    bot.States.AddHeader("Lightning Surge")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 288
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-16308, 13732, 199)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-721, 7622)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(205), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Ride_the_Lightning():   
+    bot.States.AddHeader("Ride the Lightning")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 650
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-21602, 12394, 649)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-9425, 9534)
+    bot.Move.XY(-5124, 9715)
+    bot.Move.XY(3866, 3904)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(836), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Sandstorm(): 
+    bot.States.AddHeader("Sandstorm")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 440
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(2275, -1056, 439)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-5235, 11047)
+    bot.Move.XY(-4874, 12918)
+    bot.Move.XYAndExitMap(21006, 18196, 443)
+    bot.Move.XY(-24310, 2150)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1372), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Stone_Sheath(): 
+    bot.States.AddHeader("Stone Sheath")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 427
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XY(-13625.08, -11257.90)
+    bot.Move.XYAndDialog(-13641.00, -10375.00, 0x84)
+    bot.Wait.ForMapToChange(377)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-7615, -5029)
+    bot.Move.XY(-2763, -4443)
+    bot.Move.XY(-3663, -6080)
+    bot.Move.XY(-3711, -6683)
+    bot.Move.XY(-3769, -7410)
+    bot.Move.XY(-1642, -10908)
+    bot.Move.XY(3416, -8155)
+    bot.Move.XY(9321, 1942)
+    bot.Move.XY(13134, 11247)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1373), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Unsteady_Ground():
+    bot.States.AddHeader("Unsteady Ground")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 288
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(-16308, 13732, 199)
+    ConfigureAggressiveEnv(bot)
+    #bot.Items.UseAllConsumables()
+    bot.Move.XY(-18285, 5935)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1083), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Energy_Boon():
+    bot.States.AddHeader("Energy Boon")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 388
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XY(-7243.40, -8111.62)
+    bot.Move.XYAndExitMap(-8040, -8675, 210)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(15436, 19966)
+    bot.Move.XY(11474, 9869)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(837), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Ether_Prism():
+    bot.States.AddHeader("Ether Prism")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 442
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, "Advanced Hero Team")
+    bot.Move.XYAndExitMap(3025, 5267, 443)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-5210, 465)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1377), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield 
+
+def Ether_Renewal(): 
+    bot.States.AddHeader("Ether Renewal")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 117
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Necromancer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Map.EnterChallenge(delay=1000, target_map_id=117)
+    bot.Wait.ForMapToChange(target_map_id=117) # Thirsty River Mission
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-857, 8546) #Sand Giant 1
+    bot.Move.XY(-2320, 5881)
+    bot.Move.XY(-125.10, 3166.91)
+    bot.Move.XY(-50.19, 103.76)
+    bot.Move.XY(1417.27, -2503.34)
+    bot.Move.XY(4508.23, -3895.00)
+    bot.Move.XY(5735.68, -3615.36) #Ugly Bridge
+    bot.Move.XY(6548.60, -2597.65)
+    bot.Move.XY(6904.65, -1450.62)
+    bot.Move.XY(8282.06, -1424.29)
+    bot.Move.XYAndInteractNPC(8945.00, -2457.00)
+    bot.Wait.ForMapToChange(117) #Cutscene
+    bot.Wait.ForTime(1000)
+    bot.Move.XY(13091.00, -5283.00) #Goss Aleesh Boss and Priest
+    bot.Move.XY(10711.53, -4565.11)
+    bot.Wait.ForTime (7000)
+    bot.Move.XY(8666.88, -6085.35)
+    bot.Move.XY(9782.77, -9098.71)
+    bot.Wait.ForTime (11000)
+    bot.Move.XY(6407.00, -11845.00) #Issah Sshay and Priest 
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(181), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield  
+
+def Mind_Blast():
+    bot.States.AddHeader("Mind Blast")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 495
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-16837, -13647, 472)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-7832, -18723)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1662), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Savannah_Heat(): 
+    bot.States.AddHeader("Savannah Heat")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 545
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(2918, -4281, 444)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-643, 13446)
+    bot.Wait.ForTime(7000)
+    bot.Move.XYAndInteractGadget(-579.00, 13354.00)
+    bot.Move.XY(9436, 14585)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1380), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Searing_Flames(): 
+    bot.States.AddHeader("Searing Flames")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 403
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-18812, 13402, 402)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-7285, 15774)
+    bot.Move.XY(4932, 14298)
+    bot.Move.XY(10875, 13329)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(884), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Star_Burst():
+    bot.States.AddHeader("Star Burst")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 226
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(-9600, 3803, 233)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(16795, 8477)
+    bot.Move.XY(-973, 2190)
+    bot.Move.XY(-3992.75, -6002.14)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1095), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Icy_Shackles():
+    bot.States.AddHeader("Icy Shackles")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 424
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(0, 0, 0)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(0, 0)
+    bot.Move.XY(0, 0)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(939), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Mind_Freeze():
+    bot.States.AddHeader("Mind Freeze")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 469
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(7611, 18645, 468)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(9441, 11297)
+    bot.Wait.ForTime(30000)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(209), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Mirror_of_Ice():
+    bot.States.AddHeader("Mirror of Ice")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 284
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XY(11750, -18667)
+    bot.Move.XYAndExitMap(11745, -21128, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(6939, 10824)
+    bot.Move.XY(2009.15, 5432.86)
+    bot.Move.XY(3684.09, 3832.11)
+    bot.Move.XY(6207.97, 26.18)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1098), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Shatterstone():
+    bot.States.AddHeader("Shatterstone")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 130
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(18072, 1905, 128)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(14466, -24)
+    bot.Move.XY(20340.17, -5591.57)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(809), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield    
+
+def Water_Trident():
+    bot.States.AddHeader("Water Trident")
+    target_prof = Profession.ELEMENTALIST
+    start_map = 642
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof),"Load Elementalist Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team") 
+    bot.Move.XYAndExitMap(1250, 800, 499)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(5721.17, 21335.62)
+    bot.Wait.ForTime(45000) #Boss Path limit
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(237), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Enchanters_Conundrum():
+    bot.States.AddHeader("Enchanter's Conundrum")
+    target_prof = Profession.MESMER
+    start_map = 426
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-4431, 5107, 380)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(12304, -2881)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1345), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Hex_Eater_Vortex():
+    bot.States.AddHeader("Hex Eater Vortex")
+    target_prof = Profession.MESMER
+    start_map = 480
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XY(-3039, 13579)
+    bot.Move.XYAndExitMap(-3076, 11494, 446)
+    bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-6449, 4707)
+    bot.Move.XY(-7007, 2674)
+    bot.Move.XY(-9644, -10835)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1348), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Power_Block():
+    bot.States.AddHeader("Power Block")
+    target_prof = Profession.MESMER
+    start_map = 650
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-21630, 12565, 649) #Exit to Gothmar Wardowns
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-4163, -203, "Res Shrine 1")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(11385, 2228, "Res Shrine 2")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XY(19190, -12141, "Res Shrine 3")
+    bot.Wait.UntilOutOfCombat()
+    bot.Move.XYAndExitMap(23054, -13225, 651)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-16333, 16622, "Res Shrine 4")
+    bot.Move.XY(-9609, 11059)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(5), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Power_Flux():
+    bot.States.AddHeader("Power Flux")
+    target_prof = Profession.MESMER
+    start_map = 469
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(15365, 20110, 470)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-11703, 1000)
+    bot.Move.XY(-16661, 6337)
+    bot.Move.XY(-8634, 10748)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(953), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Psychic_Distraction():
+    bot.States.AddHeader("Psychic Distraction")
+    target_prof = Profession.MESMER
+    start_map = 284
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XY(11750, -18667)
+    bot.Move.XYAndExitMap(11745, -21128, 256)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(4219, 7155)
+    bot.Move.XY(267, 6433)
+    bot.Move.XY(123, 2310)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1053), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Arcane_Languor():
+    bot.States.AddHeader("Arcane Languor")
+    target_prof = Profession.MESMER
+    start_map = 226
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-9692, 3974, 233)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(24348, 1495)
+    bot.Move.XY(17308, 5582)
+    bot.Move.XY(9049, 3750)
+    bot.Move.XY(10315, -1258)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(804), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Keystone_Signet():
+    bot.States.AddHeader("Keystone Signet")
+    target_prof = Profession.MESMER
+    start_map = 156
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-11740, 14510, 93)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(-5079, -998)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(63), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Mantra_of_Recovery():
+    bot.States.AddHeader("Mantra of Recovery")
+    target_prof = Profession.MESMER
+    start_map = 349
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-8796, -21562, 210)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(3019, -12299)
+    bot.Move.XY(-377, -10935)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(13), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Stolen_Speed():
+    bot.States.AddHeader("Stolen Speed")
+    target_prof = Profession.MESMER
+    start_map = 283
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-18666, 16718, 197)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(2563, -14091)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(880), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Symbols_of_Inspiration():
+    bot.States.AddHeader("Symbols of Inspiration")
+    target_prof = Profession.MESMER
+    start_map = 473
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(11560, -1337, 472)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(14496, 1656)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1339), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Air_of_Disenchantment():
+    bot.States.AddHeader("Air of Disenchantment")
+    target_prof = Profession.MESMER
+    start_map = 428
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-2220, 14596, 399)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XYAndDialog(-4552.00, 15863.00, 0x84)
+    bot.Wait.ForMapLoad(394)
+    bot.Move.XY(21037, -6504)
+    bot.Move.XY(21933, -1662)
+    bot.Move.XY(21988, 4865)
+    bot.Move.XY(18622, 13967)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1656), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Recurring_Insecurity():
+    bot.States.AddHeader("Recurring Insecurity")
+    target_prof = Profession.MESMER
+    start_map = 287
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(27082, 5310, 209)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(20840, 2153)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1055), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Shared_Burden():
+    bot.States.AddHeader("Shared Burden")
+    target_prof = Profession.MESMER
+    start_map = 287
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(27082, 5310, 209)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(22343, -6025)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(900), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Signet_of_Illusions():
+    bot.States.AddHeader("Signet of Illusions")
+    target_prof = Profession.MESMER
+    start_map = 494
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-17156, 5363, 465)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(10335, 14284)
+    bot.Move.XY(19876, 2352)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1346), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Energy_Drain():
+    bot.States.AddHeader("Energy Drain")
+    target_prof = Profession.MESMER
+    start_map = 193
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(6756, -7638, 198)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(3079, 4784)
+    bot.Move.XY(3966, -1263)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(79), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Extend_Conditions(): #[1333] - Extend Conditions
+    bot.States.AddHeader("Extend Conditions")
+    target_prof = Profession.MESMER
+    start_map = 381
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-6340, 5354, 371)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(17746, -12948)
+    bot.Move.XY(10002, -10969)
+    bot.Move.XY(6450, -13753)
+    bot.Move.XY(5055, -12183)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(1333), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Lyssas_Aura(): #[813] - Lyssa's Aura
+    bot.States.AddHeader("Lyssa's Aura")
+    target_prof = Profession.MESMER
+    start_map = 643
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(13563, 19055, 513) 
+    #bot.Items.UseAllConsumables()
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(13774, 1991)
+    bot.Move.XY(11330, -4626)
+    bot.Move.XY(11757, -9994)
+    bot.Move.XY(12602, -18525)
+    bot.Move.XY(14034, -22760)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(813), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Echo(): #[74] - Echo
+    bot.States.AddHeader("Echo")
+    target_prof = Profession.MESMER
+    start_map = 130
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(18021, 1913, 128)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(9675, -2176)
+    bot.Move.XY(4240, -2340)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(74), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
+def Expel_Hexes(): #[954] - Expel Hexes
+    bot.States.AddHeader("Expel Hexes")
+    target_prof = Profession.MESMER
+    start_map = 292
+    bot.States.AddCustomState(lambda: RecordStartingMap(start_map), "Record Start")
+    bot.States.AddCustomState(lambda: SaveCurrentBuild(), "Save Build")
+    bot.States.AddCustomState(lambda: BuySignetOfCapture(), "Buy Signet of Capture")
+    bot.States.AddCustomState(lambda: LoadSecondaryBuild(target_prof), "Load Mesmer Build")
+    bot.Party.LeaveParty()
+    bot.Travel_To_Random_District(target_map_id=start_map)
+    bot.States.AddCustomState(AdvancedHeroTeam, name="Advanced Hero Team")
+    bot.Move.XYAndExitMap(-14677, 5182, 240)
+    #bot.Items.UseAllConsumables() #uncomment for harder areas
+    ConfigureAggressiveEnv(bot)
+    bot.Move.XY(5352, -2622)
+    bot.Move.XY(4441, 1667)
+    bot.Wait.UntilOutOfCombat()
+    ConfigurePacifistEnv(bot)
+    bot.SkillBar.UseSkill(3)
+    bot.Wait.ForTime(5000)
+    bot.States.AddCustomState(lambda: ClickSkillFrame(954), "Click Skill Frame")
+    bot.States.AddCustomState(lambda: ReturnToStartingMap(), "Return to Outpost")
+    bot.States.AddCustomState(lambda: RestoreSavedBuild(), "Restore Build")
+    yield
+
 
 # ============================================================================
 #region ADVANCED GUI CLASS
@@ -8194,17 +11167,26 @@ class EliteSkillsGUI:
         
         # UI State
         self.show_window = True
-        self.window_size_set = True
+        self.window_size_set = False
         self.current_profession = Profession.MESMER
         self.selected_skill = None
         self.capture_running = False
+        self.individual_capture_running = False  # Separate flag for individual skill capture
         self.capture_start_time = None
         self.last_known_state = "Ready"
         
         # Batch capture state
         self.batch_skills = []
         self.current_batch_index = 0
-
+        
+        # Outpost Runner-style chaining state
+        self.skill_chain: List[str] = []
+        self.chain_running: bool = False
+        self._chain_all_done: bool = False
+        self._chain_skill_ranges: List[Tuple[int, int]] = []
+        self._active_step_names: List[str] = []
+        self._original_chain_size: int = 0  # Track original chain size for progress display
+        
         # Settings state
         self.show_settings = False
         self.settings = {
@@ -8283,14 +11265,19 @@ class EliteSkillsGUI:
             return
 
         if not self.window_size_set:
-            PyImGui.set_next_window_size(540, 545)
+            # Calculate dynamic size based on content
+            window_width = 540  # Increased width for better button layout
+            # Base height + space for skills list + chain management + status info
+            window_height = 750  # Increased height for all new content sections
+            
+            PyImGui.set_next_window_size(window_width, window_height)
             self.window_size_set = True
 
         # Set window background color based on selected profession
         bg_color = self.get_profession_color(self.current_profession)
         PyImGui.push_style_color(PyImGui.ImGuiCol.WindowBg, bg_color)
 
-        if PyImGui.begin("Elite Skills Capper", True, PyImGui.WindowFlags.NoFlag):
+        if PyImGui.begin("Elite Skills Capper", True, PyImGui.WindowFlags.NoResize):
             self.draw_header()
             PyImGui.separator()
             self.draw_profession_tabs()
@@ -8324,9 +11311,60 @@ class EliteSkillsGUI:
                 PyImGui.text_colored("• Red Start", (0.8, 0.2, 0.2, 1.0))
                 PyImGui.text("  - Required map is not unlocked")
                 PyImGui.end_tooltip()
+        # Main Capture All/Start Chain button at top
+        if self.skill_chain:
+            if not self.chain_running and not self.capture_running:
+                if PyImGui.button(IconsFontAwesome5.ICON_PLAY + " Start Chain", 140, 30):
+                    # Convert chain step names back to EliteSkill objects
+                    chain_skills = []
+                    for step_name in self.skill_chain:
+                        skill = next((s for s in ELITE_SKILLS if s.step_name == step_name), None)
+                        if skill:
+                            chain_skills.append(skill)
+                    self.start_skill_chain(chain_skills)
+            elif self.chain_running or self.capture_running:
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.7, 0.2, 0.2, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, (0.8, 0.3, 0.3, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, (0.6, 0.1, 0.1, 1.0))
+                if PyImGui.button(IconsFontAwesome5.ICON_STOP_CIRCLE + " Stop", 140, 30):
+                    self.bot.Stop()
+                    self._clean_chain_states()
+                    self.chain_running = False
+                    self.capture_running = False
+                    self._chain_all_done = False
+                    self.skill_chain = []
+                    self._chain_skill_ranges = []
+                    self._active_step_names = []
+                PyImGui.pop_style_color(3)
+        else:
+            # Show Capture All button when no chain exists - capture ALL professions
+            available_skills = [s for s in ELITE_SKILLS 
+                              if not is_skill_unlocked(s.skill_id) 
+                              and can_learn_skill(s.skill_id)
+                              and can_access_skill_map(s)]
+            available_skills = sorted(available_skills, key=lambda s: s.skill_id)
+            
+            if available_skills and not self.capture_running and not self.chain_running:
+                if PyImGui.button(IconsFontAwesome5.ICON_PLAY + " Capture All", 140, 30):
+                    self.start_skill_chain(available_skills)
+            elif self.capture_running and not self.chain_running:
+                # Single skill running - show Stop button
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.7, 0.2, 0.2, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, (0.8, 0.3, 0.3, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, (0.6, 0.1, 0.1, 1.0))
+                if PyImGui.button(IconsFontAwesome5.ICON_STOP_CIRCLE + " Stop", 140, 30):
+                    self.bot.Stop()
+                    self.capture_running = False
+                    self.selected_skill = None
+                PyImGui.pop_style_color(3)
+            elif not available_skills:
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.5, 0.5, 0.5, 1.0))
+                PyImGui.button(IconsFontAwesome5.ICON_PLAY + " Capture All", 140, 30)
+                PyImGui.pop_style_color(1)
+        
         PyImGui.same_line(0, 10)
         
-        # Buy Signet button - always visible
+        # Move Buy Signet and Settings to the right
         if not IsSignetUnlocked():
             PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.9, 0.3, 0.1, 1.0))
         if PyImGui.button(IconsFontAwesome5.ICON_SHOPPING_CART + " Buy Signet", 120, 25):
@@ -8509,6 +11547,27 @@ class EliteSkillsGUI:
             if self.capture_running:
                 PyImGui.end_disabled()
             
+            PyImGui.same_line(0, 5)
+            
+            # Add to Chain button
+            if not is_unlocked and can_access_map:
+                if PyImGui.button(f"Add##{skill.id}", 80, 30):
+                    self.add_skill_to_chain(skill)
+            elif not is_unlocked and can_access_map:
+                # Disable Add button for retry skills
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.5, 0.3, 0.1, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, (0.6, 0.4, 0.2, 1.0))
+                PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, (0.4, 0.2, 0.0, 1.0))
+                PyImGui.pop_style_color(3)
+            elif is_unlocked:
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.5, 0.5, 0.5, 1.0))
+                PyImGui.button(f"Add##{skill.id}", 80, 30)
+                PyImGui.pop_style_color(1)
+            elif not can_access_map:
+                PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.5, 0.5, 0.5, 1.0))
+                PyImGui.button(f"Add##{skill.id}", 80, 30)
+                PyImGui.pop_style_color(1)
+            
             # Add tooltip for button color explanation
             if PyImGui.is_item_hovered():
                 if PyImGui.begin_tooltip():
@@ -8534,15 +11593,14 @@ class EliteSkillsGUI:
     def draw_controls(self):
         """Draw control buttons - simplified since selection is no longer needed"""
         
-        # Always show Capture All button first (most important feature)
+                
+        # Available Skills Information Box
         available_skills = [s for s in ELITE_SKILLS if s.profession == self.current_profession 
                           and not is_skill_unlocked(s.skill_id) 
                           and can_learn_skill(s.skill_id)
                           and can_access_skill_map(s)]
-        # Sort by skill_id to match GUI display order
         available_skills = sorted(available_skills, key=lambda s: s.skill_id)
         
-        # Available Skills Information Box
         PyImGui.push_style_color(PyImGui.ImGuiCol.ChildBg, (0.1, 0.1, 0.1, 0.8))
         PyImGui.begin_child("available_skills_info", (0, 60), True)
         PyImGui.text(f"Available Skills: {len(available_skills)}")
@@ -8552,27 +11610,62 @@ class EliteSkillsGUI:
         
         PyImGui.same_line(0, 10)
         
+        # Clear Chain button - always available for clearing unwanted skills
+        if self.skill_chain:
+            if PyImGui.button(IconsFontAwesome5.ICON_TRASH + " Clear Chain", 120, 25):
+                self.skill_chain = []
+                self._original_chain_size = 0  # Reset original chain size
+                ConsoleLog("SkillChain", "Chain cleared", log=True)
+        
         PyImGui.same_line(0, 10)
         
         # Show individual skill controls only when a skill is selected
         if not self.selected_skill:
             PyImGui.text("Select a skill from the list above for individual capture")
-            return
-        
-        PyImGui.text(f"Selected: {self.selected_skill.display_name} (ID: {self.selected_skill.skill_id})")
-        
-        if self.capture_running:
-            # Show Stop button while capture is running
-            PyImGui.push_style_color(PyImGui.ImGuiCol.Button, (0.7, 0.2, 0.2, 1.0))
-            PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonHovered, (0.8, 0.3, 0.3, 1.0))
-            PyImGui.push_style_color(PyImGui.ImGuiCol.ButtonActive, (0.6, 0.1, 0.1, 1.0))
-            if PyImGui.button(IconsFontAwesome5.ICON_STOP_CIRCLE + " Stop Capture", 140, 30):
-                self.stop_capture()
-            PyImGui.pop_style_color(3)
         else:
-            # Show Start button when idle
-            if PyImGui.button(IconsFontAwesome5.ICON_PLAY_CIRCLE + " Start Capture", 140, 30):
-                self._start_capture()
+            PyImGui.text(f"Selected: {self.selected_skill.display_name} (ID: {self.selected_skill.skill_id})")
+        
+                
+        # Chain Management Section - always show when we have skills in chain or when chain is running
+        if self.skill_chain or self.chain_running:
+            PyImGui.separator()
+            PyImGui.text("Chain Management:")
+            
+            # Chain status
+            PyImGui.push_style_color(PyImGui.ImGuiCol.ChildBg, (0.1, 0.1, 0.1, 0.8))
+            PyImGui.begin_child("chain_status", (0, 60), True)
+            # Count only chainable skills that will actually run
+            chainable_count = sum(1 for step_name in self.skill_chain 
+                              if (skill := next((s for s in ELITE_SKILLS if s.step_name == step_name), None)))
+            PyImGui.text(f"Chain: {chainable_count} skills")
+            if self.chain_running:
+                PyImGui.text_colored("Chain Running", (0.2, 0.8, 0.2, 1.0))
+            elif self.skill_chain:
+                PyImGui.text_colored("Chain Ready", (0.2, 0.6, 0.8, 1.0))
+            else:
+                PyImGui.text_colored("Chain Empty", (0.5, 0.5, 0.5, 1.0))
+            PyImGui.end_child()
+            PyImGui.pop_style_color(1)
+            
+            PyImGui.same_line(0, 10)
+            
+            # Chain control buttons
+            if self.skill_chain:
+                if not self.chain_running and not self.capture_running:
+                    if PyImGui.button(IconsFontAwesome5.ICON_PLAY + " Start Chain", 120, 25):
+                    # Convert chain step names back to EliteSkill objects
+                        chain_skills = []
+                        for step_name in self.skill_chain:
+                            skill = next((s for s in ELITE_SKILLS if s.step_name == step_name), None)
+                            if skill:
+                                chain_skills.append(skill)
+                        self.start_skill_chain(chain_skills)
+            PyImGui.same_line(0, 5)
+            
+            if PyImGui.button(IconsFontAwesome5.ICON_TRASH + " Clear Chain", 120, 25):
+                self.skill_chain = []
+                self._original_chain_size = 0  # Reset original chain size
+                ConsoleLog("SkillChain", "Chain cleared", log=True)
         
             
     def draw_status(self):
@@ -8580,13 +11673,32 @@ class EliteSkillsGUI:
         PyImGui.separator()
         PyImGui.text("Status Information:")
         
-        if self.capture_running:
+        if self.chain_running or self.capture_running:
             # Status indicator
-            PyImGui.text("Status: " + self._get_capture_status())
-            
-            # Current skill info
-            if self.selected_skill:
-                PyImGui.text(f"Skill: {self.selected_skill.display_name} ({self.selected_skill.profession.value})")
+            if self.chain_running:
+                PyImGui.text("Status: Chain Running")
+                current_skill = self._get_current_chain_skill()
+                if current_skill:
+                    PyImGui.text(f"Current Skill: {current_skill.display_name} ({current_skill.profession.value})")
+                # Use original chain size for total, calculate completed from remaining
+                total_chainable = self._original_chain_size
+                if total_chainable > 0:
+                    remaining_chainable = sum(1 for step_name in self._active_step_names 
+                                          if (skill := next((s for s in ELITE_SKILLS if s.step_name == step_name), None)))
+                    # Subtract 1 from remaining if there's a current skill being worked on
+                    current_step = self.skill_chain[0] if self.skill_chain else None
+                    if current_step:
+                        current_skill = next((s for s in ELITE_SKILLS if s.step_name == current_step), None)
+                        if current_skill:
+                            remaining_chainable = max(0, remaining_chainable - 1)
+                    completed_chainable = total_chainable - remaining_chainable
+                    PyImGui.text(f"Chain Progress: {completed_chainable} / {total_chainable} skills")
+                else:
+                    PyImGui.text("Chain Progress: 0 / 0 skills")
+            else:
+                PyImGui.text("Status: " + self._get_capture_status())
+                if self.selected_skill:
+                    PyImGui.text(f"Skill: {self.selected_skill.display_name} ({self.selected_skill.profession.value})")
             
             # Progress information
             progress_text = self._get_progress_text()
@@ -8605,12 +11717,212 @@ class EliteSkillsGUI:
         else:
             PyImGui.text("Status: Idle")
             PyImGui.text("Progress: Ready to capture")
-            if self.selected_skill:
+            if self.skill_chain:
+                PyImGui.text(f"Chain: {len(self.skill_chain)} skills ready")
+            elif self.selected_skill:
                 PyImGui.text(f"Selected: {self.selected_skill.display_name}")
         
         # Bot state information
         current_state = self._get_current_state_info()
         PyImGui.text(f"Current State: {current_state}")
+    
+    def _find_skill_builder_fn(self, step_name: str):
+        """Find the skill builder function by step name"""
+        for state in self.bot.config.FSM.states[:self._original_state_count]:
+            if state.name == step_name and hasattr(state, "coroutine_fn"):
+                return state.coroutine_fn
+        return None
+    
+    def _run_skill_builder(self, builder_fn) -> None:
+        """Run a skill builder function to add its states to FSM"""
+        gen = builder_fn()
+        try:
+            while True:
+                next(gen)
+        except StopIteration:
+            pass
+    
+    def _clean_chain_states(self):
+        """Clean up dynamic chain states from FSM"""
+        fsm = self.bot.config.FSM
+        if len(fsm.states) > self._original_state_count:
+            if self._original_state_count > 0:
+                fsm.states[self._original_state_count - 1].next_state = self._last_original_next
+            del fsm.states[self._original_state_count:]
+        fsm.RemoveAllManagedCoroutines()
+        if fsm.current_state and fsm.current_state not in fsm.states:
+            fsm.current_state = None
+    
+    def _start_dynamic_states(self) -> bool:
+        """Start the dynamic states execution"""
+        fsm = self.bot.config.FSM
+        if len(fsm.states) <= self._original_state_count:
+            return False
+
+        if self._original_state_count > 0:
+            fsm.states[self._original_state_count - 1].next_state = self._last_original_next
+
+        fsm.states[-1].next_state = None
+
+        first_dynamic = fsm.states[self._original_state_count]
+        self.bot.config.fsm_running = True
+        fsm.finished = False
+        fsm.paused = False
+        fsm._cleanup_coroutines()
+        fsm.current_state = first_dynamic
+        first_dynamic.reset()
+        first_dynamic.enter()
+        return True
+    
+    def add_skill_to_chain(self, skill: 'EliteSkill'):
+        """Add a single skill to the chain"""
+        if is_skill_unlocked(skill.skill_id):
+            ConsoleLog("SkillChain", f"Skill {skill.display_name} already captured, skipping", log=True)
+            return 
+        if skill.step_name not in self.skill_chain:
+            self.skill_chain.append(skill.step_name)
+            ConsoleLog("SkillChain", f"Added {skill.display_name} to chain ({len(self.skill_chain)} skills total)", log=True)
+        else:
+            ConsoleLog("SkillChain", f"{skill.display_name} already in chain", log=True)
+    
+    def _build_single_skill(self, step_name: str) -> bool:
+        """Build a single skill's states into the FSM. Returns True if built."""
+        skill = next((s for s in ELITE_SKILLS if s.step_name == step_name), None)
+        if skill and is_skill_unlocked(skill.skill_id):
+            ConsoleLog("SkillChain", f"Skill {skill.display_name} already captured, skipping", log=True)
+            return False
+
+        builder_fn = self._find_skill_builder_fn(step_name)
+        if builder_fn is None:
+            ConsoleLog("SkillChain", f"No builder found for {step_name}, skipping", log=True)
+            return False
+
+        fsm = self.bot.config.FSM
+        range_start = len(fsm.states)
+        self.bot.States.AddHeader(skill.display_name if skill else step_name)
+        self._run_skill_builder(builder_fn)
+        range_end = len(fsm.states) - 1
+
+        # Store/extend ranges tracking
+        if len(self._chain_skill_ranges) < len(self.skill_chain):
+            self._chain_skill_ranges.append((range_start, range_end))
+        else:
+            # Update existing range for retry
+            idx = self.skill_chain.index(step_name)
+            self._chain_skill_ranges[idx] = (range_start, range_end)
+
+        return True
+
+    def _is_skill_captured(self, skill_id: int) -> bool:
+        """Check if a skill was captured, using unlocked list with skill-bar fallback for server sync delays."""
+        if is_skill_unlocked(skill_id):
+            return True
+        # Fallback: skill may be on the skill bar but not yet synced to the server unlock list
+        try:
+            for slot in range(1, 9):
+                skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+                if skill_data and skill_data.id == skill_id:
+                    return True
+        except:
+            pass
+        return False
+
+    def _advance_chain(self):
+        """Advance to the next skill in the chain when current skill completes."""
+        if not self.chain_running or not self.skill_chain:
+            return
+
+        # Check if current skill was captured
+        current_step = self.skill_chain[0] if self.skill_chain else None
+        if current_step:
+            skill = next((s for s in ELITE_SKILLS if s.step_name == current_step), None)
+            if skill and self._is_skill_captured(skill.skill_id):
+                ConsoleLog("SkillChain", f"Skill {skill.display_name} captured successfully, advancing chain", log=True)
+                # Remove from active list and chain
+                if current_step in self._active_step_names:
+                    self._active_step_names.remove(current_step)
+                self.skill_chain.pop(0)
+            else:
+                # Not captured - retry the same skill
+                unlocked_check = is_skill_unlocked(skill.skill_id) if skill else False
+                skillbar_check = False
+                if skill:
+                    try:
+                        for slot in range(1, 9):
+                            skill_data = GLOBAL_CACHE.SkillBar.GetSkillData(slot)
+                            if skill_data and skill_data.id == skill.skill_id:
+                                skillbar_check = True
+                                break
+                    except:
+                        pass
+                ConsoleLog("SkillChain", f"Skill {skill.display_name if skill else current_step} not captured, will retry. Unlocked: {unlocked_check}, SkillBar: {skillbar_check}", log=True)
+                # Keep it at the front of the chain for retry
+        else:
+            self.skill_chain.pop(0)
+
+        # Clean and build next skill
+        self._clean_chain_states()
+
+        if not self.skill_chain:
+            ConsoleLog("SkillChain", "All skills in chain completed", log=True)
+            self._chain_all_done = True
+            self.chain_running = False
+            return
+
+        # Build the next skill (or retry current)
+        next_step = self.skill_chain[0]
+        if self._build_single_skill(next_step):
+            if self._start_dynamic_states():
+                ConsoleLog("SkillChain", f"Started skill: {next_step}", log=True)
+            else:
+                ConsoleLog("SkillChain", f"Failed to start skill: {next_step}", log=True)
+                self.chain_running = False
+        else:
+            # Skill was already captured or no builder - skip it
+            if next_step in self._active_step_names:
+                self._active_step_names.remove(next_step)
+            self.skill_chain.pop(0)
+            # Try next skill recursively
+            self._advance_chain()
+
+    def start_skill_chain(self, skills: List['EliteSkill']):
+        """Start chained capture for multiple skills, running one at a time."""
+        if not skills:
+            ConsoleLog("SkillChain", "No available skills to capture", log=True)
+            return
+
+        ConsoleLog("SkillChain", f"Starting skill chain for {len(skills)} skills", log=True)
+
+        # Convert skills to step names
+        self.skill_chain = [skill.step_name for skill in skills]
+        self._original_chain_size = len(skills)  # Store original chain size
+
+        self.bot.Stop()
+        self._clean_chain_states()
+        self.chain_running = False
+        self._chain_all_done = False
+        self._chain_skill_ranges = []
+        self._active_step_names = list(self.skill_chain)
+
+        # Build and start only the first skill
+        first_step = self.skill_chain[0] if self.skill_chain else None
+        if first_step and self._build_single_skill(first_step):
+            if self._start_dynamic_states():
+                self.chain_running = True
+                ConsoleLog("SkillChain", f"Chain started with {first_step}", log=True)
+            else:
+                ConsoleLog("SkillChain", "Failed to start first skill in chain", log=True)
+        elif first_step:
+            # First skill already captured, skip and try next
+            if first_step in self._active_step_names:
+                self._active_step_names.remove(first_step)
+            self.skill_chain.pop(0)
+            if self.skill_chain:
+                next_skills = [s for s in (next((e for e in ELITE_SKILLS if e.step_name == sn), None) for sn in self.skill_chain) if s is not None]
+                if next_skills:
+                    self.start_skill_chain(next_skills)
+            else:
+                self._chain_all_done = True
     
     def _get_capture_status(self) -> str:
         """Get current capture status based on bot state"""
@@ -8688,18 +12000,57 @@ class EliteSkillsGUI:
         
         return "Unknown location"
     
-    def _get_current_state_info(self) -> str:
+    def _get_current_chain_skill(self):
+        """Get the current skill being captured in the chain"""
+        if not self.chain_running or not self._active_step_names:
+            return None
+        
+        # Use _chain_skill_ranges to find which skill's state range contains the current FSM state
+        try:
+            fsm = self.bot.config.FSM
+            if fsm.current_state and fsm.states:
+                try:
+                    current_idx = fsm.states.index(fsm.current_state)
+                except ValueError:
+                    current_idx = -1
+                
+                if current_idx >= 0:
+                    # Find which skill's range contains this state index
+                    for i, step_name in enumerate(self.skill_chain):
+                        if i < len(self._chain_skill_ranges):
+                            range_start, range_end = self._chain_skill_ranges[i]
+                            if range_start >= 0 and range_start <= current_idx <= range_end:
+                                skill = next((s for s in ELITE_SKILLS if s.step_name == step_name), None)
+                                if skill:
+                                    return skill
+        except:
+            pass
+        
+        # Fallback to header state check
+        try:
+            if self.bot and hasattr(self.bot, 'config') and self.bot.config.FSM.current_state:
+                current_state_name = self.bot.config.FSM.current_state.name or ""
+                if current_state_name.startswith("[H]"):
+                    skill_name_from_state = current_state_name[3:]
+                    for skill in ELITE_SKILLS:
+                        if skill.display_name == skill_name_from_state:
+                            return skill
+        except:
+            pass
+        
+        # Final fallback: first remaining skill
+        for step_name in self._active_step_names:
+            skill = next((s for s in ELITE_SKILLS if s.step_name == step_name), None)
+            if skill:
+                return skill
+        
+        return None
+    
+    def _get_current_state_info(self):
         """Get current bot state information"""
         try:
-            # Try to get current FSM state
-            if hasattr(self.bot, 'config') and hasattr(self.bot.config, 'FSM'):
-                fsm = self.bot.config.FSM
-                if hasattr(fsm, 'current_state') and fsm.current_state:
-                    return fsm.current_state.name or str(fsm.current_state)
-            
-            # Try to get from bot states using alternative methods
-            if hasattr(self.bot, 'States'):
-                states = self.bot.States
+            if self.bot and hasattr(self.bot, 'config') and self.bot.config.FSM.current_state:
+                return self.bot.config.FSM.current_state.name or "Unknown"
                 # Try multiple possible methods
                 for method_name in ['GetCurrentStepName', 'get_current_step', 'current_step', 'get_step']:
                     if hasattr(states, method_name):
@@ -9054,11 +12405,8 @@ bot.States.AddCustomState(DefyPain, "[H]Defy Pain")
 bot.States.AddCustomState(DevastatingHammer, "[H]Devastating Hammer")
 bot.States.AddCustomState(DragonSlash, "[H]Dragon Slash")
 bot.States.AddCustomState(DwarvenBattleStance, "[H]Dwarven Battle Stance")
-#bot.States.AddCustomState(EarthShaker, "[H]Earth Shaker")
 bot.States.AddCustomState(EnragedSmash, "[H]Enraged Smash")
-#bot.States.AddCustomState(Flourish, "[H]Flourish")
 bot.States.AddCustomState(ForcefulBlow, "[H]Forceful Blow")
-#bot.States.AddCustomState(GladiatorsDefense, "[H]Gladiator's Defense")
 bot.States.AddCustomState(Headbutt, "[H]Headbutt")
 bot.States.AddCustomState(HundredBlades, "[H]Hundred Blades")
 bot.States.AddCustomState(MagehunterStrike, "[H]Magehunter Strike")
@@ -9111,6 +12459,8 @@ bot.States.AddCustomState(Crippling_Anguish, "[H]Crippling Anguish")
 bot.States.AddCustomState(Ravenous_Gaze, "[H]Ravenous Gaze")
 bot.States.AddCustomState(Signet_of_Suffering, "[H]Signet of Suffering")
 bot.States.AddCustomState(Lingering_Curse, "[H]Lingering Curse")
+bot.States.AddCustomState(Life_Transfer, "[H]Life Transfer")
+bot.States.AddCustomState(Thunderclap, "[H]Thunderclap")
 bot.States.AddCustomState(Vampiric_Spirit, "[H]Vampiric Spirit")
 bot.States.AddCustomState(Shockwave, "[H]Shockwave")
 bot.States.AddCustomState(Soul_Bind, "[H]Soul Bind")
@@ -9126,9 +12476,89 @@ bot.States.AddCustomState(Attuned_Was_Songkai, "[H]Attuned Was Songkai")
 bot.States.AddCustomState(Clamor_of_Souls, "[H]Clamor of Souls")
 bot.States.AddCustomState(Caretakers_Charge, "[H]Caretaker's Charge")
 bot.States.AddCustomState(Consume_Soul, "[H]Consume Soul")
-
-
-
+bot.States.AddCustomState(Barrage, "[H]Barrage")
+bot.States.AddCustomState(Burning_Arrow, "[H]Burning Arrow")
+bot.States.AddCustomState(Crippling_Shot, "[H]Crippling Shot")
+bot.States.AddCustomState(Enraged_Lunge, "[H]Enraged Lunge")
+bot.States.AddCustomState(Equinox, "[H]Equinox")
+bot.States.AddCustomState(Escape, "[H]Escape")
+bot.States.AddCustomState(Experts_Dexterity, "[H]Expert's Dexterity")
+bot.States.AddCustomState(Famine, "[H]Famine")
+bot.States.AddCustomState(Ferocious_Strike, "[H]Ferocious Strike")
+bot.States.AddCustomState(WieldersZeal, "[H]Wielder's Zeal")
+bot.States.AddCustomState(SimpleThievery, "[H]Simple Thievery")
+bot.States.AddCustomState(DestructiveWasGlaive, "[H]Destructive Was Glaive")
+bot.States.AddCustomState(GraspingWasKuurong, "[H]Grasping Was Kuurong")
+bot.States.AddCustomState(OfferingOfSpirit, "[H]Offering of Spirit")
+bot.States.AddCustomState(Preservation, "[H]Preservation")
+bot.States.AddCustomState(ReclaimEssence, "[H]Reclaim Essence")
+bot.States.AddCustomState(RitualLord, "[H]Ritual Lord")
+bot.States.AddCustomState(SignetOfGhostlyMight, "[H]Signet of Ghostly Might")
+bot.States.AddCustomState(SpiritChanneling, "[H]Spirit Channeling")
+bot.States.AddCustomState(SpiritLightWeapon, "[H]Spirit Light Weapon")
+bot.States.AddCustomState(SpiritsStrength, "[H]Spirit's Strength")
+bot.States.AddCustomState(TranquilWasTanasen, "[H]Tranquil Was Tanasen")
+bot.States.AddCustomState(VengefulWasKhanhei, "[H]Vengeful Was Khanhei")
+bot.States.AddCustomState(Wanderlust, "[H]Wanderlust")
+bot.States.AddCustomState(WeaponOfFury, "[H]Weapon of Fury")
+bot.States.AddCustomState(WeaponOfQuickening, "[H]Weapon of Quickening")
+bot.States.AddCustomState(GlassArrows, "[H]Glass Arrows")
+bot.States.AddCustomState(HealAsOne, "[H]Heal as One")
+bot.States.AddCustomState(InfuriatingHeat, "[H]Infuriating Heat")
+bot.States.AddCustomState(Lacerate, "[H]Lacerate")
+bot.States.AddCustomState(MagebaneShot, "[H]Magebane Shot")
+bot.States.AddCustomState(MarksmansWager, "[H]Marksman's Wager")
+bot.States.AddCustomState(MelandrusArrows, "[H]Melandru's Arrows")
+bot.States.AddCustomState(MelandrusShot, "[H]Melandru's Shot")
+bot.States.AddCustomState(OathShot, "[H]Oath Shot")
+bot.States.AddCustomState(QuickShot, "[H]Quick Shot")
+bot.States.AddCustomState(Quicksand, "[H]Quicksand")
+bot.States.AddCustomState(RampageAsOne, "[H]Rampage as One")
+bot.States.AddCustomState(ScavengersFocus, "[H]Scavenger's Focus")
+bot.States.AddCustomState(SmokeTrap, "[H]Smoke Trap")
+bot.States.AddCustomState(SpikeTrap, "[H]Spike Trap")
+bot.States.AddCustomState(StrikeAsOne, "[H]Strike as One")
+bot.States.AddCustomState(TrappersFocus, "[H]Trapper's Focus")
+bot.States.AddCustomState(Double_Dragon, "[H]Double Dragon")
+bot.States.AddCustomState(Blinding_Surge, "[H]Blinding Surge")
+bot.States.AddCustomState(Elemental_Attunement, "[H]Elemental Attunement")
+bot.States.AddCustomState(Gust, "[H]Gust")
+bot.States.AddCustomState(Lightning_Surge, "[H]Lightning Surge")
+bot.States.AddCustomState(Ride_the_Lightning, "[H]Ride the Lightning")
+bot.States.AddCustomState(Sandstorm, "[H]Sandstorm")
+bot.States.AddCustomState(Stone_Sheath, "[H]Stone Sheath")
+bot.States.AddCustomState(Unsteady_Ground, "[H]Unsteady Ground")
+bot.States.AddCustomState(Energy_Boon, "[H]Energy Boon")
+bot.States.AddCustomState(Ether_Prism, "[H]Ether Prism")
+bot.States.AddCustomState(Ether_Renewal, "[H]Ether Renewal")
+bot.States.AddCustomState(Mind_Blast, "[H]Mind Blast")
+bot.States.AddCustomState(Savannah_Heat, "[H]Savanna Heat")
+bot.States.AddCustomState(Searing_Flames, "[H]Searing Flames")
+bot.States.AddCustomState(Star_Burst, "[H]Star Burst")
+bot.States.AddCustomState(Icy_Shackles, "[H]Icy Shackles")
+bot.States.AddCustomState(Mind_Freeze, "[H]Mind Freeze")
+bot.States.AddCustomState(Mirror_of_Ice, "[H]Mirror of Ice")
+bot.States.AddCustomState(Shatterstone, "[H]Shatterstone")
+bot.States.AddCustomState(Water_Trident, "[H]Water Trident")
+bot.States.AddCustomState(Enchanters_Conundrum, "[H]Enchanter's Conundrum")
+bot.States.AddCustomState(Hex_Eater_Vortex, "[H]Hex Eater Vortex")
+bot.States.AddCustomState(Power_Block, "[H]Power Block")
+bot.States.AddCustomState(Power_Flux, "[H]Power Flux")
+bot.States.AddCustomState(Psychic_Distraction, "[H]Psychic Distraction")
+bot.States.AddCustomState(Arcane_Languor, "[H]Arcane Languor")
+bot.States.AddCustomState(Keystone_Signet, "[H]Keystone Signet")
+bot.States.AddCustomState(Mantra_of_Recovery, "[H]Mantra of Recovery")
+bot.States.AddCustomState(Stolen_Speed, "[H]Stolen Speed")
+bot.States.AddCustomState(Symbols_of_Inspiration, "[H]Symbols of Inspiration")
+bot.States.AddCustomState(Air_of_Disenchantment, "[H]Air of Disenchantment")
+bot.States.AddCustomState(Recurring_Insecurity, "[H]Recurring Insecurity")
+bot.States.AddCustomState(Shared_Burden, "[H]Shared Burden")
+bot.States.AddCustomState(Signet_of_Illusions, "[H]Signet of Illusions")
+bot.States.AddCustomState(Energy_Drain, "[H]Energy Drain")
+bot.States.AddCustomState(Extend_Conditions, "[H]Extend Conditions")
+bot.States.AddCustomState(Lyssas_Aura, "[H]Lyssa's Aura")
+bot.States.AddCustomState(Echo, "[H]Echo")
+bot.States.AddCustomState(Expel_Hexes, "[H]Expel Hexes")
 # Record base builder state count (used to append/remove dynamic sub-steps)
 gui._original_state_count = len(bot.config.FSM.states)
 gui._last_original_next = bot.config.FSM.states[-1].next_state if bot.config.FSM.states else None
@@ -9141,19 +12571,46 @@ def Draw_Window():
 def main():
     bot.Update()
     Draw_Window()
-    
+
     # Check if capture completed and reset flag
     if gui.capture_running:
         try:
             fsm = bot.config.FSM
+            capture_done = False
             if hasattr(fsm, 'finished') and fsm.finished:
-                gui.capture_running = False
-                gui.capture_start_time = None
-                print(f"Capture completed for {gui.selected_skill.display_name if gui.selected_skill else 'unknown skill'}")
+                capture_done = True
             elif hasattr(fsm, 'current_state') and fsm.current_state is None:
-                gui.capture_running = False
-                gui.capture_start_time = None
-                print(f"Capture completed for {gui.selected_skill.display_name if gui.selected_skill else 'unknown skill'}")
+                capture_done = True
+
+            if capture_done:
+                # Verify skill was actually captured; retry if not
+                if gui.selected_skill and not gui._is_skill_captured(gui.selected_skill.skill_id):
+                    ConsoleLog("Capture", f"{gui.selected_skill.display_name} not captured, retrying...", log=True)
+                    print(f"{gui.selected_skill.display_name} not captured, retrying...")
+                    gui.capture_running = False
+                    gui._start_capture()
+                else:
+                    gui.capture_running = False
+                    gui.capture_start_time = None
+                    print(f"Capture completed for {gui.selected_skill.display_name if gui.selected_skill else 'unknown skill'}")
+        except:
+            pass
+
+    # Check if chain mode skill completed and advance to next
+    if gui.chain_running:
+        try:
+            fsm = bot.config.FSM
+            chain_finished = False
+            if hasattr(fsm, 'finished') and fsm.finished:
+                chain_finished = True
+            elif hasattr(fsm, 'current_state') and fsm.current_state is None:
+                chain_finished = True
+
+            if chain_finished:
+                ConsoleLog("SkillChain", "Current skill chain step completed, waiting before advancing...", log=True)
+                import time
+                time.sleep(3)
+                gui._advance_chain()
         except:
             pass
 

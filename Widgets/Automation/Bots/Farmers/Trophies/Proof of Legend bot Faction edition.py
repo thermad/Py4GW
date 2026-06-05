@@ -92,11 +92,10 @@ def ensure_botting_tree() -> BottingTree:
             repeat=True,
             reset=False,
             configure_fn=lambda tree: tree.Config.ConfigureUpkeepTrees(
-                disable_looting=True,
+                looting_enabled=False,
                 restore_isolation_on_stop=True,
                 enable_outpost_imp_service=True,
                 enable_explorable_imp_service=True,
-                imp_log=False,
                 enable_party_wipe_recovery=True,
             ),
         )
@@ -125,7 +124,7 @@ def AddHenchmen() -> BehaviorTree:
         return Sequence(
             "Add Henchmen",
             [
-                BT.AddHenchmanList(henchmen_list),
+                BT.CreateParty(henchman_ids=henchmen_list),
                 BT.Wait(1000),
             ],
         )

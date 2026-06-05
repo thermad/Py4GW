@@ -8,8 +8,15 @@ from Py4GWCoreLib.routines_src.BehaviourTrees import BehaviorTree
 from Py4GWCoreLib import ActionQueueManager, LootConfig, Range, SharedCommandType, ThrottledTimer, Utils
 
 from .cache_data import CacheData
-from .follow.follower_runtime import FollowExecutionState, execute_follower_follow
+from .follow.follower_runtime import (
+    FollowExecutionState,
+    execute_follower_follow,
+    get_follow_destination_distance,
+    is_follow_recovery_active,
+)
+from . import resurrection_scroll
 from .settings import Settings
+from .utils import DrawSharedMemoryFlags
 
 
 class HeroAIHeadlessTree:
@@ -37,12 +44,32 @@ class HeroAIHeadlessTree:
         index, message = GLOBAL_CACHE.ShMem.PreviewNextMessage(account_email)
         return bool(index != -1 and message and message.Command == SharedCommandType.PickUpLoot)
 
+    def _consume_headless_looting_control_messages(self) -> None:
+        account_email = str(Player.GetAccountEmail() or '').strip()
+        if not account_email:
+            return
+
+        latest_enabled: bool | None = None
+        for message_index, message in GLOBAL_CACHE.ShMem.GetAllMessages():
+            if message is None:
+                continue
+            if not getattr(message, 'Active', False):
+                continue
+            if str(getattr(message, 'ReceiverEmail', '') or '').strip() != account_email:
+                continue
+            if int(getattr(message, 'Command', SharedCommandType.NoCommand)) != int(SharedCommandType.SetHeadlessLooting):
+                continue
+            latest_enabled = bool(int(getattr(message, 'Params', (1, 0, 0, 0))[0] or 0))
+            GLOBAL_CACHE.ShMem.MarkMessageAsFinished(account_email, message_index)
+
+        if latest_enabled is not None:
+            self._headless_looting_enabled = latest_enabled
+
     def _is_looting_routine_active(self) -> bool:
-        options = self.cached_data.account_options
-        if not options or not options.Looting:
+        if not self._headless_looting_enabled:
             return False
 
-        if self.cached_data.data.in_aggro:
+        if self.cached_data.IsHeadlessCombatPauseActive():
             return False
 
         if not self._has_active_pick_up_loot_message():
@@ -54,12 +81,15 @@ class HeroAIHeadlessTree:
         return True
 
     def _handle_looting(self) -> BehaviorTree.NodeState:
-        options = self.cached_data.account_options
-        if not options or not options.Looting:
+        if not self._headless_looting_enabled:
             self.cached_data.in_looting_routine = False
             return BehaviorTree.NodeState.FAILURE
 
-        if self.cached_data.data.in_aggro:
+        if is_follow_recovery_active(self.cached_data, self._follow_state):
+            self.cached_data.in_looting_routine = False
+            return BehaviorTree.NodeState.FAILURE
+
+        if self.cached_data.IsHeadlessCombatPauseActive():
             self.cached_data.in_looting_routine = False
             return BehaviorTree.NodeState.FAILURE
 
@@ -114,7 +144,10 @@ class HeroAIHeadlessTree:
         if not options or not options.Combat:
             return False
 
-        if self.cached_data.data.in_aggro:
+        if self.cached_data.IsHeadlessCombatPauseActive():
+            return False
+
+        if is_follow_recovery_active(self.cached_data, self._follow_state):
             return False
 
         player_agent_id = Player.GetAgentID()
@@ -130,7 +163,10 @@ class HeroAIHeadlessTree:
         if not options or not options.Combat:
             return False
 
-        if not self.cached_data.data.in_aggro:
+        if is_follow_recovery_active(self.cached_data, self._follow_state):
+            return False
+
+        if not self.cached_data.IsHeadlessCombatPauseActive():
             return False
 
         self.heroai_build.set_cached_data(self.cached_data)
@@ -138,20 +174,7 @@ class HeroAIHeadlessTree:
         return self.heroai_build.DidTickSucceed()
 
     def _distance_to_destination(self) -> float:
-        account = GLOBAL_CACHE.ShMem.GetAccountDataFromEmail(self.cached_data.account_email)
-        options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsFromEmail(self.cached_data.account_email)
-
-        if not account or not options:
-            return 0.0
-
-        if options.IsFlagged:
-            if account.AgentPartyData.PartyPosition == 0:
-                destination = (options.AllFlag.x, options.AllFlag.y)
-            else:
-                destination = (options.FlagPos.x, options.FlagPos.y)
-        else:
-            destination = Agent.GetXY(GLOBAL_CACHE.Party.GetPartyLeaderID())
-        return Utils.Distance(destination, Agent.GetXY(Player.GetAgentID()))
+        return get_follow_destination_distance(self.cached_data)
 
     def _is_user_interrupting(self) -> bool:
         return False
@@ -169,6 +192,27 @@ class HeroAIHeadlessTree:
         if self._looting_node is None:
             return False
         return self._looting_node.last_state == BehaviorTree.NodeState.RUNNING
+
+    def SetLootingEnabled(self, enabled: bool) -> None:
+        self._headless_looting_enabled = bool(enabled)
+
+    def IsLootingEnabled(self) -> bool:
+        return bool(self._headless_looting_enabled)
+
+    def SetResurrectionScrollEnabled(self, enabled: bool) -> None:
+        Settings().set_account_resurrection_scroll_enabled(bool(enabled))
+
+    def IsResurrectionScrollEnabled(self) -> bool:
+        return bool(Settings().get_account_resurrection_scroll_enabled())
+
+    def GetBuildContract(self):
+        return self.heroai_build.GetBuildContract()
+
+    def GetBuildContractName(self) -> str:
+        contract_build = self.GetBuildContract()
+        if contract_build is None:
+            return ""
+        return str(getattr(contract_build, "build_name", "") or contract_build.__class__.__name__)
 
     def initialize(self) -> bool:
         if not Routines.Checks.Map.MapValid():
@@ -202,10 +246,16 @@ class HeroAIHeadlessTree:
         return True
 
     def update(self) -> None:
+        self._consume_headless_looting_control_messages()
+        resurrection_scroll.tick()
         self.cached_data.Update()
 
     def tick(self):
         self.update()
+        try:
+            DrawSharedMemoryFlags()
+        except Exception:
+            pass
         if self.initialize():
             return self.tree.tick()
 
@@ -260,7 +310,10 @@ class HeroAIHeadlessTree:
                 ),
                 BehaviorTree.ConditionNode(
                     name="DistanceSafe",
-                    condition_fn=lambda: self._distance_to_destination() < Range.SafeCompass.value,
+                    condition_fn=lambda: (
+                        self._distance_to_destination() < Range.SafeCompass.value
+                        or is_follow_recovery_active(self.cached_data, self._follow_state)
+                    ),
                 ),
                 BehaviorTree.ConditionNode(
                     name="NotKnockedDown",
@@ -274,7 +327,10 @@ class HeroAIHeadlessTree:
             condition_fn=lambda: (
                 BehaviorTree.NodeState.RUNNING
                 if (
-                    self.cached_data.combat_handler.InCastingRoutine()
+                    (
+                        self.cached_data.combat_handler.InCastingRoutine()
+                        and not is_follow_recovery_active(self.cached_data, self._follow_state)
+                    )
                     or Agent.IsCasting(Player.GetAgentID())
                 )
                 else BehaviorTree.NodeState.SUCCESS

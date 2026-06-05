@@ -2,6 +2,8 @@ import math
 
 import HeroAI.globals as hero_globals
 import PyImGui
+from HeroAI import enemy_party
+from HeroAI import resurrection_scroll
 
 from Py4GWCoreLib import GLOBAL_CACHE, Agent, IconsFontAwesome5, ImGui, Map, Overlay, Range, Utils, WindowFrames, Color, ColorPalette, ConsoleLog, SharedCommandType
 from Py4GWCoreLib import Key, Keystroke, ThrottledTimer, UIManager
@@ -11,7 +13,6 @@ from Py4GWCoreLib.Player import Player
 
 from HeroAI.cache_data import CacheData
 from HeroAI.constants import NUMBER_OF_SKILLS
-from HeroAI.follow.vector_fields import load_follow_movement_config, save_follow_movement_config
 from HeroAI.utils import DrawFlagAll, DrawHeroFlag, IsHeroFlagged
 from HeroAI.windows import HeroAI_FloatingWindows, HeroAI_Windows
 from .constants import MAX_NUM_PLAYERS, NUMBER_OF_SKILLS
@@ -63,10 +64,10 @@ class HeroAI_BaseUI:
     follow_formations_ids: list[str] = []
     follow_formations_selected_index = 0
     follow_move_threshold_default = float(Range.Area.value)
-    follow_move_threshold_combat = float(Range.Touch.value)
+    follow_move_threshold_combat = float(Range.Adjacent.value)
     follow_move_threshold_flagged = 0.0
     follow_move_threshold_default_mode = "Area"
-    follow_move_threshold_combat_mode = "Touch"
+    follow_move_threshold_combat_mode = "Adjacent"
     follow_move_threshold_flagged_mode = "Zero"
     _build_match_timer = ThrottledTimer(750)
     _build_match_rows: list[tuple[int, str, int, int, str, str, str]] = []
@@ -157,6 +158,41 @@ class HeroAI_BaseUI:
         return options_by_party, accounts_by_party, options_by_party[0]
 
     @staticmethod
+    def _resolve_flag_display_slot(display_index: int) -> tuple[str, int]:
+        hero_count = int(GLOBAL_CACHE.Party.GetHeroCount() or 0)
+        if display_index <= 0:
+            return ("all", 0)
+        if display_index <= hero_count:
+            return ("hero", display_index)
+        return ("account", display_index - hero_count)
+
+    @staticmethod
+    def _is_flag_display_slot_flagged(
+        display_index: int,
+        options_by_party: list[HeroAIOptionStruct | None] | None = None,
+    ) -> bool:
+        if options_by_party is None:
+            options_by_party, _, _ = HeroAI_BaseUI._get_flag_option_pairs()
+
+        slot_kind, slot_index = HeroAI_BaseUI._resolve_flag_display_slot(display_index)
+
+        if slot_kind == "all":
+            leader_options = options_by_party[0]
+            return bool(leader_options is not None and leader_options.IsFlagged)
+
+        if slot_kind == "hero":
+            try:
+                return bool(GLOBAL_CACHE.Party.Heroes.IsHeroFlagged(slot_index))
+            except Exception:
+                return False
+
+        if slot_index < 0 or slot_index >= MAX_NUM_PLAYERS:
+            return False
+
+        options = options_by_party[slot_index]
+        return bool(options is not None and options.IsFlagged)
+
+    @staticmethod
     def _clear_all_flags(options_by_party: list[HeroAIOptionStruct | None] | None = None) -> None:
         party_heroes = GLOBAL_CACHE.Party.Heroes
         if options_by_party is None:
@@ -223,27 +259,27 @@ class HeroAI_BaseUI:
 
             if mouse_clicked:
                 capture_index = HeroAI_BaseUI.capture_hero_index
-                hero_count = GLOBAL_CACHE.Party.GetHeroCount()
+                slot_kind, slot_index = HeroAI_BaseUI._resolve_flag_display_slot(capture_index)
 
-                if 0 < capture_index <= hero_count and not HeroAI_BaseUI.capture_flag_all:
-                    agent_id = GLOBAL_CACHE.Party.Heroes.GetHeroAgentIDByPartyPosition(capture_index)
-                    GLOBAL_CACHE.Party.Heroes.FlagHero(agent_id, x, y)
-                    HeroAI_BaseUI.one_time_set_flag = True
-                else:
-                    if capture_index == 0:
-                        hero_ai_index = 0
-                        GLOBAL_CACHE.Party.Heroes.FlagAllHeroes(x, y)
-                    else:
-                        hero_ai_index = capture_index - hero_count
-
-                    options = options_by_party[hero_ai_index] if 0 <= hero_ai_index < MAX_NUM_PLAYERS else None
+                if slot_kind == "all":
+                    GLOBAL_CACHE.Party.Heroes.FlagAllHeroes(x, y)
+                    options = options_by_party[0]
                     if options is not None:
-                        if capture_index == 0:
-                            options.AllFlag.x = x
-                            options.AllFlag.y = y
-                        else:
-                            options.FlagPos.x = x
-                            options.FlagPos.y = y
+                        options.AllFlag.x = x
+                        options.AllFlag.y = y
+                        options.IsFlagged = True
+                        options.FlagFacingAngle = Agent.GetRotationAngle(GLOBAL_CACHE.Party.GetPartyLeaderID())
+                    HeroAI_BaseUI.one_time_set_flag = True
+                elif slot_kind == "hero":
+                    agent_id = int(GLOBAL_CACHE.Party.Heroes.GetHeroAgentIDByPartyPosition(slot_index) or 0)
+                    if agent_id > 0 and not HeroAI_BaseUI.capture_flag_all:
+                        GLOBAL_CACHE.Party.Heroes.FlagHero(agent_id, x, y)
+                        HeroAI_BaseUI.one_time_set_flag = True
+                else:
+                    options = options_by_party[slot_index] if 0 <= slot_index < MAX_NUM_PLAYERS else None
+                    if options is not None:
+                        options.FlagPos.x = x
+                        options.FlagPos.y = y
                         options.IsFlagged = True
                         options.FlagFacingAngle = Agent.GetRotationAngle(GLOBAL_CACHE.Party.GetPartyLeaderID())
                     HeroAI_BaseUI.one_time_set_flag = True
@@ -410,9 +446,9 @@ class HeroAI_BaseUI:
 
     @staticmethod
     def DrawButtonBar(cached_data: CacheData):
-        btn_size = 23
+        btn_size = 30
         ImGui.push_font("Regular", 10)
-        if PyImGui.begin_child("ControlPanelChild", (215, 0), False, PyImGui.WindowFlags.AlwaysAutoResize):
+        if PyImGui.begin_child("ControlPanelChild", (250, 0), False, PyImGui.WindowFlags.AlwaysAutoResize):
             if PyImGui.begin_table("MessagingTable", 5):
                 PyImGui.table_next_row()
                 PyImGui.table_next_column()
@@ -502,21 +538,6 @@ class HeroAI_BaseUI:
                     if account_data is None:
                         return
 
-                    party_id = account_data.AgentPartyData.PartyID
-                    map_id = account_data.AgentData.Map.MapID
-                    map_region = account_data.AgentData.Map.Region
-                    map_district = account_data.AgentData.Map.District
-                    map_language = account_data.AgentData.Map.Language
-
-                    def on_same_map_and_party(account: AccountStruct) -> bool:
-                        return (
-                            account.AgentPartyData.PartyID == party_id
-                            and account.AgentData.Map.MapID == map_id
-                            and account.AgentData.Map.Region == map_region
-                            and account.AgentData.Map.District == map_district
-                            and account.AgentData.Map.Language == map_language
-                        )
-
                     all_accounts = [account for account in cached_data.party.accounts.values()]
                     lowest_party_index_account = min(all_accounts, key=lambda account: account.AgentPartyData.PartyPosition, default=None)
                     if lowest_party_index_account is None:
@@ -536,6 +557,8 @@ class HeroAI_BaseUI:
                 ImGui.pop_font()
                 ImGui.show_tooltip("Pick up Loot")
                 ImGui.push_font("Regular", 10)
+                PyImGui.same_line(0, -1)
+
                 PyImGui.end_table()
 
             PyImGui.separator()
@@ -545,19 +568,23 @@ class HeroAI_BaseUI:
 
                 from HeroAI import ui
 
-                v = ui.is_base_configure_consumables_window_open()
-                new_v = ImGui.toggle_button(
-                    label=f"{IconsFontAwesome5.ICON_CANDY_CANE}##consumables",
-                    v=v,
-                    width=btn_size,
-                    height=btn_size,
-                )
-                if new_v != v:
-                    ui.show_base_configure_consumables_window()
-                ImGui.pop_font()
-                ImGui.show_tooltip("Consumables")
-                ImGui.push_font("Regular", 10)
-                PyImGui.same_line(0, -1)
+                is_explorable = Map.IsExplorable()
+                is_outpost = Map.IsOutpost()
+
+                if is_explorable:
+                    v = ui.is_base_configure_consumables_window_open()
+                    new_v = ImGui.toggle_button(
+                        label=f"{IconsFontAwesome5.ICON_CANDY_CANE}##consumables",
+                        v=v,
+                        width=btn_size,
+                        height=btn_size,
+                    )
+                    if new_v != v:
+                        ui.show_base_configure_consumables_window()
+                    ImGui.pop_font()
+                    ImGui.show_tooltip("Consumables")
+                    ImGui.push_font("Regular", 10)
+                    PyImGui.same_line(0, -1)
 
                 fv = HeroAI_BaseUI.show_follow_formations_quick_window
                 new_fv = ImGui.toggle_button(
@@ -573,30 +600,81 @@ class HeroAI_BaseUI:
                 ImGui.push_font("Regular", 10)
                 PyImGui.same_line(0, -1)
 
-                fv = ui.is_party_window_open()
-                new_fv = ImGui.toggle_button(
-                    label=f"{IconsFontAwesome5.ICON_PEOPLE_GROUP}##open_party_window",
-                    v=fv,
-                    width=btn_size,
-                    height=btn_size,
-                )
-                if new_fv != fv:
-                    Keystroke.PressAndRelease(Key.P.value)
-                ImGui.pop_font()
-                ImGui.show_tooltip("Open Party Window")
-                ImGui.push_font("Regular", 10)
-                PyImGui.same_line(0, -1)
+                if is_explorable:
+                    flag_window_visible = hero_globals.show_flagging_window
+                    new_flag_window_visible = ImGui.toggle_button(
+                        label=f"{IconsFontAwesome5.ICON_FLAG}##open_flagging_window",
+                        v=flag_window_visible,
+                        width=btn_size,
+                        height=btn_size,
+                    )
+                    if new_flag_window_visible != flag_window_visible:
+                        hero_globals.show_flagging_window = new_flag_window_visible
+                        HeroAI_BaseUI._save_follow_runtime_config(cached_data.formation_window_ini_key)
+                        HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
+                    ImGui.pop_font()
+                    ImGui.show_tooltip("Flagging")
+                    ImGui.push_font("Regular", 10)
+                    PyImGui.same_line(0, -1)
+
+                if is_explorable and cached_data.data.is_leader and enemy_party.is_enabled():
+                    enemy_party_visible = enemy_party.is_window_open()
+                    new_enemy_party_visible = ImGui.toggle_button(
+                        label=f"{IconsFontAwesome5.ICON_FACE_ANGRY}##enemy_party_window",
+                        v=enemy_party_visible,
+                        width=btn_size,
+                        height=btn_size,
+                    )
+                    if new_enemy_party_visible != enemy_party_visible:
+                        enemy_party.set_window_open(new_enemy_party_visible)
+                    ImGui.pop_font()
+                    ImGui.show_tooltip("Enemy Party")
+                    ImGui.push_font("Regular", 10)
+                    PyImGui.same_line(0, -1)
+
+                if is_outpost:
+                    party_window_open = False
+                    new_party_window_open = ImGui.toggle_button(
+                        label=f"{IconsFontAwesome5.ICON_PEOPLE_GROUP}##open_party_window",
+                        v=party_window_open,
+                        width=btn_size,
+                        height=btn_size,
+                    )
+                    if new_party_window_open != party_window_open:
+                        Keystroke.PressAndRelease(Key.P.value)
+                    ImGui.pop_font()
+                    ImGui.show_tooltip("Open Party Window")
+                    ImGui.push_font("Regular", 10)
+                    PyImGui.same_line(0, -1)
 
                 bv = HeroAI_BaseUI.show_build_match_window
                 new_bv = ImGui.toggle_button(
-                    label="Builds##open_build_matches",
+                    label=f"{IconsFontAwesome5.ICON_CUBES}##open_build_matches",
                     v=bv,
-                    width=60,
+                    width=btn_size,
                     height=btn_size,
                 )
                 if new_bv != bv:
                     HeroAI_BaseUI.show_build_match_window = new_bv
-                ImGui.show_tooltip("Show each party account's build resolved from shared-memory skillbars")
+                
+                ImGui.pop_font()
+                ImGui.show_tooltip("Builds")
+                ImGui.push_font("Regular", 10)
+                PyImGui.same_line(0, -1)
+
+                button_state_enabled = resurrection_scroll.are_all_party_accounts_enabled()
+                new_button_state = ImGui.toggle_button(
+                    label=f"{IconsFontAwesome5.ICON_SCROLL}##resurrection_scroll_toggle",
+                    v=button_state_enabled,
+                    width=btn_size,
+                    height=btn_size,
+                )
+                if new_button_state != button_state_enabled:
+                    resurrection_scroll.toggle_all_accounts()
+                    
+                ImGui.pop_font()
+                ImGui.show_tooltip(f"Res Scroll Use: {'Enabled' if button_state_enabled else 'Disabled'}")
+                ImGui.push_font("Regular", 10)
                 PyImGui.end_table()
             PyImGui.end_child()
         ImGui.pop_font()
@@ -1458,11 +1536,21 @@ class HeroAI_BaseUI:
             im.add_bool(ini_key, "show_broadcast_follow_threshold_rings", "FollowRuntime", "show_broadcast_follow_threshold_rings", True)
             im.add_bool(ini_key, "show_flagging_window", "FollowRuntime", "show_flagging_window", False)
             im.add_float(ini_key, "follow_move_threshold_default", "FollowRuntime", "follow_move_threshold_default", float(Range.Area.value))
-            im.add_float(ini_key, "follow_move_threshold_combat", "FollowRuntime", "follow_move_threshold_combat", float(Range.Touch.value))
+            im.add_float(ini_key, "follow_move_threshold_combat", "FollowRuntime", "follow_move_threshold_combat", float(Range.Adjacent.value))
             im.add_float(ini_key, "follow_move_threshold_flagged", "FollowRuntime", "follow_move_threshold_flagged", 0.0)
             im.add_str(ini_key, "follow_move_threshold_default_mode", "FollowRuntime", "follow_move_threshold_default_mode", "Area")
-            im.add_str(ini_key, "follow_move_threshold_combat_mode", "FollowRuntime", "follow_move_threshold_combat_mode", "Touch")
+            im.add_str(ini_key, "follow_move_threshold_combat_mode", "FollowRuntime", "follow_move_threshold_combat_mode", "Adjacent")
             im.add_str(ini_key, "follow_move_threshold_flagged_mode", "FollowRuntime", "follow_move_threshold_flagged_mode", "Zero")
+            im.add_bool(ini_key, "show_followers_unstuck_overlay", "FollowRuntime", "show_followers_unstuck_overlay", False)
+            im.add_bool(ini_key, "show_stuck_avoidance_debug", "FollowRuntime", "show_stuck_avoidance_debug", False)
+            im.add_float(ini_key, "waypoint_smoothing", "FollowRuntime", "waypoint_smoothing", 77.0)
+            im.add_float(ini_key, "stuck_touch_radius", "FollowRuntime", "stuck_touch_radius", 120.0)
+            im.add_float(ini_key, "stuck_enemy_detection_range", "FollowRuntime", "stuck_enemy_detection_range", 250.0)
+            im.add_int(ini_key, "stuck_sample_count", "FollowRuntime", "stuck_sample_count", 1)
+            im.add_float(ini_key, "min_distance_activate_unstuck", "FollowRuntime", "min_distance_activate_unstuck", 500.0)
+            im.add_float(ini_key, "no_progress_move_units", "FollowRuntime", "no_progress_move_units", 15.0)
+            im.add_float(ini_key, "no_progress_close_units", "FollowRuntime", "no_progress_close_units", 10.0)
+            im.add_float(ini_key, "obstacle_cleared_delta", "FollowRuntime", "obstacle_cleared_delta", 500.0)
             HeroAI_BaseUI.follow_window_ini_vars_registered = True
             HeroAI_BaseUI.follow_window_ini_vars_registered_key = ini_key
         im.load_once(ini_key)
@@ -1476,13 +1564,61 @@ class HeroAI_BaseUI:
         im = IniManager()
         hero_globals.show_broadcast_follow_positions = bool(im.getBool(ini_key, "show_broadcast_follow_positions", True, section="FollowRuntime"))
         hero_globals.show_broadcast_follow_threshold_rings = bool(im.getBool(ini_key, "show_broadcast_follow_threshold_rings", True, section="FollowRuntime"))
+        hero_globals.show_followers_unstuck_overlay = bool(im.getBool(ini_key, "show_followers_unstuck_overlay", False, section="FollowRuntime"))
+        hero_globals.show_stuck_avoidance_debug = bool(im.getBool(ini_key, "show_stuck_avoidance_debug", False, section="FollowRuntime"))
         hero_globals.show_flagging_window = bool(im.getBool(ini_key, "show_flagging_window", False, section="FollowRuntime"))
         HeroAI_BaseUI.follow_move_threshold_default = max(0.0, float(im.getFloat(ini_key, "follow_move_threshold_default", float(Range.Area.value), section="FollowRuntime")))
-        HeroAI_BaseUI.follow_move_threshold_combat = max(0.0, float(im.getFloat(ini_key, "follow_move_threshold_combat", float(Range.Touch.value), section="FollowRuntime")))
+        HeroAI_BaseUI.follow_move_threshold_combat = max(0.0, float(im.getFloat(ini_key, "follow_move_threshold_combat", float(Range.Adjacent.value), section="FollowRuntime")))
         HeroAI_BaseUI.follow_move_threshold_flagged = max(0.0, float(im.getFloat(ini_key, "follow_move_threshold_flagged", 0.0, section="FollowRuntime")))
         HeroAI_BaseUI.follow_move_threshold_default_mode = str(im.getStr(ini_key, "follow_move_threshold_default_mode", "Area", section="FollowRuntime"))
-        HeroAI_BaseUI.follow_move_threshold_combat_mode = str(im.getStr(ini_key, "follow_move_threshold_combat_mode", "Touch", section="FollowRuntime"))
+        HeroAI_BaseUI.follow_move_threshold_combat_mode = str(im.getStr(ini_key, "follow_move_threshold_combat_mode", "Adjacent", section="FollowRuntime"))
         HeroAI_BaseUI.follow_move_threshold_flagged_mode = str(im.getStr(ini_key, "follow_move_threshold_flagged_mode", "Zero", section="FollowRuntime"))
+        # Stuck-avoidance live-tunable knobs: BT.Move tolerance, circle radius,
+        # and the body-block enemy-scan radius. All three sync cross-client via
+        # the same INI throttle in HeroAI/follow/stuck_avoidance.py.
+        from HeroAI.follow.smart_unstuck import SMART_UNSTUCK_CFG
+        SMART_UNSTUCK_CFG.waypoint_smoothing = max(1.0, float(im.getFloat(
+            ini_key, "waypoint_smoothing", float(SMART_UNSTUCK_CFG.waypoint_smoothing), section="FollowRuntime"
+        )))
+        SMART_UNSTUCK_CFG.touch_radius = max(50.0, min(400.0, float(im.getFloat(
+            ini_key, "stuck_touch_radius", float(SMART_UNSTUCK_CFG.touch_radius), section="FollowRuntime"
+        ))))
+        SMART_UNSTUCK_CFG.enemy_detection_range = max(50.0, min(400.0, float(im.getFloat(
+            ini_key,
+            "stuck_enemy_detection_range",
+            float(SMART_UNSTUCK_CFG.enemy_detection_range),
+            section="FollowRuntime",
+        ))))
+        SMART_UNSTUCK_CFG.stuck_sample_count = max(1, min(10, int(im.getInt(
+            ini_key,
+            "stuck_sample_count",
+            int(SMART_UNSTUCK_CFG.stuck_sample_count),
+            section="FollowRuntime",
+        ))))
+        SMART_UNSTUCK_CFG.min_distance_activate_unstuck = max(50.0, min(600.0, float(im.getFloat(
+            ini_key,
+            "min_distance_activate_unstuck",
+            float(SMART_UNSTUCK_CFG.min_distance_activate_unstuck),
+            section="FollowRuntime",
+        ))))
+        SMART_UNSTUCK_CFG.no_progress_move_units = max(1.0, min(100.0, float(im.getFloat(
+            ini_key,
+            "no_progress_move_units",
+            float(SMART_UNSTUCK_CFG.no_progress_move_units),
+            section="FollowRuntime",
+        ))))
+        SMART_UNSTUCK_CFG.no_progress_close_units = max(1.0, min(100.0, float(im.getFloat(
+            ini_key,
+            "no_progress_close_units",
+            float(SMART_UNSTUCK_CFG.no_progress_close_units),
+            section="FollowRuntime",
+        ))))
+        SMART_UNSTUCK_CFG.obstacle_cleared_delta = max(50.0, min(800.0, float(im.getFloat(
+            ini_key,
+            "obstacle_cleared_delta",
+            float(SMART_UNSTUCK_CFG.obstacle_cleared_delta),
+            section="FollowRuntime",
+        ))))
 
     @staticmethod
     def _write_follow_runtime_value(im: IniManager, ini_key: str, name: str, value) -> None:
@@ -1505,6 +1641,8 @@ class HeroAI_BaseUI:
         HeroAI_BaseUI._ensure_follow_window_ini_vars(ini_key)
         im.set(ini_key, "show_broadcast_follow_positions", bool(hero_globals.show_broadcast_follow_positions), section="FollowRuntime")
         im.set(ini_key, "show_broadcast_follow_threshold_rings", bool(hero_globals.show_broadcast_follow_threshold_rings), section="FollowRuntime")
+        im.set(ini_key, "show_followers_unstuck_overlay", bool(hero_globals.show_followers_unstuck_overlay), section="FollowRuntime")
+        im.set(ini_key, "show_stuck_avoidance_debug", bool(hero_globals.show_stuck_avoidance_debug), section="FollowRuntime")
         im.set(ini_key, "show_flagging_window", bool(hero_globals.show_flagging_window), section="FollowRuntime")
         im.set(ini_key, "follow_move_threshold_default", float(HeroAI_BaseUI.follow_move_threshold_default), section="FollowRuntime")
         im.set(ini_key, "follow_move_threshold_combat", float(HeroAI_BaseUI.follow_move_threshold_combat), section="FollowRuntime")
@@ -1515,6 +1653,8 @@ class HeroAI_BaseUI:
         im.save_vars(ini_key)
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "show_broadcast_follow_positions", bool(hero_globals.show_broadcast_follow_positions))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "show_broadcast_follow_threshold_rings", bool(hero_globals.show_broadcast_follow_threshold_rings))
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "show_followers_unstuck_overlay", bool(hero_globals.show_followers_unstuck_overlay))
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "show_stuck_avoidance_debug", bool(hero_globals.show_stuck_avoidance_debug))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "show_flagging_window", bool(hero_globals.show_flagging_window))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "follow_move_threshold_default", float(HeroAI_BaseUI.follow_move_threshold_default))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "follow_move_threshold_combat", float(HeroAI_BaseUI.follow_move_threshold_combat))
@@ -1522,6 +1662,23 @@ class HeroAI_BaseUI:
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "follow_move_threshold_default_mode", str(HeroAI_BaseUI.follow_move_threshold_default_mode))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "follow_move_threshold_combat_mode", str(HeroAI_BaseUI.follow_move_threshold_combat_mode))
         HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "follow_move_threshold_flagged_mode", str(HeroAI_BaseUI.follow_move_threshold_flagged_mode))
+        from HeroAI.follow.smart_unstuck import SMART_UNSTUCK_CFG
+        im.set(ini_key, "waypoint_smoothing", float(SMART_UNSTUCK_CFG.waypoint_smoothing), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "waypoint_smoothing", float(SMART_UNSTUCK_CFG.waypoint_smoothing))
+        im.set(ini_key, "stuck_touch_radius", float(SMART_UNSTUCK_CFG.touch_radius), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "stuck_touch_radius", float(SMART_UNSTUCK_CFG.touch_radius))
+        im.set(ini_key, "stuck_enemy_detection_range", float(SMART_UNSTUCK_CFG.enemy_detection_range), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "stuck_enemy_detection_range", float(SMART_UNSTUCK_CFG.enemy_detection_range))
+        im.set(ini_key, "stuck_sample_count", int(SMART_UNSTUCK_CFG.stuck_sample_count), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "stuck_sample_count", int(SMART_UNSTUCK_CFG.stuck_sample_count))
+        im.set(ini_key, "min_distance_activate_unstuck", float(SMART_UNSTUCK_CFG.min_distance_activate_unstuck), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "min_distance_activate_unstuck", float(SMART_UNSTUCK_CFG.min_distance_activate_unstuck))
+        im.set(ini_key, "no_progress_move_units", float(SMART_UNSTUCK_CFG.no_progress_move_units), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "no_progress_move_units", float(SMART_UNSTUCK_CFG.no_progress_move_units))
+        im.set(ini_key, "no_progress_close_units", float(SMART_UNSTUCK_CFG.no_progress_close_units), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "no_progress_close_units", float(SMART_UNSTUCK_CFG.no_progress_close_units))
+        im.set(ini_key, "obstacle_cleared_delta", float(SMART_UNSTUCK_CFG.obstacle_cleared_delta), section="FollowRuntime")
+        HeroAI_BaseUI._write_follow_runtime_value(im, ini_key, "obstacle_cleared_delta", float(SMART_UNSTUCK_CFG.obstacle_cleared_delta))
 
     @staticmethod
     def _load_follow_formations_quick_data():
@@ -1620,6 +1777,25 @@ class HeroAI_BaseUI:
             pass
 
     @staticmethod
+    def _print_follow_debug_dump() -> None:
+        try:
+            publisher = getattr(GLOBAL_CACHE.ShMem, "follow_publisher", None)
+            if publisher is None or not hasattr(publisher, "build_debug_dump_lines"):
+                ConsoleLog("HeroAI", "follow.debug unavailable: publisher missing")
+                return
+
+            for line in publisher.build_debug_dump_lines():
+                ConsoleLog("HeroAI", line)
+
+            snapshot = hero_globals.smart_unstuck_debug_snapshot
+            if snapshot:
+                ConsoleLog("HeroAI", f"smart_unstuck_snapshot={snapshot}")
+            else:
+                ConsoleLog("HeroAI", "smart_unstuck_snapshot=None")
+        except Exception as exc:
+            ConsoleLog("HeroAI", f"follow.debug dump failed: {exc}")
+
+    @staticmethod
     def _apply_follow_thresholds_to_party(cached_data: CacheData) -> None:
         leader_options = GLOBAL_CACHE.ShMem.GetHeroAIOptionsByPartyNumber(0)
         leader_all_flag_active = (
@@ -1660,6 +1836,104 @@ class HeroAI_BaseUI:
                 options.FollowMoveThresholdCombat = float(HeroAI_BaseUI.follow_move_threshold_combat)
 
     @staticmethod
+    def DrawSmartUnstuck3DOverlay(cached_data: CacheData):
+        # Runs on every client (called from DrawFollowFormationsQuickWindow).
+        # Gated by the user-toggleable "Draw Followers Unstuck (3D)" checkbox —
+        # detection logic still runs when the overlay is off; only rendering
+        # is suppressed.
+        if not hero_globals.show_followers_unstuck_overlay:
+            return
+        snapshot = hero_globals.smart_unstuck_debug_snapshot
+        if snapshot is None:
+            return
+        try:
+            Overlay().BeginDraw()
+            # `circles`: N centers (one per enemy in slalom mode, one for the
+            # legacy front-of-follower mode). Falls back to the older
+            # circle_center field if a stale snapshot lacks the list.
+            circles = snapshot.get("circles")
+            if not circles:
+                legacy_center = snapshot.get("circle_center")
+                circles = (legacy_center,) if legacy_center is not None else ()
+            union_boundaries = snapshot.get("union_boundaries") or ()
+            radius = float(snapshot.get("radius", Range.Touch.value))
+            waypoints = snapshot.get("waypoints") or ()
+            current_idx = int(snapshot.get("current_idx", 0))
+            mode = str(snapshot.get("mode", "idle"))
+            touch_radius = float(snapshot.get("touch_radius", 25.0))
+
+            if mode == "detouring":
+                if union_boundaries:
+                    # Slalom mode: draw the welded union outline per cluster as
+                    # a closed line strip. Each polyline has ~360 vertices; we
+                    # stride to ~60 segments per cluster for a smooth outline
+                    # without flooding DrawLine3D calls.
+                    line_color = Utils.RGBToColor(255, 0, 255, 220)
+                    stride = 6
+                    for boundary in union_boundaries:
+                        n = len(boundary)
+                        if n < 2:
+                            continue
+                        for i in range(0, n, stride):
+                            j = (i + stride) % n
+                            p1 = boundary[i]
+                            p2 = boundary[j]
+                            z1 = Overlay().FindZ(float(p1[0]), float(p1[1]), 0)
+                            z2 = Overlay().FindZ(float(p2[0]), float(p2[1]), 0)
+                            Overlay().DrawLine3D(
+                                float(p1[0]), float(p1[1]), z1,
+                                float(p2[0]), float(p2[1]), z2,
+                                line_color,
+                                2.5,
+                            )
+                else:
+                    # Single-circle mode: classic front-of-follower ring.
+                    for circle in circles:
+                        if circle is None:
+                            continue
+                        cx, cy = float(circle[0]), float(circle[1])
+                        cz = Overlay().FindZ(cx, cy, 0)
+                        Overlay().DrawPoly3D(
+                            cx, cy, cz,
+                            radius=radius,
+                            color=Utils.RGBToColor(255, 0, 255, 140),
+                            numsegments=32,
+                            thickness=2.5,
+                        )
+
+            for wi, wp in enumerate(waypoints):
+                wx, wy = float(wp[0]), float(wp[1])
+                wz = Overlay().FindZ(wx, wy, 0)
+                is_current = (wi == current_idx)
+                is_done = (wi < current_idx)
+                # current = yellow > done = gray > upcoming = green.
+                if is_current:
+                    color = Utils.RGBToColor(255, 255, 0, 240)
+                elif is_done:
+                    color = Utils.RGBToColor(120, 120, 120, 160)
+                else:
+                    color = Utils.RGBToColor(0, 255, 0, 220)
+                Overlay().DrawPoly3D(
+                    wx, wy, wz,
+                    radius=22.0,
+                    color=color,
+                    numsegments=12,
+                    thickness=2.5,
+                )
+                # Faint outer reference ring at the overlay touch threshold.
+                Overlay().DrawPoly3D(
+                    wx, wy, wz,
+                    radius=touch_radius,
+                    color=Utils.RGBToColor(180, 180, 180, 80),
+                    numsegments=16,
+                    thickness=1.0,
+                )
+
+            Overlay().EndDraw()
+        except Exception:
+            pass
+
+    @staticmethod
     def DrawFlaggingWindow(cached_data: CacheData):
         party_size = GLOBAL_CACHE.Party.GetPartySize()
         if party_size == 1:
@@ -1686,34 +1960,34 @@ class HeroAI_BaseUI:
             PyImGui.table_next_row()
             PyImGui.table_next_column()
             if party_size >= 2:
-                HeroAI_BaseUI.HeroFlags[0] = ImGui.toggle_button("1", IsHeroFlagged(1), 30, 30)
+                HeroAI_BaseUI.HeroFlags[0] = ImGui.toggle_button("1", HeroAI_BaseUI._is_flag_display_slot_flagged(1), 30, 30)
             PyImGui.table_next_column()
             if party_size >= 3:
-                HeroAI_BaseUI.HeroFlags[1] = ImGui.toggle_button("2", IsHeroFlagged(2), 30, 30)
+                HeroAI_BaseUI.HeroFlags[1] = ImGui.toggle_button("2", HeroAI_BaseUI._is_flag_display_slot_flagged(2), 30, 30)
             PyImGui.table_next_column()
             if party_size >= 4:
-                HeroAI_BaseUI.HeroFlags[2] = ImGui.toggle_button("3", IsHeroFlagged(3), 30, 30)
+                HeroAI_BaseUI.HeroFlags[2] = ImGui.toggle_button("3", HeroAI_BaseUI._is_flag_display_slot_flagged(3), 30, 30)
             PyImGui.table_next_row()
             PyImGui.table_next_column()
             if party_size >= 5:
-                HeroAI_BaseUI.HeroFlags[3] = ImGui.toggle_button("4", IsHeroFlagged(4), 30, 30)
+                HeroAI_BaseUI.HeroFlags[3] = ImGui.toggle_button("4", HeroAI_BaseUI._is_flag_display_slot_flagged(4), 30, 30)
             PyImGui.table_next_column()
-            HeroAI_BaseUI.AllFlag = ImGui.toggle_button("All", IsHeroFlagged(0), 30, 30)
+            HeroAI_BaseUI.AllFlag = ImGui.toggle_button("A", HeroAI_BaseUI._is_flag_display_slot_flagged(0), 30, 30)
             PyImGui.table_next_column()
             if party_size >= 6:
-                HeroAI_BaseUI.HeroFlags[4] = ImGui.toggle_button("5", IsHeroFlagged(5), 30, 30)
+                HeroAI_BaseUI.HeroFlags[4] = ImGui.toggle_button("5", HeroAI_BaseUI._is_flag_display_slot_flagged(5), 30, 30)
             PyImGui.table_next_row()
             PyImGui.table_next_column()
             if party_size >= 7:
-                HeroAI_BaseUI.HeroFlags[5] = ImGui.toggle_button("6", IsHeroFlagged(6), 30, 30)
+                HeroAI_BaseUI.HeroFlags[5] = ImGui.toggle_button("6", HeroAI_BaseUI._is_flag_display_slot_flagged(6), 30, 30)
             PyImGui.table_next_column()
             if party_size >= 8:
-                HeroAI_BaseUI.HeroFlags[6] = ImGui.toggle_button("7", IsHeroFlagged(7), 30, 30)
+                HeroAI_BaseUI.HeroFlags[6] = ImGui.toggle_button("7", HeroAI_BaseUI._is_flag_display_slot_flagged(7), 30, 30)
             PyImGui.table_next_column()
             HeroAI_BaseUI.ClearFlags = ImGui.toggle_button("X", HeroAI_BaseUI.ClearFlags, 30, 30)
             PyImGui.end_table()
 
-        if HeroAI_BaseUI.AllFlag != IsHeroFlagged(0):
+        if HeroAI_BaseUI.AllFlag != HeroAI_BaseUI._is_flag_display_slot_flagged(0):
             HeroAI_BaseUI.capture_hero_flag = True
             HeroAI_BaseUI.capture_flag_all = True
             HeroAI_BaseUI.capture_hero_index = 0
@@ -1721,7 +1995,7 @@ class HeroAI_BaseUI:
             hero_globals.capture_mouse_timer.Start()
 
         for i in range(1, party_size):
-            if HeroAI_BaseUI.HeroFlags[i - 1] != IsHeroFlagged(i):
+            if HeroAI_BaseUI.HeroFlags[i - 1] != HeroAI_BaseUI._is_flag_display_slot_flagged(i):
                 HeroAI_BaseUI.capture_hero_flag = True
                 HeroAI_BaseUI.capture_flag_all = False
                 HeroAI_BaseUI.capture_hero_index = i
@@ -1730,59 +2004,75 @@ class HeroAI_BaseUI:
 
     @staticmethod
     def DrawFollowFormationsQuickWindow(cached_data: CacheData):
-        if not HeroAI_BaseUI.show_follow_formations_quick_window:
-            return
+        # Draw the stuck-avoidance 3D overlay first so it renders on every client
+        # (the window itself is leader-side; the overlay must work on the follower).
+        HeroAI_BaseUI.DrawSmartUnstuck3DOverlay(cached_data)
 
-        if ImGui.Begin(ini_key=cached_data.formation_window_ini_key, name="Follow Formations Quick Settings", p_open=True, flags=PyImGui.WindowFlags.AlwaysAutoResize):
-            HeroAI_BaseUI._load_follow_formations_quick_data()
-            HeroAI_BaseUI._load_follow_runtime_config(cached_data.formation_window_ini_key)
-            if PyImGui.button("Refresh Formations"):
+        if HeroAI_BaseUI.show_follow_formations_quick_window:
+            if ImGui.Begin(ini_key=cached_data.formation_window_ini_key, name="Follow Formations Quick Settings", p_open=True, flags=PyImGui.WindowFlags.AlwaysAutoResize):
                 HeroAI_BaseUI._load_follow_formations_quick_data()
                 HeroAI_BaseUI._load_follow_runtime_config(cached_data.formation_window_ini_key)
-            PyImGui.same_line(0, 6)
-            editor_label = "Close Editor" if HeroAI_BaseUI.show_follow_formations_editor_window else "Open Editor"
-            if PyImGui.button(editor_label):
-                HeroAI_BaseUI.show_follow_formations_editor_window = not HeroAI_BaseUI.show_follow_formations_editor_window
-                if HeroAI_BaseUI.show_follow_formations_editor_window:
-                    from HeroAI.follow.editor import open_editor
-                    open_editor()
+                if PyImGui.button("Refresh Formations"):
+                    HeroAI_BaseUI._load_follow_formations_quick_data()
+                    HeroAI_BaseUI._load_follow_runtime_config(cached_data.formation_window_ini_key)
+                PyImGui.same_line(0, 6)
+                editor_label = "Close Editor" if HeroAI_BaseUI.show_follow_formations_editor_window else "Open Editor"
+                if PyImGui.button(editor_label):
+                    HeroAI_BaseUI.show_follow_formations_editor_window = not HeroAI_BaseUI.show_follow_formations_editor_window
+                    if HeroAI_BaseUI.show_follow_formations_editor_window:
+                        from HeroAI.follow.editor import open_editor
+                        open_editor()
 
-            if HeroAI_BaseUI.follow_formations_names:
-                idx = PyImGui.combo("Formation", HeroAI_BaseUI.follow_formations_selected_index, HeroAI_BaseUI.follow_formations_names)
-                if idx != HeroAI_BaseUI.follow_formations_selected_index:
-                    HeroAI_BaseUI._set_selected_follow_formation(idx)
-                    HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-            else:
-                PyImGui.text_disabled("No saved follow formations found.")
+                if HeroAI_BaseUI.follow_formations_names:
+                    idx = PyImGui.combo("Formation", HeroAI_BaseUI.follow_formations_selected_index, HeroAI_BaseUI.follow_formations_names)
+                    if idx != HeroAI_BaseUI.follow_formations_selected_index:
+                        HeroAI_BaseUI._set_selected_follow_formation(idx)
+                        HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
+                else:
+                    PyImGui.text_disabled("No saved follow formations found.")
 
-            dirty_runtime_cfg = False
+                dirty_runtime_cfg = False
 
-            PyImGui.separator()
-            PyImGui.text("Follower Behavior")
+                PyImGui.separator()
+                PyImGui.text("Follower Behavior")
 
-            if cached_data.global_options is not None:
-                new_following = PyImGui.checkbox("Enable Following", bool(cached_data.global_options.Following))
-                if new_following != bool(cached_data.global_options.Following):
-                    HeroAI_BaseUI._set_party_follow_option(cached_data, "Following", new_following)
-                    HeroAI_BaseUI._refresh_follow_publisher_live(cached_data)
+                if cached_data.global_options is not None:
+                    new_following = PyImGui.checkbox("Enable Following", bool(cached_data.global_options.Following))
+                    if new_following != bool(cached_data.global_options.Following):
+                        HeroAI_BaseUI._set_party_follow_option(cached_data, "Following", new_following)
+                        HeroAI_BaseUI._refresh_follow_publisher_live(cached_data)
 
-                new_avoidance = PyImGui.checkbox("Enable Combat Avoidance Mix", bool(cached_data.global_options.Avoidance))
-                if new_avoidance != bool(cached_data.global_options.Avoidance):
-                    HeroAI_BaseUI._set_party_follow_option(cached_data, "Avoidance", new_avoidance)
-                    HeroAI_BaseUI._refresh_follow_publisher_live(cached_data)
+                    new_avoidance = PyImGui.checkbox("Enable Combat Avoidance Mix", bool(cached_data.global_options.Avoidance))
+                    if new_avoidance != bool(cached_data.global_options.Avoidance):
+                        HeroAI_BaseUI._set_party_follow_option(cached_data, "Avoidance", new_avoidance)
+                        HeroAI_BaseUI._refresh_follow_publisher_live(cached_data)
 
             PyImGui.separator()
             PyImGui.text("Follow Publish")
+
+            if PyImGui.button("Print Follow Debug"):
+                HeroAI_BaseUI._print_follow_debug_dump()
 
             new_show_broadcast_follow_positions = PyImGui.checkbox("Draw Followers FollowPos (3D)", hero_globals.show_broadcast_follow_positions)
             if new_show_broadcast_follow_positions != hero_globals.show_broadcast_follow_positions:
                 hero_globals.show_broadcast_follow_positions = new_show_broadcast_follow_positions
                 dirty_runtime_cfg = True
 
+            new_show_followers_unstuck_overlay = PyImGui.checkbox("Draw Followers Unstuck (3D)", hero_globals.show_followers_unstuck_overlay)
+            if new_show_followers_unstuck_overlay != hero_globals.show_followers_unstuck_overlay:
+                hero_globals.show_followers_unstuck_overlay = new_show_followers_unstuck_overlay
+                dirty_runtime_cfg = True
+
             new_show_broadcast_follow_threshold_rings = PyImGui.checkbox("Draw Followers Threshold Rings (3D)", hero_globals.show_broadcast_follow_threshold_rings)
             if new_show_broadcast_follow_threshold_rings != hero_globals.show_broadcast_follow_threshold_rings:
                 hero_globals.show_broadcast_follow_threshold_rings = new_show_broadcast_follow_threshold_rings
                 dirty_runtime_cfg = True
+
+            new_show_stuck_avoidance_debug = PyImGui.checkbox("Stuck Avoidance Verbose Logs", hero_globals.show_stuck_avoidance_debug)
+            if new_show_stuck_avoidance_debug != hero_globals.show_stuck_avoidance_debug:
+                hero_globals.show_stuck_avoidance_debug = new_show_stuck_avoidance_debug
+                dirty_runtime_cfg = True
+
             presets = HeroAI_BaseUI._follow_threshold_presets()
             preset_names = [name for name, _ in presets]
 
@@ -1828,65 +2118,94 @@ class HeroAI_BaseUI:
                     HeroAI_BaseUI.follow_move_threshold_flagged_mode = "Manual"
                 dirty_runtime_cfg = True
 
-            movement_cfg = load_follow_movement_config()
             PyImGui.separator()
-            PyImGui.text("Combat Movement Mix")
-
-            new_recovery_distance = max(1.0, float(PyImGui.input_float("Slot Recovery Distance", float(movement_cfg.slot_recovery_distance))))
-            if abs(new_recovery_distance - movement_cfg.slot_recovery_distance) > 0.0001:
-                movement_cfg.slot_recovery_distance = new_recovery_distance
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_ally_radius = max(0.0, float(PyImGui.input_float("Ally Repulsion Radius", float(movement_cfg.ally_repulsion_radius))))
-            if abs(new_ally_radius - movement_cfg.ally_repulsion_radius) > 0.0001:
-                movement_cfg.ally_repulsion_radius = new_ally_radius
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_ally_weight = max(0.0, float(PyImGui.input_float("Ally Repulsion Weight", float(movement_cfg.ally_repulsion_weight))))
-            if abs(new_ally_weight - movement_cfg.ally_repulsion_weight) > 0.0001:
-                movement_cfg.ally_repulsion_weight = new_ally_weight
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_enemy_radius = max(0.0, float(PyImGui.input_float("Enemy Repulsion Radius", float(movement_cfg.enemy_repulsion_radius))))
-            if abs(new_enemy_radius - movement_cfg.enemy_repulsion_radius) > 0.0001:
-                movement_cfg.enemy_repulsion_radius = new_enemy_radius
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_enemy_weight = max(0.0, float(PyImGui.input_float("Enemy Repulsion Weight", float(movement_cfg.enemy_repulsion_weight))))
-            if abs(new_enemy_weight - movement_cfg.enemy_repulsion_weight) > 0.0001:
-                movement_cfg.enemy_repulsion_weight = new_enemy_weight
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_move_clamp = max(1.0, float(PyImGui.input_float("Local Move Clamp", float(movement_cfg.local_move_clamp))))
-            if abs(new_move_clamp - movement_cfg.local_move_clamp) > 0.0001:
-                movement_cfg.local_move_clamp = new_move_clamp
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
-
-            new_min_move = max(0.0, float(PyImGui.input_float("Local Min Move Threshold", float(movement_cfg.min_move_threshold))))
-            if abs(new_min_move - movement_cfg.min_move_threshold) > 0.0001:
-                movement_cfg.min_move_threshold = new_min_move
-                save_follow_movement_config(movement_cfg)
-                HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
+            PyImGui.text("Follower Resolves (unstuck)")
+            # Stuck-avoidance live-tunable knobs. All sync cross-client via
+            # FollowRuntime.ini on the leader-write, follower-poll throttle in
+            # smart_unstuck.reload_smart_unstuck_config_from_ini.
+            #   Geometry knobs:
+            #     - Waypoint Smoothing: BT.Move "advance on approach" threshold.
+            #     - Stuck Circle Radius: imaginary obstacle circle radius. The
+            #       waypoint arc auto-scales — circle and arc stay in sync.
+            #     - Enemy Detection Range: scan radius for the body-block
+            #       fallback. When ≥1 enemy is in this range and the follower
+            #       is stuck, the detour pivots to circles centered on the
+            #       enemies instead of a single front-of-follower circle.
+            #   Detection-sensitivity knobs (per ~500ms sample):
+            #     - Stuck Sample Count: consecutive no-progress samples to
+            #       trigger (1 = fire on the first comparison after baseline).
+            #     - Min Distance Activate Unstuck: short-circuit detection when the
+            #       follower is already this close to follow_xy.
+            #     - No-Progress Move Units: sample counts as no-progress when
+            #       the avatar moved less than this in the sample window.
+            #     - No-Progress Close Units: sample counts as no-progress when
+            #       the gap to follow_xy shrank by less than this.
+            from HeroAI.follow.smart_unstuck import (
+                SMART_UNSTUCK_CFG,
+                reload_smart_unstuck_config_from_ini,
+            )
+            new_waypoint_smoothing = max(1.0, float(PyImGui.input_float(
+                "Waypoint Smoothing", float(SMART_UNSTUCK_CFG.waypoint_smoothing)
+            )))
+            new_touch_radius = max(50.0, min(400.0, float(PyImGui.input_float(
+                "Stuck Circle Radius", float(SMART_UNSTUCK_CFG.touch_radius)
+            ))))
+            new_enemy_range = max(50.0, min(400.0, float(PyImGui.input_float(
+                "Enemy Detection Range", float(SMART_UNSTUCK_CFG.enemy_detection_range)
+            ))))
+            new_sample_count = max(1, min(10, int(PyImGui.input_int(
+                "Stuck Sample Count", int(SMART_UNSTUCK_CFG.stuck_sample_count)
+            ))))
+            new_min_distance = max(50.0, min(600.0, float(PyImGui.input_float(
+                "Min Distance Activate Unstuck", float(SMART_UNSTUCK_CFG.min_distance_activate_unstuck)
+            ))))
+            new_move_units = max(1.0, min(100.0, float(PyImGui.input_float(
+                "No-Progress Move Units", float(SMART_UNSTUCK_CFG.no_progress_move_units)
+            ))))
+            new_close_units = max(1.0, min(100.0, float(PyImGui.input_float(
+                "No-Progress Close Units", float(SMART_UNSTUCK_CFG.no_progress_close_units)
+            ))))
+            new_early_exit = max(50.0, min(800.0, float(PyImGui.input_float(
+                "Min Dist Early Exit", float(SMART_UNSTUCK_CFG.obstacle_cleared_delta)
+            ))))
+            stuck_cfg_changed = (
+                abs(new_waypoint_smoothing - SMART_UNSTUCK_CFG.waypoint_smoothing) > 0.0001
+                or abs(new_touch_radius - SMART_UNSTUCK_CFG.touch_radius) > 0.0001
+                or abs(new_enemy_range - SMART_UNSTUCK_CFG.enemy_detection_range) > 0.0001
+                or new_sample_count != SMART_UNSTUCK_CFG.stuck_sample_count
+                or abs(new_min_distance - SMART_UNSTUCK_CFG.min_distance_activate_unstuck) > 0.0001
+                or abs(new_move_units - SMART_UNSTUCK_CFG.no_progress_move_units) > 0.0001
+                or abs(new_close_units - SMART_UNSTUCK_CFG.no_progress_close_units) > 0.0001
+                or abs(new_early_exit - SMART_UNSTUCK_CFG.obstacle_cleared_delta) > 0.0001
+            )
+            if stuck_cfg_changed:
+                SMART_UNSTUCK_CFG.waypoint_smoothing = new_waypoint_smoothing
+                SMART_UNSTUCK_CFG.touch_radius = new_touch_radius
+                SMART_UNSTUCK_CFG.enemy_detection_range = new_enemy_range
+                SMART_UNSTUCK_CFG.stuck_sample_count = new_sample_count
+                SMART_UNSTUCK_CFG.min_distance_activate_unstuck = new_min_distance
+                SMART_UNSTUCK_CFG.no_progress_move_units = new_move_units
+                SMART_UNSTUCK_CFG.no_progress_close_units = new_close_units
+                SMART_UNSTUCK_CFG.obstacle_cleared_delta = new_early_exit
+                dirty_runtime_cfg = True
+                # Force-write to INI immediately so follower clients see the
+                # change within their next 1s reload poll.
+                HeroAI_BaseUI._save_follow_runtime_config(cached_data.formation_window_ini_key)
+                reload_smart_unstuck_config_from_ini(force_reload=True)
 
             if dirty_runtime_cfg:
                 HeroAI_BaseUI._save_follow_runtime_config(cached_data.formation_window_ini_key)
                 HeroAI_BaseUI._apply_follow_thresholds_to_party(cached_data)
                 HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
 
-            if Map.IsExplorable() and Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
-                new_show_flagging_window = PyImGui.checkbox("Show Flagging Window", hero_globals.show_flagging_window)
-                if new_show_flagging_window != hero_globals.show_flagging_window:
-                    hero_globals.show_flagging_window = new_show_flagging_window
-                    HeroAI_BaseUI._save_follow_runtime_config(cached_data.formation_window_ini_key)
-                    HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
+                if Map.IsExplorable() and Player.GetAgentID() == GLOBAL_CACHE.Party.GetPartyLeaderID():
+                    new_show_flagging_window = PyImGui.checkbox("Show Flagging Window", hero_globals.show_flagging_window)
+                    if new_show_flagging_window != hero_globals.show_flagging_window:
+                        hero_globals.show_flagging_window = new_show_flagging_window
+                        HeroAI_BaseUI._save_follow_runtime_config(cached_data.formation_window_ini_key)
+                        HeroAI_BaseUI._refresh_follow_publisher_live(cached_data, reload_ini=True)
 
-        ImGui.End(ini_key=cached_data.formation_window_ini_key)
+            ImGui.End(ini_key=cached_data.formation_window_ini_key)
 
         if HeroAI_BaseUI.show_follow_formations_editor_window:
             import Py4GW
@@ -2070,7 +2389,7 @@ class HeroAI_BaseUI:
             PyImGui.dummy(0, 5)
 
         if ImGui.Begin(ini_key=cached_data.ini_key, name="HeroAI Control Panel", p_open=True, flags=PyImGui.WindowFlags.AlwaysAutoResize):
-            if PyImGui.begin_child("ControlPanelChild", (200, 138), False, PyImGui.WindowFlags.AlwaysAutoResize):
+            if PyImGui.begin_child("ControlPanelChild", (200, 150), False, PyImGui.WindowFlags.AlwaysAutoResize):
                 style = ImGui.get_style()
                 style.ItemSpacing.push_style_var(2, 2)
                 style.CellPadding.push_style_var(2, 2)
@@ -2161,7 +2480,25 @@ class HeroAI_BaseUI:
                         PyImGui.table_next_row()
                         PyImGui.table_next_column()
                         if PyImGui.button(f"Summon##summon_{account.AgentData.AgentID}"):
-                            GLOBAL_CACHE.ShMem.SendMessage(account_email, account.AccountEmail,SharedCommandType.TravelToMap, (self_account.AgentData.Map.MapID,self_account.AgentData.Map.Region,self_account.AgentData.Map.District,0))
+                            if Map.IsGuildHall():
+                                GLOBAL_CACHE.ShMem.SendMessage(
+                                    account_email,
+                                    account.AccountEmail,
+                                    SharedCommandType.TravelToGuildHall,
+                                    (0, 0, 0, 0),
+                                )
+                            else:
+                                GLOBAL_CACHE.ShMem.SendMessage(
+                                    account_email,
+                                    account.AccountEmail,
+                                    SharedCommandType.TravelToMap,
+                                    (
+                                        self_account.AgentData.Map.MapID,
+                                        self_account.AgentData.Map.Region,
+                                        self_account.AgentData.Map.District,
+                                        0,
+                                    ),
+                                )
                         PyImGui.table_next_column()
                         PyImGui.text(f"{account.AgentData.CharacterName}")
             PyImGui.end_table()
