@@ -6,6 +6,7 @@ import random
 import traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from functools import partial
 
 import Py4GW  # type: ignore
 import PyEffects
@@ -16,7 +17,7 @@ from Py4GWCoreLib import Timer
 import Py4GWCoreLib as GW
 import time
 import socket
-from typing import List, Dict, Protocol, ParamSpec, TypeVar, Any, Callable, Set, Literal, Type
+from typing import List, Dict, Protocol, ParamSpec, TypeVar, Any, Callable, Set, Literal, Type, Optional
 from dataclasses import dataclass, field
 import json
 from enum import Enum, auto
@@ -658,45 +659,85 @@ class NetworkManager:
 
 
 # region behavior logic
-class ScheduledTask(ABC):
-    """Abstract base class for a task that runs on a timer."""
-    def __init__(self, interval: float):
+class TaskStatus(Enum):
+    PENDING = auto()
+    RUNNING = auto()
+    SUCCESS = auto()
+    FAILURE = auto()
+
+
+class Task:
+    def __init__(
+        self,
+        name: str,
+        action: Callable,
+        start_condition: Optional[Callable] = None,
+        exec_condition: Optional[Callable] = None,          # Guard: Can this start/continue?
+        completion_condition: Optional[Callable] = None, # Success: Is this finished?
+        is_recurring: bool = False,
+        interval: float = 0.0
+    ):
+        self.name = name
+        self.action = action
+        self.start_condition = start_condition
+        self.exec_condition = exec_condition
+        self.completion_condition = completion_condition
+        self.is_recurring = is_recurring
         self.interval = interval
-        self.last_run = 0.0
-        self.terminate = False
 
-    def is_ready(self) -> bool:
-        now = time.time()
-        if now - self.last_run >= self.interval:
-            return True
-        return False
+        self.status = TaskStatus.PENDING
+        self.last_run_time = 0.0
 
-    def tick(self, context):
-        """Handles the timing and execution logic."""
-        if self.is_ready():
-            self.last_run = time.time()
-            return self.execute(context)
-        return None
+    def execute(self, current_time: float) -> TaskStatus:
+        # 1. Handle start condition check
+        if self.status == TaskStatus.PENDING:
+            if self.start_condition:
+                if self.start_condition():
+                    return TaskStatus.RUNNING if current_time - self.interval > self.last_run_time else TaskStatus.PENDING
+            else:
+                return TaskStatus.RUNNING if current_time - self.interval > self.last_run_time else TaskStatus.PENDING
 
-    @abstractmethod
-    def execute(self, context) -> any:
-        """The actual logic to perform. 'context' is usually the Behavior instance."""
-        pass
+        if self.status == TaskStatus.RUNNING:
+            # 2. Guard Clause (Can we act right now?)
+            if self.exec_condition and not self.exec_condition():
+                # If we were already running and the guard fails, it's a failure.
+                return TaskStatus.FAILURE
+            # 3. Perform Action, never attempt this more than once per interval
+            if current_time - self.interval > self.last_run_time:
+                try:
+                    self.action()
+                    self.last_run_time = current_time
+                except Exception as e:
+                    print(f"Task {self.name} crashed: {e}")
+                    return TaskStatus.FAILURE
+            # 4. Check Completion Condition, this should be checked between intervals
+            # If no completion condition is provided, we assume the action was a one-shot success
+            # unless it is recurring.
+            if self.completion_condition:
+                if self.completion_condition():
+                    return TaskStatus.SUCCESS if not self.is_recurring else TaskStatus.PENDING
+                return TaskStatus.RUNNING
+            return TaskStatus.SUCCESS if not self.is_recurring else TaskStatus.PENDING
+        # if we call a task that already failed or was successful it will reach here and return without change
+        return self.status
 
 
-class TaskScheduler:
-    """Container to manage and execute multiple ScheduledTasks."""
+class TaskManager:
     def __init__(self):
-        self.tasks: list[ScheduledTask] = []
+        self.active_tasks: List[Task] = []
 
-    def add_task(self, task: ScheduledTask):
-        self.tasks.append(task)
+    def add_task(self, task: Task):
+        self.active_tasks.append(task)
 
-    def run_pending(self, context):
-        """Call this every frame/tick in the main loop."""
-        for task in self.tasks:
-            task.tick(context)
-        self.tasks = [t for t in self.tasks if not t.terminate]
+    def update(self):
+        current_time = time.time()
+        still_active = []
+        for task in self.active_tasks:
+            status = task.execute(current_time)
+            task.status = status
+            if status not in (TaskStatus.SUCCESS, TaskStatus.FAILURE):
+                still_active.append(task)
+        self.active_tasks = still_active
 
 
 class State:
@@ -706,15 +747,24 @@ class State:
 
 
 class Behavior:
+    class Role(Enum):
+        pass
+
+    @dataclass
+    class Signature:
+        required_skills: Set[int]
+
+    SIGNATURES = {}
+
     def __init__(self, thread_globals: ThreadManager, network_manager: NetworkManager):
         self.cache_thread_globals: ThreadManager = thread_globals
         self.network_manager = network_manager
         self.current_state: State = State()
-        self.scheduler: TaskScheduler = TaskScheduler()
+        self.tasks = TaskManager()
 
     def run(self):
         self.current_state.execute(self)
-        self.scheduler.run_pending(self)
+        self.tasks.update()
 
     @staticmethod
     def name() -> str:
@@ -728,39 +778,29 @@ class Behavior:
                 thread_name, 0) != 0:
             time.sleep(0.01)
 
-    class CastWaitForEffect(ScheduledTask):
-        def __init__(self, interval: float, client: Client, skill_id: int):
-            super().__init__(interval)
-            self.client = client
-            self.skill_id = skill_id
+    def identify_players(self) -> Dict[Role, list[Client]]:
+        assignments: Dict[MinionPrinterBehavior.Role, List[Client]] = defaultdict()
+        claimed_clients = set()  # Store the object IDs or client IDs
 
-        def execute(self, context) -> any:
-            if self.client.game_client.effects.get(self.skill_id, False):
-                self.terminate = True
-                return
-            self.client.transport.send(RPC.CMD.USE_SKILL, self.skill_id, self.client.game_client.agent_id)
+        for client_id, client in self.network_manager.client_list.items():
+            if client.game_client is None:
+                continue
+            for role in self.Role:
+                sig = self.SIGNATURES[role]
+                client_skills = set(client.game_client.skills.keys())
+                if sig.required_skills.issubset(client_skills):
+                    assignments[role].append(client)
+                    break
 
-    class WaitForBool(ScheduledTask):
-        def __init__(self, interval: float, check_func):
-            super().__init__(interval)
-            self.check_func = check_func
+        return assignments
 
-        def execute(self, context) -> any:
-            if self.check_func():
-                self.terminate = True
-                return
-
-    class DoUntil(ScheduledTask):
-        def __init__(self, interval: float, check_func, do_function):
-            super().__init__(interval)
-            self.check_func = check_func
-            self.do_function = do_function
-
-        def execute(self, context) -> any:
-            self.do_function()
-            if self.check_func():
-                self.terminate = True
-                return
+    class CastWaitForEffect(Task):
+        def __init__(self, interval: float, client: Client, skill_id: int,
+                     start_condition: Optional[Callable] = None):
+            use_skill = partial(client.transport.send, RPC.CMD.USE_SKILL, skill_id, client.game_client.agent_id)
+            has_effect = partial(client.game_client.effects.get, skill_id, False)
+            super().__init__(f"CastWaitEffect skill {skill_id} client {client.game_client.agent_id}",
+                             use_skill, start_condition, None, has_effect, False, interval)
 
 
 class TestBehavior(Behavior):
@@ -784,43 +824,6 @@ class TestBehavior(Behavior):
 
 
 class MinionPrinterBehavior(Behavior):
-    class StateInitializing(State):
-        def execute(self, bot: 'MinionPrinterBehavior'):
-            bot.roles = bot.identify_players()
-            c: Client
-            result = {
-                role.name: [c.game_client.agent_id for c in clients]
-                for role, clients in bot.roles.items()
-            }
-            if len(result[bot.Role.MONA]) == 2 and len(result[bot.Role.RITMO]) == 1:
-                print(f"Identified: {result}. Moving to next state.")
-                bot.current_state = bot.StateFirstDeath()
-            time.sleep(1)
-
-    class StateFirstDeath(State):
-        def execute(self, bot: 'MinionPrinterBehavior'):
-            monks: List[Client] = bot.roles[bot.Role.MONA]
-            ritmo: List[Client] = bot.roles[bot.Role.RITMO]
-            da_wait = Behavior.CastWaitForEffect(0.5, monks[0], bot.Skills.dark_aura)
-            ua_wait = Behavior.CastWaitForEffect(0.5, monks[1], bot.Skills.unyielding_aura)
-            bot.scheduler.add_task(da_wait)
-            bot.scheduler.add_task(ua_wait)
-            while bot.cache_thread_globals.is_threads_running and (not da_wait.terminate or not ua_wait.terminate):
-                bot.scheduler.run_pending(bot)
-
-            def cast_agony():
-                monks[0].transport.send(RPC.CMD.USE_SKILL, bot.Skills.agony)
-
-            def wait_dead() -> bool:
-                return monks[0].game_client.hp == 0
-
-            cast_agony_until_dead = Behavior.DoUntil(2.0, wait_dead, cast_agony)
-            bot.scheduler.add_task(cast_agony_until_dead)
-            while bot.cache_thread_globals.is_threads_running and not cast_agony_until_dead.terminate:
-                bot.scheduler.run_pending(bot)
-
-
-
     class Skills(int, Enum):
         weapon_of_quickening = 1268
         seed_of_life = 2105
@@ -841,15 +844,11 @@ class MinionPrinterBehavior(Behavior):
         RITMO = auto()
         UNKNOWN = auto()
 
-    @dataclass
-    class Signature:
-        required_skills: Set[int]
-
     SIGNATURES = {
-        Role.RITMO: Signature({Skills.weapon_of_quickening.value, Skills.shield_of_absorption.value,
+        Role.RITMO: super().Signature({Skills.weapon_of_quickening.value, Skills.shield_of_absorption.value,
                                Skills.shielding_hands.value, Skills.heal_area.value, Skills.kareis_healing_circle.value,
                                Skills.balthazars_spirit.value}),
-        Role.MONA: Signature({Skills.unyielding_aura.value, Skills.seed_of_life.value,
+        Role.MONA: super().Signature({Skills.unyielding_aura.value, Skills.seed_of_life.value,
                               Skills.blessed_aura.value, Skills.animate_bone_minions.value, Skills.dark_aura.value, Skills.agony.value})
     }
 
@@ -861,6 +860,41 @@ class MinionPrinterBehavior(Behavior):
     @staticmethod
     def name() -> str:
         return "Minion Printer"
+
+    class StateInitializing(State):
+        def execute(self, bot: 'MinionPrinterBehavior'):
+            bot.roles = bot.identify_players()
+            c: Client
+            result = {
+                role.name: [c.game_client.agent_id for c in clients]
+                for role, clients in bot.roles.items()
+            }
+            if len(result[bot.Role.MONA]) == 2 and len(result[bot.Role.RITMO]) == 1:
+                print(f"Identified: {result}. Moving to next state.")
+                bot.current_state = bot.StateFirstDeath()
+            time.sleep(1)
+
+    class StateFirstDeath(State):
+        def execute(self, bot: 'MinionPrinterBehavior'):
+            monks: List[Client] = bot.roles[bot.Role.MONA]
+            ritmo: List[Client] = bot.roles[bot.Role.RITMO]
+            da_wait = Behavior.CastWaitForEffect(0.5, monks[0], bot.Skills.dark_aura)
+            ua_wait = Behavior.CastWaitForEffect(0.5, monks[1], bot.Skills.unyielding_aura)
+            bot.tasks.add_task(da_wait)
+            bot.tasks.add_task(ua_wait)
+            while bot.cache_thread_globals.is_threads_running and (not da_wait.terminate or not ua_wait.terminate):
+                bot.scheduler.run_pending(bot)
+
+            def cast_agony():
+                monks[0].transport.send(RPC.CMD.USE_SKILL, bot.Skills.agony)
+
+            def wait_dead() -> bool:
+                return monks[0].game_client.hp == 0
+
+            cast_agony_until_dead = Behavior.DoUntil(2.0, wait_dead, cast_agony)
+            bot.scheduler.add_task(cast_agony_until_dead)
+            while bot.cache_thread_globals.is_threads_running and not cast_agony_until_dead.terminate:
+                bot.scheduler.run_pending(bot)
 
     def state_rectify(self) -> State:
         monks = self.roles[self.Role.MONA]
@@ -874,25 +908,6 @@ class MinionPrinterBehavior(Behavior):
         PyImGui.text("Minion Goal:")
         PyImGui.same_line(0.0, 0.0)
         self.target_minion_count = PyImGui.input_int("#binputminions", self.target_minion_count)
-
-    def identify_players(self) -> Dict[Role, list[Client]]:
-        assignments: Dict[MinionPrinterBehavior.Role, List[Client]] = defaultdict()
-        claimed_clients = set()  # Store the object IDs or client IDs
-
-        # Order matters here! Put the most specific/unique roles first.
-        role_priority = [self.Role.RITMO, self.Role.MONA, self.Role.MONB]
-
-        for client_id, client in self.network_manager.client_list.items():
-            if client.game_client is None:
-                continue
-            for role in role_priority:
-                sig = self.SIGNATURES[role]
-                client_skills = set(client.game_client.skills.keys())
-                if sig.required_skills.issubset(client_skills):
-                    assignments[role].append(client)
-                    break
-
-        return assignments
 
     def run(self):
         self.current_state = self.StateInitializing()
