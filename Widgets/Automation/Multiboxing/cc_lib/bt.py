@@ -352,6 +352,13 @@ class TaskManager:
                 kept.append(t)
         self.tasks = kept
 
+    def cancel_all(self) -> None:
+        """Cancel every in-flight node and empty the pool (e.g. on a map change, so no
+        stale Sequence/MoveTo survives into the new instance)."""
+        for t in self.tasks:
+            t.cancel()
+        self.tasks = []
+
 
 class State(Node):
     """A mode in an HFSM. Override ``tick()`` to do work / enqueue tasks, and

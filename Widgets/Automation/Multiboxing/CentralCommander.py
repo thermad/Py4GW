@@ -48,8 +48,6 @@ _LIB_DIR = os.path.join(_WIDGET_DIR, "cc_lib")
 ensure_on_path(_WIDGET_DIR)
 
 purge_by_path(_LIB_DIR)          # drop every already-imported cc_lib.* module
-import cc_lib.TestImport         # re-imported fresh from disk on every hot-reload
-print(f"test import print: {cc_lib.TestImport.PRINTOUT}")
 
 # --- split-out cc_lib modules (purged & re-imported above every hot-reload) ---
 from cc_lib.jsonizers import Jsonizer
@@ -62,14 +60,15 @@ from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill
                        MoveTo, Sequence, Parallel, Wait, WaitUntil, TaskManager,
                        State, StateMachine)
 from cc_lib.behaviors import (TestBehavior, MinionPrinterBehavior, PermaPrintBehavior,
-                              UtilityCombatBehavior, BehaviorSlot, BehaviorManager)
+                              UtilityCombatBehavior, BehaviorSlot, BehaviorManager,
+                              BEHAVIOR_MAP)
 # endregion
 
 
 # region UI
 class UICache:
     def __init__(self):
-        self.WIDTH = 300
+        self.WIDTH = 400
         self.ip_entry = [127, 0, 0, 1]
         self.port = 54321
         self.is_host = False
@@ -80,7 +79,7 @@ class UICache:
         self.add_behavior_index = 0          # combo selection for the "Add Behavior" control
         self.network_manager: NetworkManager = None
         self.NETWORK_THREAD_NAME = "NETWORK_THREAD"
-        self.behavior_map = cc_lib.behaviors.BEHAVIOR_MAP
+        self.behavior_map = BEHAVIOR_MAP
         # --- virtual drag-and-drop state (native ImGui DnD isn't exposed by this binding) ---
         # While a row is dragged we stash the client id here; each drop target captures its
         # screen rect this frame; on release we hit-test the mouse against those rects.
@@ -378,7 +377,10 @@ class CentralCommander:
         self.ui_main.draw_main_window()
 
     def update(self):
-        self.update_thread_manager()
+        # NOTE: update_thread_manager() (the watchdog keepalive pump) is now driven from main()
+        # UNCONDITIONALLY, before the map-ready gate -- it must run even mid-load or the watchdog
+        # reaps the network thread. Keep it OUT of here, since update() only runs once the map is
+        # fully ready. This method now only does the GW-touching state refresh.
         self.local_game_client.update_from_dict(Jsonizer.player_data())
         # Self-heal: keep the host visible in its own client list while hosting, even if a prior
         # _cleanup_host (dormancy/map load) wiped it. Idempotent and cheap.
@@ -434,7 +436,7 @@ save_window_timer = Timer()
 save_window_timer.Start()
 
 # String consts
-MODULE_NAME = "Central Commander ZMQ"  # Change this Module name
+MODULE_NAME = "Central Commander"  # Change this Module name
 COLLAPSED = "collapsed"
 X_POS = "x"
 Y_POS = "y"
@@ -499,6 +501,15 @@ def configure():
 def main():
     global central_commander
     try:
+        # Pump the watchdog keepalives EVERY frame, before the map gate. The watchdog only
+        # pauses itself while IsMapLoading() is True, but main()'s gate is stricter (MapValid +
+        # IsMapReady + IsPartyLoaded). After a zone there's a window where IsMapLoading() has
+        # already cleared (watchdog armed) but the party isn't loaded yet (gate still closed) --
+        # if we only pumped inside the gate, the network thread's keepalive would expire (2s) and
+        # the watchdog would reap it, dropping the connection. The pump touches no GW APIs, so it
+        # is safe to run mid-load.
+        central_commander.update_thread_manager()
+
         if not Routines.Checks.Map.MapValid():
             return
 

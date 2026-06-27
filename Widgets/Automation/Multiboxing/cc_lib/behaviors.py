@@ -2,7 +2,7 @@
 (minion printer / permaseed / combat), the generic combat engine, and the behavior
 manager. Sits on top of the bt framework; the widget file only touches the concrete
 behavior classes and the BehaviorManager."""
-import time, uuid
+import time, uuid, math
 from collections import defaultdict
 from enum import Enum, auto
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill
                        State, StateMachine)
 from cc_lib.transport import Client
 from cc_lib.rpc import RPC
-from cc_lib.misc_helpers import Vec2, ThreadManager
+from cc_lib.misc_helpers import Vec2, ThreadManager, map_ready
 from cc_lib.networking import NetworkManager
 
 
@@ -150,6 +150,79 @@ class UtilitySelector(Node):
         self.current_action = None
 
 
+class PartyUtilitySelector(Node):
+    """The SINGLE party engine. One Node that evaluates every action across the whole party and
+    drives each client concurrently -- replacing the old "one UtilitySelector instance per client".
+    There is now one place that sees all actions at once (the seam for any cross-client arbitration),
+    while concurrency is preserved by holding one independent commitment 'slot' per client plus one
+    team slot: a slot is itself a UtilitySelector, so each commits to its own running Node and clients
+    still act in parallel (A casting while B attacks).
+
+    Order of evaluation each tick: the TEAM slot first (so a running team play's ``involves`` is known),
+    then every client slot -- but a client slot is SUSPENDED while the team play involves its client,
+    so a coordinated play (a shared-shout rotation, a regroup) cleanly owns the clients it commands and
+    their own actions go quiet until it finishes. This is exactly the old hybrid's behavior, now inside
+    one object instead of N+1 free-floating selectors.
+
+    The behavior supplies live providers (so it keeps owning loadout caching / rebuild):
+      ``team_actions()``         -> team-level (multi-client) candidates.
+      ``client_actions(client)`` -> one client's cached candidate list.
+      ``clients()``              -> the current roster; slots are created/dropped to match.
+    ``on_pick(client_or_None, name)`` reports the current choice for the UI readout (None == team)."""
+    def __init__(self, *, team_actions: Callable[[], List[Action]],
+                 client_actions: Callable[['Client'], List[Action]],
+                 clients: Callable[[], List['Client']],
+                 on_pick: Optional[Callable[[Optional['Client'], Optional[str]], None]] = None):
+        self.name = "party"
+        self._client_actions = client_actions
+        self._clients = clients
+        self.on_pick = on_pick
+        self.team_slot = UtilitySelector(
+            "team", team_actions,
+            on_pick=(lambda nm: self._report(None, nm)))
+        self.slots: Dict['Client', UtilitySelector] = {}
+
+    def _report(self, client: Optional['Client'], name: Optional[str]) -> None:
+        if self.on_pick is not None:
+            self.on_pick(client, name)
+
+    def _team_involves(self, client: 'Client') -> bool:
+        """True while the running team play owns this client -> its own slot stays suspended."""
+        a = self.team_slot.current_action
+        return a is not None and a.involves(client)
+
+    def _sync_slots(self, ctx: "Behavior") -> None:
+        """Create a slot for each current client and drop slots for clients that left the roster."""
+        current = list(self._clients())
+        for client in current:
+            if client not in self.slots:
+                self.slots[client] = UtilitySelector(
+                    "slot",
+                    (lambda c=client: self._client_actions(c)),
+                    suspended=(lambda c=client: self._team_involves(c)),
+                    on_pick=(lambda c=client: (lambda nm: self._report(c, nm)))(client))
+        if len(self.slots) != len(current):
+            present = set(id(c) for c in current)
+            for client in [c for c in self.slots if id(c) not in present]:
+                self.slots[client].cancel()
+                del self.slots[client]
+
+    def tick(self, ctx: "Behavior") -> Status:
+        self._sync_slots(ctx)
+        self.team_slot.tick(ctx)               # team first: establishes the suspension source
+        # (Global cross-client arbitration would slot in here -- this is the one place that can see
+        #  every client's best action at once. Default: each slot decides independently, concurrently.)
+        for slot in list(self.slots.values()):
+            slot.tick(ctx)
+        return Status.RUNNING                  # a perpetual node; never completes on its own
+
+    def cancel(self) -> None:
+        self.team_slot.cancel()
+        for slot in self.slots.values():
+            slot.cancel()
+        self.slots.clear()
+
+
 @dataclass(frozen=True)
 class Synergy:
     """A cluster of skills that, present together on a bar, grant a capability. Detection is
@@ -169,6 +242,38 @@ def detect_synergies(bar: Set[int], registry: List[Synergy]) -> List[Synergy]:
     order-stable (registry order), so it stays trivially unit-testable as the library grows."""
     bar = set(bar)
     return [s for s in registry if s.skills <= bar]
+
+
+@dataclass(frozen=True)
+class CrossSynergy:
+    """A capability that emerges across MULTIPLE accounts rather than on a single bar -- the
+    roster-level analog of ``Synergy``. Where ``Synergy`` asks 'are these skills together on ONE
+    bar', a CrossSynergy asks 'do at least ``min_copies`` accounts each carry ``required_skill``'.
+    The classic case: several players holding the same maintainable shout, which the team can
+    rotate to keep permanently up (no one player could). ``provides`` is a free capability tag.
+
+    (A single shared skill keeps the example simple; for a true multi-skill cross-combo -- account A
+    has skill X, account B has skill Y -- add fields here and extend detect_cross_synergies. The
+    execution side, a team Action commanding several clients, is already what RegroupAll does.)"""
+    name: str
+    required_skill: int
+    min_copies: int = 2
+    provides: str = ""
+
+
+def detect_cross_synergies(clients: List['Client'],
+                           registry: List[CrossSynergy]) -> List[tuple]:
+    """For each CrossSynergy present on the roster, ``(synergy, [holders])`` -- the clients whose
+    bar carries the shared skill. Present == at least ``min_copies`` holders. Pure given the bars
+    (uses static skillbars, not live alive/dead state -- the action layer handles liveness), so it
+    stays unit-testable as the cross-build library grows, exactly like detect_synergies."""
+    out: List[tuple] = []
+    for cs in registry:
+        holders = [c for c in clients
+                   if c.game_client is not None and cs.required_skill in c.game_client.skills]
+        if len(holders) >= cs.min_copies:
+            out.append((cs, holders))
+    return out
 
 
 def _current_epoch() -> int:
@@ -269,22 +374,71 @@ class Behavior:
         return True
 
     @staticmethod
+    def interact(client: 'Client', agent_id: int = 0) -> None:
+        """Tell a client to interact with an agent. Pass a concrete ``agent_id`` the host knows
+        (shared instance) to drive it to a specific target -- reusable for friendly interactions
+        later (NPCs, allies, res targets) -- or 0 to let the client resolve a combat target in
+        its own world (and ignore the order if nothing valid is in range), like cast_targeted.
+        Interacting an enemy starts the client auto-attacking; it keeps swinging on its own, so
+        this only needs to (re)fire periodically, not every tick."""
+        client.transport.send(RPC.CMD.INTERACT, int(agent_id))
+
+    @staticmethod
     def effect_remaining(client: 'Client', skill_id: int) -> int:
         eff = client.game_client.effects.get(int(skill_id))
         return eff.time_remaining if eff else 0
+
+    # Consecutive failed MapValid checks before we treat it as a real map change and tear
+    # down in-flight work. Debounces against a single transient invalid read (false positive)
+    # wiping a mid-cast Sequence on a frame where the map momentarily reads not-ready.
+    MAP_FAIL_THRESHOLD = 3
+
+    @staticmethod
+    def _map_ready() -> bool:
+        """True only when the local instance is fully live. Worker threads must NOT touch GW
+        APIs during a loading screen -- the instance is being torn down and calling into the
+        native side mid-teardown crashes the client (this is how HeroAI's loops stay safe).
+        Shared with the client network receiver via misc_helpers.map_ready."""
+        return map_ready()
 
     def run(self) -> None:
         ctx = self
         self._running = True
         self._epoch = _current_epoch()   # any later reload bumps the global epoch -> is_running False
         self.root.enter(ctx)
+        map_fail_streak = 0
+        torn_down = False                # True while we've aborted work and are waiting for the map
         try:
             while self.is_running:
-                self.root.tick(ctx)
-                self.tasks.update(ctx)
+                if self._map_ready():
+                    if torn_down:
+                        # Map is live again -> re-prime the decision graph so it re-plans
+                        # cleanly on the new instance (fresh identify, no stale state).
+                        self.root.enter(ctx)
+                        torn_down = False
+                    map_fail_streak = 0
+                    try:
+                        self.root.tick(ctx)
+                        self.tasks.update(ctx)
+                    except Exception as e:
+                        # One bad tick must not kill the worker thread.
+                        print(f"[{self.name()}] tick error: {e}")
+                else:
+                    map_fail_streak += 1
+                    # Only tear down once, after N consecutive failures (see MAP_FAIL_THRESHOLD).
+                    if map_fail_streak >= self.MAP_FAIL_THRESHOLD and not torn_down:
+                        self._abort_for_map_change(ctx)
+                        torn_down = True
                 time.sleep(self.tick_interval)
         finally:
             self.root.exit(ctx)
+
+    def _abort_for_map_change(self, ctx) -> None:
+        """Cancel all in-flight work and tear down the root so nothing resumes a stale plan
+        across the instance boundary. ``root.enter`` re-primes it once the map is ready again.
+        ``StateMachine.exit`` is idempotent, so the final ``run()`` cleanup exit is still safe."""
+        self.tasks.cancel_all()
+        self.root.exit(ctx)
 
     @staticmethod
     def name() -> str:
@@ -1008,6 +1162,27 @@ class PermaPrintBehavior(MinionPrinterBehavior):
 # Reusable, skill-agnostic Action content for UtilityCombatBehavior. They command clients the
 # same way every other behavior does -- host-side via Behavior.cast / the kernel leaves -- so
 # they work whether the client is local or remote.
+class UtilityTables:
+    """Central home for the utility layer's tuning tables. As the combat engine grows it
+    accumulates a lot of small ``{skill_id/effect_id: number}`` dicts (boost weights, score
+    overrides, thresholds, ...); keeping them here -- as plain class-level data, no instances
+    -- means the tunables live in one obvious place instead of scattered through the Actions
+    that read them. Add new tables as class attributes with a one-line comment on what they do.
+
+    Convention: keys are skill ids (effects in GW are keyed by the skill id that applies them),
+    values are the additive/scalar weights the reading Action documents."""
+
+    # Effects that make auto-attacking more valuable -> each one present on a client adds its
+    # weight to AttackAction's score (flat bump per effect, summed, then clamped). Keyed by the
+    # skill id of the effect/enchant. Examples (commented -- fill in the real ids + weights):
+    #   { 970: 0.40,   # Frenzy (double attack speed)
+    #     1572: 0.35,  # "Go for the Eyes!" / IAS shout
+    #     2356: 0.30 } # any attack-chain enabler you want to lean into
+    ATTACK_BOOST_EFFECTS: Dict[int, float] = {
+        # paste your effect skill_ids and boost weights here
+    }
+
+
 def _cast_once(client: 'Client', skill_id: int, name: str) -> Node:
     """Fire one self-cast and watch it to completion (CastSkill), so the selector commits to the
     cast instead of re-firing it every tick. Recharge is gated inside Behavior.cast."""
@@ -1117,6 +1292,106 @@ class SelfHeal(ClientAction):
         return _cast_once(self.client, sid, self.name)
 
 
+class AttackAction(ClientAction):
+    """Combat-tier auto-attack. Sits at ``Tier.SUSTAINED`` -- the same tier the generic engine
+    puts offensive skills -- so it competes with offensive casts by SCORE rather than always
+    losing to them: most of the time ``BASE`` is below a real offensive skill's weight, so the
+    selector prefers casting a skill and only falls to plain swinging when nothing better in the
+    tier wants to act; but ``UtilityTables.ATTACK_BOOST_EFFECTS`` raises the score per attack
+    buff present, so under the right effects swinging out-bids weaker offense. Being same-tier
+    means it still never interrupts a running cast (preemption needs a STRICTLY higher tier), and
+    its build SUCCEEDs immediately (one-shot interact) so the selector is free again next tick --
+    the client keeps swinging on its own in between, so casts keep flowing around it.
+
+    Only applicable while the client is in combat (no point ordering an attack with no enemy
+    around), and settle-gated so it re-issues about once a second rather than every frame."""
+    tier = Tier.SUSTAINED
+    name = "attack"
+    BASE = 0.10          # below generic offense (~0.15) so skills are preferred; boosts lift it past
+    SETTLE = 1.0         # seconds between re-issuing the attack order (the client swings on its own)
+
+    def __init__(self, client: 'Client', settle: float = SETTLE):
+        super().__init__(client)
+        self.settle = settle
+        self._last_fire = 0.0
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if time.time() - self._last_fire < self.settle:
+            return False
+        # Only attack in combat. The behavior provides combat state; absent it, allow (assume in).
+        in_combat = getattr(ctx, "client_in_combat", None)
+        if in_combat is not None and not in_combat(self.client):
+            return False
+        return True
+
+    def score(self, ctx: "Behavior") -> float:
+        s = self.BASE
+        effects = self.client.game_client.effects
+        for skill_id, weight in UtilityTables.ATTACK_BOOST_EFFECTS.items():
+            eff = effects.get(int(skill_id))
+            if eff is not None and eff.time_remaining > 0:
+                s += weight
+        return clamp01(s)
+
+    def build(self, ctx: "Behavior") -> Node:
+        self._last_fire = time.time()        # settle window so we don't re-issue every frame
+        # agent_id 0 -> the client resolves its own nearest/called enemy (auto-attack). A future
+        # action can pass a host-known agent_id here to interact a specific target.
+        node = Task("attack", lambda: Behavior.interact(self.client))   # one-shot: fire then SUCCESS
+        return node
+
+
+class MaintainShadowForm(ClientAction):
+    """EXAMPLE of a custom skill-COMBINATION action plan -- the template to copy when a combo is
+    more than one cast. A plain ``MaintainEnchant`` fires a single skill; a combination plan's
+    ``build()`` instead returns a *composite* (Sequence/Parallel) of kernel leaves that the
+    selector commits to and runs as ONE unit, so the steps can't be split apart mid-combo.
+
+    The combo here is gap-free perma Shadow Form: cast Glyph of Swiftness FIRST (it speeds the
+    next spell), then recast Shadow Form -- so SF lands again before the running copy expires and
+    there is never a coverage gap (on a perma-SF build, a gap = instant death). If Glyph is on
+    recharge its CastSkill no-ops and the Sequence falls straight through to the Shadow Form cast.
+
+    To author your own combo: (1) add its skills to the Skills enum, (2) add a Synergy of those
+    skills to SYNERGIES so the bar is detected as carrying the combo, (3) add an Action class like
+    this whose build() lays out the plan, and (4) attach it in _synergy_actions' ``modules`` dict
+    keyed by the synergy name. That's the whole pipeline -- detection -> claim -> scored plan."""
+    tier = Tier.SUSTAINED          # upkeep; bump to REACTIVE to make SF refresh preempt everything
+    name = "perma shadow form"
+
+    def __init__(self, client: 'Client', shadow_form_id: int, glyph_id: int,
+                 refresh_below: int = 4000, settle: float = CAST_SETTLE):
+        super().__init__(client)
+        self.sf = int(shadow_form_id)
+        self.glyph = int(glyph_id)
+        self.refresh_below = refresh_below
+        self.settle = settle
+        self._last_fire = 0.0
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if time.time() - self._last_fire < self.settle:
+            return False
+        # Shadow Form itself must be ready to recast; the glyph is optional (skipped if recharging).
+        sd = self.client.game_client.get_skill_data(self.sf)
+        return sd is not None and sd.slot > 0 and sd.get_recharge == 0
+
+    def score(self, ctx: "Behavior") -> float:
+        rem = Behavior.effect_remaining(self.client, self.sf)
+        if rem >= self.refresh_below:
+            return 0.0                 # comfortable time left -> don't spend the combo yet
+        # Rises steeply as SF nears expiry so the refresh reliably wins its tier in time.
+        return 0.95 * clamp01((self.refresh_below - rem) / self.refresh_below)
+
+    def build(self, ctx: "Behavior") -> Node:
+        self._last_fire = time.time()
+        # The plan, as an explicit ordered Sequence. CastSkill commits to each cast (so the caster
+        # doesn't interrupt itself), and the Sequence runs Glyph -> Shadow Form as one committed unit.
+        return Sequence(self.name, [
+            CastSkill(self.client, self.glyph, lambda: Behavior.cast(self.client, self.glyph)),
+            CastSkill(self.client, self.sf, lambda: Behavior.cast(self.client, self.sf)),
+        ])
+
+
 class RegroupAll(Action):
     """A host-coordinated team play: when the controlled clients are spread far from the
     follow target, pull them all in together (one Parallel of MoveTo). Demonstrates the whole
@@ -1170,6 +1445,252 @@ class RegroupAll(Action):
 
     def involves(self, client: 'Client') -> bool:
         return client in self._clients
+
+
+class FollowLeader(ClientAction):
+    """Per-client follow: keep each client trailing the selected leader, fanned out from its
+    peers so the group isn't one fat AoE target. Distance-to-leader drives the utility through a
+    deadzone -> scaling band -> hard-leash escalation, all read LIVE from the behavior's knobs
+    (ctx.follow_min_distance / follow_hard_leash / follow_spread_radius) so the UI sliders are
+    responsive without rebuilding the loadout:
+
+      * dist < min_distance            -> score 0 (close enough; never tug a fighter in melee)
+      * min_distance <= dist < leash   -> Tier.SUSTAINED, score = PEAK * t**CURVE_EXP where
+                                          t = (dist-min)/(leash-min). The exponent keeps the score
+                                          near zero through most of the band and only spikes as the
+                                          client nears the leash -- so a martial client keeps
+                                          attacking until it's about to be left behind, THEN follow
+                                          out-scores combat and it catches up.
+      * dist >= hard_leash             -> elevated to Tier.REACTIVE (an interrupt): score 1.0, so it
+                                          preempts whatever the client is doing and forces the move.
+
+    The tier is recomputed every evaluation (the selector calls applicable()/score() before reading
+    .tier, so the dynamic value is always fresh). Spread: each client targets a slot on a ring of
+    ``spread_radius`` around the leader, its angle fixed by its index in the agent-id-sorted client
+    order, so they fan out to distinct points instead of stacking. The move node re-reads the
+    leader's position every tick, so it tracks a moving leader smoothly rather than chasing a stale
+    point, and releases (SUCCESS) the moment the client is back inside ``min_distance``."""
+    name = "follow leader"
+    CURVE_EXP = 4.0          # higher = score stays low longer, spikes only near the leash
+    SUSTAINED_PEAK = 0.5     # max score inside the scaling band (just below the leash)
+    # Fallback knobs if the behavior doesn't define them (it does, via draw()).
+    DEF_MIN, DEF_LEASH, DEF_SPREAD = 300.0, 1500.0, 250.0
+
+    def __init__(self, client: 'Client'):
+        super().__init__(client)
+        self.tier = Tier.SUSTAINED   # recomputed live in _refresh(); REACTIVE past the leash
+
+    def _knobs(self, ctx: "Behavior") -> tuple:
+        return (float(getattr(ctx, "follow_min_distance", self.DEF_MIN)),
+                float(getattr(ctx, "follow_hard_leash", self.DEF_LEASH)),
+                float(getattr(ctx, "follow_spread_radius", self.DEF_SPREAD)))
+
+    def _leader(self, ctx: "Behavior") -> tuple:
+        login = getattr(ctx, "follow_login_number", None)
+        leader_id = (GW.Party.Players.GetAgentIDByLoginNumber(login) if login
+                     else GW.Party.GetPartyLeaderID())
+        if not leader_id:
+            return None, 0
+        return Vec2.from_tuple(GW.Agent.GetXY(leader_id)), int(leader_id)
+
+    def _slot(self, ctx: "Behavior", leader_pos: 'Vec2', spread: float) -> 'Vec2':
+        """This client's fan-out point: a ring of ``spread`` around the leader, angle set by the
+        client's index in the agent-id-sorted roster so each client gets a distinct slot."""
+        clients = sorted(ctx.my_clients().values(), key=lambda c: c.game_client.agent_id or 0)
+        n = max(1, len(clients))
+        i = clients.index(self.client) if self.client in clients else 0
+        angle = 2.0 * math.pi * i / n
+        return leader_pos + Vec2(math.cos(angle), math.sin(angle)) * spread
+
+    def _distance(self, ctx: "Behavior") -> tuple:
+        """(distance-to-leader, leader_pos) -- distance None if there's no leader or we ARE it."""
+        leader_pos, leader_id = self._leader(ctx)
+        if leader_pos is None or self.client.game_client.agent_id == leader_id:
+            return None, leader_pos
+        here = Vec2.from_tuple(GW.Agent.GetXY(self.client.game_client.agent_id))
+        return (here - leader_pos).magnitude(), leader_pos
+
+    def _refresh(self, ctx: "Behavior") -> Optional[float]:
+        """Compute distance and set the dynamic tier; returns the distance (None = inert)."""
+        dist, _ = self._distance(ctx)
+        _, leash, _s = self._knobs(ctx)
+        self.tier = Tier.REACTIVE if (dist is not None and dist >= leash) else Tier.SUSTAINED
+        return dist
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if not getattr(ctx, "follow_enabled", False):
+            return False
+        dist = self._refresh(ctx)
+        min_d, _leash, _s = self._knobs(ctx)
+        return dist is not None and dist >= min_d
+
+    def score(self, ctx: "Behavior") -> float:
+        dist = self._refresh(ctx)
+        min_d, leash, _s = self._knobs(ctx)
+        if dist is None or dist < min_d:
+            return 0.0
+        if dist >= leash:
+            return 1.0                                   # interrupt: forced follow
+        t = (dist - min_d) / max(1.0, leash - min_d)     # 0 at min, 1 at leash
+        return self.SUSTAINED_PEAK * clamp01(t) ** self.CURVE_EXP
+
+    def build(self, ctx: "Behavior") -> Node:
+        def move():
+            leader_pos, _ = self._leader(ctx)
+            if leader_pos is None:
+                return
+            _m, _l, spread = self._knobs(ctx)
+            slot = self._slot(ctx, leader_pos, spread)
+            self.client.transport.send(RPC.CMD.MOVE, slot.x, slot.y)
+
+        def arrived():
+            dist, _ = self._distance(ctx)
+            min_d, _l, _s = self._knobs(ctx)
+            return dist is None or dist < min_d
+
+        # A recurring move that re-reads the leader each interval (live follow) and SUCCEEDs once
+        # back inside the deadzone, handing control back to the selector.
+        return Task("follow", move, done=arrived, interval=0.1)
+
+
+class SharedShoutRotation(Action):
+    """MULTI-ACCOUNT plan: several players carry the same maintainable shout (e.g. Don't Trip), and
+    the team ROTATES casting it so its effect stays up across the party without any one player
+    spamming it. This is the cross-build analog of MaintainEnchant -- the 'bar' is the whole roster,
+    and it lives in the TEAM selector (it commands whichever client is next in the rotation). It is
+    the template for any 'N accounts share a skill, schedule it across them' plan.
+
+    Two modes, by how many ALIVE holders are present:
+      * a few copies (min .. EFFECT_GATED-1): time-share the cooldown -- want a cast every
+        recharge/copies seconds and rotate to the next holder, so coverage is even and no copy is
+        wasted (2 copies of a 20s shout -> one every 10s, alternating).
+      * many copies (>= EFFECT_GATED): surplus, so just keep it up -- cast only when the effect is
+        missing, rotating through alive holders (dead ones skipped), letting the spares idle.
+
+    A shout only buffs allies near the CASTER, so before casting we make sure the whole party is
+    within Earshot of the chosen caster: any client not yet clustered is pulled toward the leader
+    (the rally point) until that earshot condition holds, THEN the shout fires and everyone resumes
+    whatever they were doing. So the plan is build() -> Sequence(gather-until-in-earshot, CastSkill);
+    if the party is already clustered the gather completes instantly and it just casts. While the
+    play runs it ``involves`` the caster PLUS whichever clients are still being gathered, so only
+    those clients' selectors suspend -- a client already in position keeps fighting."""
+    tier = Tier.SUSTAINED
+    EFFECT_GATED = 4          # alive copies at/above which we switch from time-share to effect-gated
+    TIMESHARE_SCORE = 0.5     # team-selector score when a time-share cast is due
+    UPKEEP_SCORE = 0.6        # team-selector score when the effect is down and we have surplus copies
+    GATHER_FACTOR = 0.4       # cluster everyone within this fraction of Earshot of the rally point
+
+    def __init__(self, synergy: "CrossSynergy"):
+        self.syn = synergy
+        self.skill_id = int(synergy.required_skill)
+        self.name = f"rotate {synergy.name}"
+        self._rot = 0
+        self._last_cast = 0.0
+        self._caster: Optional['Client'] = None
+        self._involved: Set['Client'] = set()   # clients the play is actively commanding right now
+
+    # --- roster queries ---
+    def _alive_holders(self, ctx: "Behavior") -> List['Client']:
+        return [c for c in ctx.my_clients().values()
+                if c.game_client is not None
+                and self.skill_id in c.game_client.skills
+                and GW.Agent.IsAlive(c.game_client.agent_id)]
+
+    def _recharge(self) -> float:
+        try:
+            return float(GW.GLOBAL_CACHE.Skill.Data.GetRecharge(self.skill_id) or 0.0)
+        except Exception:
+            return 0.0
+
+    def _leader_pos(self, ctx: "Behavior") -> Optional['Vec2']:
+        login = getattr(ctx, "follow_login_number", None)
+        leader_id = (GW.Party.Players.GetAgentIDByLoginNumber(login) if login
+                     else GW.Party.GetPartyLeaderID())
+        if not leader_id:
+            return None
+        return Vec2.from_tuple(GW.Agent.GetXY(leader_id))
+
+    def _effect_up(self, holders: List['Client']) -> bool:
+        # We can only read effects off controlled clients, and a shout buffs allies near the caster
+        # (the caster included), so if it's being maintained the alive holders carry it: 'up' == any
+        # alive holder still has time left on the effect.
+        return any(Behavior.effect_remaining(c, self.skill_id) > 0 for c in holders)
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if not getattr(ctx, "cross_synergies_enabled", False):
+            return False
+        return len(self._alive_holders(ctx)) >= self.syn.min_copies
+
+    def score(self, ctx: "Behavior") -> float:
+        holders = self._alive_holders(ctx)
+        copies = len(holders)
+        if copies < self.syn.min_copies:
+            return 0.0
+        if copies >= self.EFFECT_GATED:
+            return 0.0 if self._effect_up(holders) else self.UPKEEP_SCORE   # surplus: keep it up only
+        recharge = self._recharge()
+        interval = (recharge / copies) if recharge > 0 else 0.0             # time-share the cooldown
+        due = (time.time() - self._last_cast) >= interval
+        return self.TIMESHARE_SCORE if due else 0.0
+
+    def _next_caster(self, holders: List['Client']) -> Optional['Client']:
+        """Next holder in the rotation (already filtered to alive), advancing the cursor."""
+        if not holders:
+            return None
+        self._rot %= len(holders)
+        caster = holders[self._rot]
+        self._rot = (self._rot + 1) % len(holders)
+        return caster
+
+    @staticmethod
+    def _pos(client: 'Client') -> 'Vec2':
+        return Vec2.from_tuple(GW.Agent.GetXY(client.game_client.agent_id))
+
+    def _gather_step(self, ctx: "Behavior", caster: 'Client') -> Node:
+        """Pull any client not yet clustered at the rally point (the leader, or the caster itself if
+        there's no leader) toward it, and SUCCEED once every controlled client is within Earshot of
+        the caster. Re-reads positions each tick and republishes ``self._involved`` (the clients it
+        is actively moving + the caster) so only those clients' selectors suspend."""
+        earshot = float(GW.Range.Earshot.value)
+        radius = earshot * self.GATHER_FACTOR
+
+        def in_earshot_of_caster() -> bool:
+            cp = self._pos(caster)
+            return all((self._pos(c) - cp).magnitude() <= earshot
+                       for c in ctx.my_clients().values() if c.game_client is not None)
+
+        def gather() -> None:
+            rally = self._leader_pos(ctx) or self._pos(caster)
+            involved = {caster}
+            for c in ctx.my_clients().values():
+                if c.game_client is None:
+                    continue
+                if (self._pos(c) - rally).magnitude() > radius:   # not yet clustered -> pull it in
+                    c.transport.send(RPC.CMD.MOVE, rally.x, rally.y)
+                    involved.add(c)
+            self._involved = involved
+
+        return Task("gather_for_shout", gather, done=in_earshot_of_caster, interval=0.1)
+
+    def build(self, ctx: "Behavior") -> Node:
+        holders = self._alive_holders(ctx)
+        caster = self._next_caster(holders)
+        self._caster = caster
+        self._involved = {caster} if caster is not None else set()
+        self._last_cast = time.time()        # reset the time-share clock on every cast
+        if caster is None:
+            return Wait(0.1)
+        # Gather the party within earshot of the caster, THEN cast -- one committed Sequence. If the
+        # party is already clustered the gather step SUCCEEDs on its first tick and it just casts.
+        return Sequence(self.name, [
+            self._gather_step(ctx, caster),
+            CastSkill(caster, self.skill_id, lambda c=caster: Behavior.cast(c, self.skill_id)),
+        ])
+
+    def involves(self, client: 'Client') -> bool:
+        # The caster, plus any client we're currently moving into earshot -- so a client already in
+        # position is NOT involved and resumes its own actions while the shout is set up.
+        return client is self._caster or client in self._involved
 
 
 # HeroAI's combat engine is a STRICT hierarchy: PrioritizeSkills() sorts the bar by a fixed
@@ -1435,15 +1956,33 @@ class UtilityCombatBehavior(Behavior):
         shield_of_absorption = 1399
         heal_area = 280
         kareis_healing_circle = 1119
+        shadow_form = 826
+        glyph_of_swiftness = 2002
+        dont_trip = 2216
 
-    # A bar that carries all three of these is a self-protecting tank; detected independently of
-    # any other combos on the bar.
+    # Cross-build (multi-account) synergies: capabilities that emerge from several accounts each
+    # carrying a shared skill, not from one bar. Detected across the whole roster (detect_cross_
+    # synergies) and driven by team-level rotation plans (SharedShoutRotation), which live in the
+    # team selector. EXAMPLE: 2+ players holding Don't Trip -> rotate it to keep anti-knockdown up.
+    CROSS_SYNERGIES: List[CrossSynergy] = [
+        CrossSynergy("dont_trip", Skills.dont_trip.value, min_copies=2, provides="anti_knockdown"),
+    ]
+
+    # Each Synergy is a skill cluster that, present together on a bar, unlocks a combo. Detection
+    # is independent per synergy (a bar can carry several at once), and a detected synergy CLAIMS
+    # its skills so the generic engine won't fire them as loose skills -- the combo module owns them.
     SYNERGIES: List[Synergy] = [
+        # A bar carrying all three of these is a self-protecting tank.
         Synergy("rit_tank",
                 frozenset({Skills.weapon_of_quickening.value,
                            Skills.shielding_hands.value,
                            Skills.shield_of_absorption.value}),
                 provides="tank"),
+        # EXAMPLE combo: Glyph of Swiftness + Shadow Form = gap-free perma Shadow Form. Handled by
+        # the MaintainShadowForm plan in _synergy_actions (see that method for where modules attach).
+        Synergy("perma_shadow_form",
+                frozenset({Skills.glyph_of_swiftness.value, Skills.shadow_form.value}),
+                provides="invuln"),
     ]
 
     def __init__(self, thread_globals: ThreadManager, network_manager: NetworkManager,
@@ -1455,6 +1994,9 @@ class UtilityCombatBehavior(Behavior):
         # fights once the leader engages). Defaults to the party leader until the operator picks one.
         self.leader_login_number: Optional[int] = None
         self._combat_cache: Dict['Client', tuple] = {}   # client -> (timestamp, in_combat); short TTL
+        # How far from a client (or the leader) an enemy counts as "in combat". Operator-tunable in
+        # draw(); defaults to Earshot (the old hard-coded value). Read by _enemies_near.
+        self.combat_radius: int = int(GW.Range.Earshot.value)
         # Start INERT: with no real synergy library authored yet, the behavior should command
         # nothing until the operator opts in. The example actions below (balth/heal upkeep, the
         # rit_tank synergy, regroup) are demo content to validate the engine, not a default loadout
@@ -1465,11 +2007,29 @@ class UtilityCombatBehavior(Behavior):
         # construction: settle-gated, self-buffs skip while up, combat-only skills idle out of combat,
         # and the client suppresses any cast whose target doesn't resolve.
         self.generic_enabled = HeroAISkills.available
+        # Auto-attack: ships ON. Combat-tier (SUSTAINED) so it competes with offense by score but
+        # never interrupts a running cast; keeps the client swinging on a foe in combat (AttackAction).
+        self.attack_enabled = True
         self.regroup_enabled = True
-        self.team_actions: List[Action] = [RegroupAll()]
-        self.team_selector: Optional[UtilitySelector] = None
-        self.selectors: Dict['Client', UtilitySelector] = {}
+        # Steady follow: each assigned client trails the leader, fanned out by follow_spread_radius.
+        # Deadzone below follow_min_distance (score 0), exponential ramp up to follow_hard_leash,
+        # forced interrupt beyond it. Read live by FollowLeader so the sliders are responsive.
+        self.follow_enabled = True
+        self.follow_min_distance = 300
+        self.follow_hard_leash = 1500
+        self.follow_spread_radius = 250
+        # Cross-build (multi-account) synergies: real engine content (not demo), ships ON. Each
+        # registered CrossSynergy gets a persistent SharedShoutRotation in the team action pool (it
+        # self-gates via applicable() until enough copies are actually present on the roster).
+        self.cross_synergies_enabled = True
+        self.team_actions: List[Action] = (
+            [SharedShoutRotation(cs) for cs in self.CROSS_SYNERGIES] + [RegroupAll()])
+        # One party engine (built in StateCombat.enter), not N per-client selectors. The behavior
+        # still owns loadout caching (rebuilt on signature change) and the UI readout labels.
+        self.party_selector: Optional[PartyUtilitySelector] = None
+        self._client_action_cache: Dict['Client', List[Action]] = {}
         self.client_action_label: Dict['Client', Optional[str]] = {}
+        self._team_label: Optional[str] = None
 
     @staticmethod
     def name() -> str:
@@ -1491,12 +2051,19 @@ class UtilityCombatBehavior(Behavior):
         return acts
 
     def _synergy_actions(self, client: 'Client') -> List[Action]:
+        """The authored combo library: for each synergy detected on the bar, the Action plan(s)
+        that drive it. ``modules`` maps a synergy name -> a builder that returns its Actions; add a
+        new entry here when you add a Synergy. This is where a custom skill-combination plan
+        (e.g. MaintainShadowForm) gets wired in once its Synergy is in SYNERGIES."""
         S = self.Skills
         modules: Dict[str, Callable[['Client'], List[Action]]] = {
             "rit_tank": lambda c: [
                 MaintainEnchant(c, S.weapon_of_quickening.value, 4000, "weapon of quickening"),
                 MaintainEnchant(c, S.shielding_hands.value, 3000, "shielding hands"),
                 MaintainEnchant(c, S.shield_of_absorption.value, 3000, "shield of absorption"),
+            ],
+            "perma_shadow_form": lambda c: [
+                MaintainShadowForm(c, S.shadow_form.value, S.glyph_of_swiftness.value),
             ],
         }
         bar = set(client.game_client.skills.keys())
@@ -1507,10 +2074,31 @@ class UtilityCombatBehavior(Behavior):
 
     def _client_actions(self, client: 'Client') -> List[Action]:
         acts: List[Action] = [Idle(client)]
-        if self.generic_enabled:                               # the default engine for unclaimed skills
+        if self.attack_enabled:                                # combat-tier auto-attack
+            acts.append(AttackAction(client))
+        if self.follow_enabled:                                # trail the leader (deadzone/leash/spread)
+            acts.append(FollowLeader(client))
+        # Authored combination plans for any synergy detected on the bar. These are the REAL combo
+        # library (e.g. perma Shadow Form), so they run whenever their synergy is present -- NOT
+        # gated behind the example toggle. A detected synergy also claims its skills, so the generic
+        # engine below skips them and the combo module is the only thing that fires them.
+        acts += self._synergy_actions(client)
+        if self.generic_enabled:                               # default engine for unclaimed skills
             acts += GenericCombatEngine.actions_for(client, self.SYNERGIES)
-        if self.examples_enabled:                              # demo content, separate opt-in
-            acts += self._generic_actions(client) + self._synergy_actions(client)
+        if self.examples_enabled:                              # toy single-skill upkeep demos only
+            acts += self._generic_actions(client)
+        return acts
+
+    def _team_action_list(self) -> List[Action]:
+        """Live candidate set for the TEAM selector (multi-account plans). Cross-build rotations are
+        real engine content (on when cross_synergies_enabled); RegroupAll is demo (on with examples).
+        Read live each tick so toggles take effect without rebuilding -- the actions self-gate via
+        applicable(), so an inactive cross-synergy simply scores nothing."""
+        acts: List[Action] = []
+        if self.cross_synergies_enabled:
+            acts += [a for a in self.team_actions if isinstance(a, SharedShoutRotation)]
+        if self.examples_enabled:
+            acts += [a for a in self.team_actions if isinstance(a, RegroupAll)]
         return acts
 
     # ---- combat state (host-side; commander shares the clients' map instance) ----
@@ -1526,7 +2114,7 @@ class UtilityCombatBehavior(Behavior):
             return False
         if not x and not y:
             return False
-        enemies = Routines.Agents.GetFilteredEnemyArray(x, y, int(GW.Range.Earshot.value))
+        enemies = Routines.Agents.GetFilteredEnemyArray(x, y, int(self.combat_radius))
         return len(enemies) > 0
 
     def client_in_combat(self, client: 'Client') -> bool:
@@ -1543,10 +2131,12 @@ class UtilityCombatBehavior(Behavior):
         self._combat_cache[client] = (now, in_combat)
         return in_combat
 
-    def _coordinating(self, client: 'Client') -> bool:
-        """True while the team selector is running a coordinated play that owns this client."""
-        a = self.team_selector.current_action if self.team_selector else None
-        return a is not None and a.involves(client)
+    def _on_pick(self, client: Optional['Client'], name: Optional[str]) -> None:
+        """Readout sink for the party engine: team pick when client is None, else a per-client pick."""
+        if client is None:
+            self._team_label = name
+        else:
+            self.client_action_label[client] = name
 
     @staticmethod
     def _login_dropdown(label: str, imgui_id: str, current: Optional[int]) -> Optional[int]:
@@ -1576,9 +2166,27 @@ class UtilityCombatBehavior(Behavior):
             self.generic_enabled = PyImGui.checkbox("Generic engine (unclaimed skills)", self.generic_enabled)
         else:
             PyImGui.text("Generic engine: HeroAI metadata unavailable")
+        self.attack_enabled = PyImGui.checkbox("Auto-attack in combat", self.attack_enabled)
+        self.cross_synergies_enabled = PyImGui.checkbox("Cross-build synergies (team)", self.cross_synergies_enabled)
         self.examples_enabled = PyImGui.checkbox("Enable example actions", self.examples_enabled)
         if self.examples_enabled:
             self.regroup_enabled = PyImGui.checkbox("Regroup on follow target", self.regroup_enabled)
+
+        # Combat detection radius: how far from a client (or the leader) an enemy must be to count
+        # as "in combat" -- gates combat-only skills and auto-attack. Was hard-coded to Earshot.
+        self.combat_radius = PyImGui.input_int("Combat radius", int(self.combat_radius))
+        if self.combat_radius < 100:
+            self.combat_radius = 100
+
+        # Follow: trail the leader. Min = deadzone (no follow below it), Leash = forced-move
+        # distance (interrupt above it, with an exponential ramp between), Spread = ring radius the
+        # clients fan out on around the leader (AoE safety). Min < Leash and Spread < Min advised.
+        self.follow_enabled = PyImGui.checkbox("Follow leader", self.follow_enabled)
+        if self.follow_enabled:
+            self.follow_min_distance = max(50, PyImGui.input_int("Follow min", int(self.follow_min_distance)))
+            self.follow_hard_leash = max(self.follow_min_distance + 50,
+                                         PyImGui.input_int("Follow leash", int(self.follow_hard_leash)))
+            self.follow_spread_radius = max(0, PyImGui.input_int("Follow spread", int(self.follow_spread_radius)))
 
         # Leader: anchors team-wide combat state (enemies near the leader put the whole team in
         # combat). Follow: which player RegroupAll pulls toward.
@@ -1587,30 +2195,40 @@ class UtilityCombatBehavior(Behavior):
 
         # Live readout of what each client's selector is currently doing -- the fastest way to
         # eyeball-validate the engine in-game.
-        coord = self.team_selector.current_action.name if (self.team_selector and
-                                                           self.team_selector.current_action) else None
-        PyImGui.text(f"Team: {coord or 'idle'}")
-        for client in list(self.selectors.keys()):
+        PyImGui.text(f"Team: {self._team_label or 'idle'}")
+        # Detected cross-build synergies across the roster (name x copies) -- the multi-account combos.
+        detected = detect_cross_synergies(list(self.my_clients().values()), self.CROSS_SYNERGIES)
+        if detected:
+            PyImGui.text("Cross-build: " + ", ".join(f"{cs.name} x{len(h)}" for cs, h in detected))
+        for client in list(self.client_action_label.keys()):
             label = self.client_action_label.get(client) or "-"
             PyImGui.text(f"  {client.game_client.name or 'client'}: {label}")
 
     class StateCombat(State):
-        """Build a per-client UtilitySelector from each client's loadout and tick them all
-        every frame, plus the behavior's team selector. Selectors are rebuilt whenever the
-        loadout signature changes (a client joins/leaves, its skillbar syncs, or the synergies
-        on its bar change), so live re-assignment and late skillbar arrival are handled."""
+        """Own the single PartyUtilitySelector and feed it live providers. The behavior still owns
+        loadout CACHING -- per-client action lists are rebuilt only when the loadout signature
+        changes (a client joins/leaves, its skillbar syncs, or its detected synergies change), so
+        Actions persist across ticks (settle windows hold) and the party engine just reads the cache."""
         def enter(self, ctx: "UtilityCombatBehavior") -> None:
-            # Team plays are example content too -> empty until opted in (read live, no rebuild).
-            ctx.team_selector = UtilitySelector(
-                "team", lambda: ctx.team_actions if ctx.examples_enabled else [])
-            ctx.selectors = {}
             ctx.client_action_label = {}
+            ctx._team_label = None
+            ctx._client_action_cache = {}
             self._sig: Optional[dict] = None
             self._rebuild(ctx)
+            # One engine for the whole party. Providers read live: team actions self-gate, per-client
+            # actions come from the rebuilt cache, and the roster drives slot create/drop.
+            ctx.party_selector = PartyUtilitySelector(
+                team_actions=lambda: ctx._team_action_list(),
+                client_actions=lambda c: ctx._client_action_cache.get(c, []),
+                clients=lambda: [c for c in ctx.my_clients().values() if c.game_client is not None],
+                on_pick=ctx._on_pick)
+            ctx.party_selector.enter(ctx)
 
         def _signature(self, ctx: "UtilityCombatBehavior") -> dict:
             sig = {"__examples__": ctx.examples_enabled,    # toggling rebuilds per-client loadouts
-                   "__generic__": ctx.generic_enabled}
+                   "__generic__": ctx.generic_enabled,
+                   "__attack__": ctx.attack_enabled,
+                   "__follow__": ctx.follow_enabled}
             for cid, c in ctx.my_clients().items():
                 if c.game_client is None:
                     sig[cid] = (False, ())
@@ -1621,27 +2239,20 @@ class UtilityCombatBehavior(Behavior):
             return sig
 
         def _rebuild(self, ctx: "UtilityCombatBehavior") -> None:
-            ctx.selectors = {}
+            """Recompute each client's cached action list (the party engine reads it via its provider)."""
+            cache: Dict['Client', List[Action]] = {}
             for cid, client in ctx.my_clients().items():
                 if client.game_client is None:
                     continue
-                actions = ctx._client_actions(client)
-                # Bind client into each closure so every selector targets its own client.
-                on_pick = (lambda c: (lambda nm: ctx.client_action_label.__setitem__(c, nm)))(client)
-                ctx.selectors[client] = UtilitySelector(
-                    f"sel_{cid}",
-                    (lambda a=actions: a),
-                    suspended=(lambda c=client: ctx._coordinating(c)),
-                    on_pick=on_pick)
+                cache[client] = ctx._client_actions(client)
+            ctx._client_action_cache = cache
             self._sig = self._signature(ctx)
 
         def tick(self, ctx: "UtilityCombatBehavior") -> Status:
             if self._signature(ctx) != self._sig:
                 self._rebuild(ctx)
-            if ctx.team_selector is not None:
-                ctx.team_selector.tick(ctx)
-            for sel in list(ctx.selectors.values()):
-                sel.tick(ctx)
+            if ctx.party_selector is not None:
+                ctx.party_selector.tick(ctx)
             return Status.RUNNING
 
 

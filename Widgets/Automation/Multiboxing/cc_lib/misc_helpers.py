@@ -3,6 +3,29 @@ import time
 import math
 
 import Py4GWCoreLib as GW
+from Py4GWCoreLib import Routines
+
+
+def current_epoch() -> int:
+    """Hot-reload generation counter, stored on the MultiThreading *class* (loaded once;
+    Py4GWCoreLib is not re-imported when this widget hot-reloads, so it survives a reload of
+    the cc_lib files). The widget bumps it on every (re)load. A long-lived worker/network
+    thread captures it at start and stops when it changes, so a thread orphaned by a reload
+    -- one the new CentralCommander has no handle to -- self-terminates instead of running
+    its stale code (and crashing on load screens) forever. Mirrors behaviors._current_epoch."""
+    return getattr(GW.MultiThreading, "_cc_epoch", 0)
+
+
+def map_ready() -> bool:
+    """True only when the local instance is fully live (map valid AND finished loading).
+    Any worker/network thread that touches a GW API must gate on this: calling into the
+    native side during a loading screen (instance teardown) crashes the client. Shared by
+    the behavior worker loop and the client network receiver. Defensive try/except because
+    these checks can themselves throw mid-teardown -> treat as not-ready."""
+    try:
+        return Routines.Checks.Map.MapValid() and Routines.Checks.Map.IsMapReady()
+    except Exception:
+        return False
 
 
 class MultithreadBoosterCache:

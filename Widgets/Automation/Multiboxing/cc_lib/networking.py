@@ -17,7 +17,7 @@ from cc_lib.jsonizers import Jsonizer
 from cc_lib.blackboard import GameClient
 from cc_lib.rpc import RPC
 from cc_lib.transport import Client, LocalTransport
-from cc_lib.misc_helpers import ThreadManager
+from cc_lib.misc_helpers import ThreadManager, map_ready, current_epoch
 
 
 class ZMQTransport(Client.Transport):
@@ -107,8 +107,11 @@ class NetworkManager:
 
     def maintain_host(self, port, terminal_function):
         self.setup_zmq_host(port)
+        # See maintain_client: bail when a hot-reload bumps the epoch so an orphaned host loop
+        # (whose thread_manager.is_threads_running stays True) retires instead of running forever.
+        epoch = current_epoch()
         try:
-            while self.thread_manager.is_threads_running:
+            while self.thread_manager.is_threads_running and epoch == current_epoch():
                 events = dict(self.poller.poll(timeout=10))
 
                 # 1. Handle RPC Requests (ROUTER)
@@ -200,38 +203,58 @@ class NetworkManager:
             poller.register(dealer, zmq.POLLIN)
             poller.register(sub, zmq.POLLIN)
 
-            while self.thread_manager.is_threads_running:
-                # A. Send local state update to host
-                # A. Send local state update to host
-                state = Jsonizer.player_data()
-                state["client_id"] = str(client_id)
-                push.send_json(state)
+            # Capture the hot-reload generation. If the widget reloads, the new CentralCommander
+            # builds a fresh ThreadManager + network thread but has NO handle to this one, and our
+            # old thread_manager.is_threads_running stays True -- so without this check the stale
+            # (pre-fix) loop runs forever and keeps crashing on load screens. Bailing when the epoch
+            # moves lets a reload cleanly retire this thread instead of orphaning it.
+            epoch = current_epoch()
+            while self.thread_manager.is_threads_running and epoch == current_epoch():
+                # Don't touch GW APIs while this client is mid-loading-screen: every inbound RPC
+                # (move/cast/interact) calls into the native side, and player_data() reads it --
+                # doing so during instance teardown crashes the client (the remote-crash symptom).
+                # We must NOT skip the poll/recv, though: leaving frames unread backs up the ZMQ
+                # buffers and replays stale move/cast orders the instant the new map loads. So we
+                # always drain, and only *dispatch* when the map is live (no debounce -- a single
+                # transient not-ready just drops one order, which the host re-issues next tick).
+                #
+                # map_ready() is re-checked immediately before EACH native call rather than once
+                # per loop: poll() below blocks up to 10ms, which is plenty of time for the map to
+                # begin tearing down between a top-of-loop check and the actual UseSkill -> a TOCTOU
+                # crash window. Re-checking right before the call shrinks that window to ~nothing.
+
+                # A. Send local state update to host (only when live; a stale read would crash).
+                if map_ready():
+                    state = Jsonizer.player_data()
+                    state["client_id"] = str(client_id)
+                    push.send_json(state)
 
                 # B. Check for incoming messages
                 events = dict(poller.poll(timeout=10))
 
                 if dealer in events:
                     # Handle RPC response from Host
-                    msg_full = dealer.recv_multipart()
+                    msg_full = dealer.recv_multipart()       # always drain the frame
                     msg: Dict = json.loads(msg_full[-1].decode('utf-8'))
 
                     # Use registry to handle the returned data (e.g., updating local state)
                     method = msg.get("method", None)
                     args = msg.get("args", [])
                     kwargs = msg.get("kwargs", {})
-                    if method:
+                    if method and map_ready():               # fresh check right before the native call
                         ret = RPC.call(method, *args, **kwargs)
                         j: Dict = {"method": method, "returned": ret}
                         dealer.send_multipart([b"", json.dumps(j).encode()])
 
                 if sub in events:
-                    broadcast_data = sub.recv_json()
-                    # Assume the broadcast message looks like: {"method": "move_to", "args": [100, 200]}
-                    RPC.call(
-                        broadcast_data.get("method"),
-                        *broadcast_data.get("args", []),
-                        **broadcast_data.get("kwargs", {})
-                    )
+                    broadcast_data = sub.recv_json()         # always drain the frame
+                    if map_ready():                          # fresh check right before the native call
+                        # Assume the broadcast message looks like: {"method": "move_to", "args": [100, 200]}
+                        RPC.call(
+                            broadcast_data.get("method"),
+                            *broadcast_data.get("args", []),
+                            **broadcast_data.get("kwargs", {})
+                        )
 
                 time.sleep(0.05)
         finally:

@@ -35,6 +35,7 @@ class RPC:
         DROP_BOND = "drop_bond"
         CHANGE_TARGET = "change_target"   # host sets a client's target to a concrete agent id it knows
         CAST_TARGETED = "cast_targeted"   # client resolves the target for a Skilltarget spec, then casts
+        INTERACT = "interact"             # interact an agent: host-given id, else client picks an enemy
 
     @classmethod
     def register(
@@ -140,6 +141,37 @@ class RPC:
         GW.GLOBAL_CACHE.SkillBar.UseSkill(int(slot), target_id)
 
     @staticmethod
+    def interact(agent_id: int = 0) -> None:
+        """CLIENT-SIDE: interact with an agent. Two modes:
+          * host-driven -- the host passes a concrete ``agent_id`` it knows in the shared instance,
+            and the client interacts exactly that agent. Reusable for friendly interactions later
+            (NPCs, chests, allies, res targets), not just attacking.
+          * client-resolved (``agent_id`` == 0) -- the client picks a combat target in its own
+            world: the party-called target if it's a live enemy, else the nearest enemy in spell
+            range. Mirrors HeroAI CombatClass.ChooseTarget (called target first, then nearest).
+
+        Interacting an enemy starts the client's normal auto-attack loop (it keeps swinging on its
+        own from there). No-op when no valid target is found -- the 'is there anything to interact
+        with' feasibility check lives here, in the client's own world, exactly like cast_targeted."""
+        target_id = int(agent_id or 0)
+        if not target_id:
+            from Py4GWCoreLib import Range
+            spell = Range.Spellcast.value
+            target_id = int(GW.Party.GetPartyTarget() or 0)
+            if target_id:
+                try:
+                    valid = GW.Agent.IsAlive(target_id) and GW.Agent.GetAllegiance(target_id)[1] == "Enemy"
+                except Exception:
+                    valid = False
+                if not valid:
+                    target_id = 0
+            if not target_id:
+                target_id = int(Routines.Agents.GetNearestEnemy(spell) or 0)
+        if not target_id:
+            return
+        GW.Player.Interact(target_id, False)
+
+    @staticmethod
     def method(name: CMD):
         def decorator(func: RPCMethod[P, R]) -> RPCMethod[P, R]:
             RPC.register(name, func)
@@ -159,4 +191,5 @@ RPC.register(RPC.CMD.DROP_BOND, GW.GLOBAL_CACHE.Effects.DropBuff)
 RPC.register(RPC.CMD.RELATIVE_MOVE, RPC.relative_move)
 RPC.register(RPC.CMD.CHANGE_TARGET, GW.Player.ChangeTarget)
 RPC.register(RPC.CMD.CAST_TARGETED, RPC.cast_targeted)
+RPC.register(RPC.CMD.INTERACT, RPC.interact)
 
