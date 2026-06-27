@@ -1,922 +1,68 @@
 # region Imports
 # from __future__ import annotations
-import os
-import sys
-import random
-import traceback
+import os, sys, importlib, random, time, traceback
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
 
 import Py4GW  # type: ignore
 import PyEffects
-from Py4GWCoreLib import IniHandler
-from Py4GWCoreLib import PyImGui
-from Py4GWCoreLib import Routines
-from Py4GWCoreLib import Timer
+from Py4GWCoreLib import IniHandler, PyImGui, Routines, Timer
 import Py4GWCoreLib as GW
-import time
-import socket
 from typing import List, Dict, Protocol, ParamSpec, TypeVar, Any, Callable, Set, Literal, Type, Optional
 from dataclasses import dataclass, field
-import json
+import json, math, uuid
 from enum import Enum, auto
-import math
-import uuid
 
 
-lib_path = sys.prefix + "\\Py4GWCoreLib\\ExternalLibs"
-if lib_path not in sys.path:
-    sys.path.insert(0, lib_path)
-import Py4GWCoreLib.ExternalLibs.zmq as zmq
-# endregion
-
-
-# region Jsonizers
-class Jsonizer:
-    @staticmethod
-    def effect_from_dict(data: Dict[str, Any]):
-        return GW.PyEffects.EffectType(
-            skill_id=int(data.get("skill_id", 0)),
-            attribute_level=int(data.get("attribute_level", 0)),
-            effect_id=int(data.get("effect_id", 0)),
-            agent_id=int(data.get("agent_id", 0)),
-            duration=float(data.get("duration", 0.0)),
-            timestamp=int(data.get("timestamp", 0)),
-            time_elapsed=int(data.get("time_elapsed", 0)),
-            time_remaining=int(data.get("time_remaining", 0)),
-        )
-
-    @staticmethod
-    def effect_to_dict(effect) -> Dict[str, Any]:
-        return {
-            "skill_id": effect.skill_id,
-            "attribute_level": effect.attribute_level,
-            "effect_id": effect.effect_id,
-            "agent_id": effect.agent_id,
-            "duration": effect.duration,
-            "timestamp": effect.timestamp,
-            "time_elapsed": effect.time_elapsed,
-            "time_remaining": effect.time_remaining,
-        }
-
-    @staticmethod
-    def buff_to_dict(buff: PyEffects.BuffType) -> Dict[str, Any]:
-        return {
-            "skill_id": buff.skill_id,
-            "buff_id": buff.buff_id,
-            "target": buff.target_agent_id
-        }
-
-    @staticmethod
-    def get_buffs(id):
-        buffs = GW.Effects.GetBuffs(id)
-        json_buffs: Dict[str, Any] = dict()
-        for b in buffs:
-            json_buffs[b.skill_id] = Jsonizer.buff_to_dict(b)
-        return json_buffs
-
-    @staticmethod
-    def get_effects(id: int) -> Dict[int, Any]:
-        effects = GW.Effects.GetEffects(id)
-        json_effects: Dict[int, Any] = dict()
-        for e in effects:
-            json_effects[int(e.skill_id)] = Jsonizer.effect_to_dict(e)
-        return json_effects
-
-    @staticmethod
-    def skillbarskill_to_dict(skill: GW.PySkillbar.SkillbarSkill) -> Dict[str, Any]:
-        return {
-            "id": int(skill.id.id),  # SkillID → int
-            "adrenaline_a": skill.adrenaline_a,
-            "adrenaline_b": skill.adrenaline_b,
-            "recharge": skill.recharge,
-            "event": skill.event,
-            "get_recharge": skill.get_recharge,
-        }
-
-    @staticmethod
-    def skillbar_skill_from_dict(data: Dict[str, Any]):
-        return GW.PySkillbar.SkillbarSkill(
-            id=GW.PySkill(data.get("id", 0)),
-            adrenaline_a=int(data.get("adrenaline_a", 0)),
-            adrenaline_b=int(data.get("adrenaline_b", 0)),
-            recharge=int(data.get("recharge", 0)),
-            event=int(data.get("event", 0)),
-        )
-
-    @staticmethod
-    def get_skilldata() -> Dict[int, Any]:
-        d: Dict[int, Any] = dict()
-        for i in range(1, 9):
-            data = Jsonizer.skillbarskill_to_dict(GW.SkillBar.GetSkillData(i))
-            d[data["id"]] = data
-            d[data["id"]]["slot"] = i
-        return d
-
-    @staticmethod
-    def player_data() -> Dict[str, Any]:
-        d: Dict[str, any] = dict()
-        d["id"] = GW.Player.GetAgentID()
-        d["target_id"] = GW.Player.GetTargetID()
-        d["hp"] = GW.Agent.GetHealth(d["id"])
-        d["max_hp"] = GW.Agent.GetMaxHealth(d["id"])
-        d["energy"] = GW.Agent.GetEnergy(d["id"])
-        d["max_energy"] = GW.Agent.GetMaxEnergy(d["id"])
-        d["skilldata"] = Jsonizer.get_skilldata()
-        d["effects"] = Jsonizer.get_effects(d["id"])
-        d["buffs"] = Jsonizer.get_buffs(d["id"])
-        return d
-
-
-# endregion
-
-
-# region RPC setup
-P = ParamSpec("P")
-R = TypeVar("R")
-
-
-class RPCMethod(Protocol[P, R]):
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
-        ...
-
-
-class RPC:
-    """This is a namespace class for all RPC stuff"""
-    _methods: Dict[str, Callable[..., object]] = {}
-
-    class CMD(str, Enum):
-        MOVE = "move"
-        RELATIVE_MOVE = "relmove"
-        GETSKILLBAR = "getskillbar"
-        GETEFFECTS = "geteffects"
-        GET_PLAYER_ID = "getplayerid"
-        GET_PLAYER_DATA = "get_player_data"
-        USE_SKILL = "use_skill"
-        DROP_BOND = "drop_bond"
-
-    @classmethod
-    def register(
-            cls,
-            name: CMD,
-            method: RPCMethod[P, R],
-    ) -> None:
-        if name in cls._methods:
-            raise ValueError(f"RPC method '{name}' already registered")
-        cls._methods[name] = method
-
-    @classmethod
-    def clear(cls):
-        """Useful for hot-reloading to prevent duplicate registration logic errors."""
-        cls._methods.clear()
-
-    @classmethod
-    def _call(cls, name: str, args: tuple[object, ...], kwargs: dict[str, object]) -> object:
-        try:
-            method = cls._methods[name]
-        except KeyError:
-            raise KeyError(f"RPC method '{name}' not found")
-        return method(*args, **kwargs)
-
-    @classmethod
-    def call(cls, name: CMD, *args: object, **kwargs: object) -> object:
-        try:
-            method = cls._methods[name]
-        except KeyError:
-            raise KeyError(f"RPC method '{name}' not found")
-        return method(*args, **kwargs)
-
-    # Static helpers
-    @staticmethod
-    def relative_move(x, y):
-        _x, _y = GW.Player.GetXY()
-        GW.Player.Move(_x + x, _y + y)
-
-    @staticmethod
-    def method(name: CMD):
-        def decorator(func: RPCMethod[P, R]) -> RPCMethod[P, R]:
-            RPC.register(name, func)
-            return func
-
-        return decorator
-
-
-RPC.clear()
-RPC.register(RPC.CMD.MOVE, GW.Player.Move)
-RPC.register(RPC.CMD.GETSKILLBAR, GW.GLOBAL_CACHE.SkillBar.GetSkillbar)
-RPC.register(RPC.CMD.GETEFFECTS, Jsonizer.get_effects)
-RPC.register(RPC.CMD.GET_PLAYER_ID, GW.Player.GetAgentID)
-RPC.register(RPC.CMD.GET_PLAYER_DATA, Jsonizer.player_data)
-RPC.register(RPC.CMD.USE_SKILL, GW.GLOBAL_CACHE.SkillBar.UseSkill)
-RPC.register(RPC.CMD.DROP_BOND, GW.GLOBAL_CACHE.Effects.DropBuff)
-RPC.register(RPC.CMD.RELATIVE_MOVE, RPC.relative_move)
-# endregion
-
-
-# region MiscHelperClasses
-class MultithreadBoosterCache:
-    def __init__(self):
-        self.timer = time.time()
-        self.fps_poll = time.time()
-        self.load_delay = time.time()
-        self.fps = 60
-
-
-class Vec2:
-    __slots__ = ("x", "y")
-
-    def __init__(self, x=0.0, y=0.0):
-        self.x = x
-        self.y = y
-
-    @classmethod
-    def from_tuple(cls, values):
-        if len(values) != 2:
-            raise ValueError("Tuple must have exactly 2 elements")
-        return cls(values[0], values[1])
-
-    def __repr__(self):
-        return f"Vec2({self.x}, {self.y})"
-
-    # --- Basic arithmetic ---
-
-    def __add__(self, other):
-        return Vec2(self.x + other.x, self.y + other.y)
-
-    def __sub__(self, other):
-        return Vec2(self.x - other.x, self.y - other.y)
-
-    def __neg__(self):
-        return Vec2(-self.x, -self.y)
-
-    def __mul__(self, scalar):
-        return Vec2(self.x * scalar, self.y * scalar)
-
-    def __rmul__(self, scalar):
-        return self.__mul__(scalar)
-
-    def __truediv__(self, scalar):
-        if scalar == 0:
-            raise ZeroDivisionError("Division by zero")
-        inv = 1.0 / scalar
-        return Vec2(self.x * inv, self.y * inv)
-
-    # --- Comparisons ---
-
-    def __eq__(self, other):
-        return self.x == other.x and self.y == other.y
-
-    # --- Vector math ---
-
-    def dot(self, other):
-        return self.x * other.x + self.y * other.y
-
-    def cross(self, other):
-        """2D cross product (scalar result)"""
-        return self.x * other.y - self.y * other.x
-
-    def magnitude(self):
-        return math.sqrt(self.x * self.x + self.y * self.y)
-
-    def magnitude_squared(self):
-        """Avoids sqrt — useful for comparisons"""
-        return self.x * self.x + self.y * self.y
-
-    def normalized(self):
-        mag = self.magnitude()
-        if mag == 0:
-            raise ValueError("Cannot normalize zero vector")
-        inv = 1.0 / mag
-        return Vec2(self.x * inv, self.y * inv)
-
-    def distance_to(self, other):
-        dx = self.x - other.x
-        dy = self.y - other.y
-        return math.sqrt(dx * dx + dy * dy)
-
-    def distance_squared_to(self, other):
-        dx = self.x - other.x
-        dy = self.y - other.y
-        return dx * dx + dy * dy
-
-    # --- Geometry helpers ---
-
-    def angle(self):
-        """Angle from x-axis in radians"""
-        return math.atan2(self.y, self.x)
-
-    def angle_to(self, other):
-        """Signed angle to another vector"""
-        return math.atan2(self.cross(other), self.dot(other))
-
-    def rotated(self, radians):
-        cos_r = math.cos(radians)
-        sin_r = math.sin(radians)
-        return Vec2(
-            self.x * cos_r - self.y * sin_r,
-            self.x * sin_r + self.y * cos_r
-        )
-
-    def perpendicular(self):
-        """90° counterclockwise"""
-        return Vec2(-self.y, self.x)
-
-    # --- Utility ---
-
-    def copy(self):
-        return Vec2(self.x, self.y)
-
-    def as_tuple(self):
-        return (self.x, self.y)
-
-    def as_list(self):
-        return [self.x, self.y]
-
-
-class ThreadManager:
-    def __init__(self):
-        self.thread_manager = GW.MultiThreading(2.0, log_actions=True)
-        self.is_threads_running = False
-
-    def start_thread(self, name, func):
-        self.is_threads_running = True
-        # Add sequential threads
-        self.thread_manager.add_thread(name, func)
-        # Watchdog thread is necessary to async close other running threads
-        self.thread_manager.start_watchdog(name)
-
-    def stop_sequential_environment(self):
-        self.thread_manager.stop_all_threads()
-        self.is_threads_running = False
-
-# endregion
-
-
-# region blackboard
-@dataclass
-class SkillData:
-    """get_recharge is the remaining cooldown in milliseconds"""
-    id: int = 0
-    slot: int = 0
-    adrenaline_a: int = 0
-    adrenaline_b: int = 0
-    recharge: int = 0
-    event: int = 0
-    get_recharge: int = 0
-
-
-@dataclass
-class EffectData:
-    skill_id: int = 0
-    attribute_level: int = 0
-    effect_id: int = 0
-    agent_id: int = 0
-    duration: float = 0
-    timestamp: int = 0
-    time_elapsed: int = 0
-    time_remaining: int = 0
-
-
-@dataclass
-class BuffData:
-    skill_id: int = 0
-    buff_id: int = 0
-    target: int = 0
-
-
-class GameClient:
-    def __init__(self):
-        self.agent_id = 0
-        self.target_id = 0
-        self.hp = 0
-        self.max_hp = 0
-        self.energy = 0
-        self.max_energy = 0
-        # Use dictionaries for these as they are dynamic sets of effects/skills
-        self.skills: Dict[int, SkillData] = {}
-        self.effects: Dict[int, EffectData] = {}
-        self.buffs: Dict[int, BuffData] = {}
-
-    def update_from_dict(self, data: Dict[str, Any]):
-        """converts dictionary to object attributes"""
-        self.agent_id = data.get("id", self.agent_id)
-        self.target_id = data.get("target_id", self.target_id)
-        self.hp = data.get("hp", self.hp)
-        self.max_hp = data.get("max_hp", self.max_hp)
-        self.energy = data.get("energy", self.energy)
-        self.max_energy = data.get("max_energy", self.max_energy)
-        # print(f"""Skill update data {data.get("skilldata", {}).items()}""")
-        # Update Skills
-        for s_id, s_val in data.get("skilldata", {}).items():
-            self.skills[int(s_id)] = SkillData(**s_val)
-        # Update Effects
-        for e_id, e_val in data.get("effects", {}).items():
-            self.effects[int(e_id)] = EffectData(**e_val)
-        # Update Buffs
-        for b_id, b_val in data.get("buffs", {}).items():
-            self.buffs[int(b_id)] = BuffData(**b_val)
-
-    def get_buff_data(self, b_id) -> BuffData:
-        return self.buffs.get(b_id, None)
-
-    def get_skill_data(self, s_id) -> SkillData:
-        return self.skills.get(s_id, None)
-# endregion
-
-
-# region client transport
-class Client:
-    class Transport(ABC):
-        @abstractmethod
-        def send(self, method :RPC.CMD, *args: object, **kwargs: object):
-            ...
-
-    def __init__(self, game: GameClient, transport: Transport):
-        self.game_client = game
-        self.transport = transport
-
-
-class LocalTransport(Client.Transport):
-    def send(self, method: RPC.CMD, *args: object, **kwargs: object) -> None:
-        RPC.call(method, args, kwargs)
-# endregion
-
-
-# region networking
-class ZMQTransport(Client.Transport):
-    def __init__(self, router, client_id: uuid):
-        self.client_id = client_id
-        self.router = router
-
-    def send(self, method: RPC.CMD, *args: object, **kwargs: object) -> None:
-        self.router.send_multipart([
-            self.client_id.bytes,
-            b"",
-            json.dumps({
-                "method": method,
-                "args": args,
-                "kwargs": kwargs
-            }).encode()
-        ])
-
-
-class NetworkManager:
-    def __init__(self, thread_man: ThreadManager, local_game_client: GameClient):
-        self.thread_manager = thread_man
-        self.client_list: Dict[uuid.UUID, Client] = {}
-        client_id = uuid.uuid4()
-        c = Client(local_game_client, LocalTransport())
-        self.client_list[client_id] = c #Adding the local client first helps
-
-        # Host Sockets
-        self.router = None  # RPC (Bidirectional)
-        self.pub = None     # Broadcast (Host -> All)
-        self.pull = None    # State Updates (All -> Host)
-
-        self.context = None
-        self.poller = None
-
-    def setup_zmq_host(self, port):
-        self.context = zmq.Context()
-
-        # ROUTER: Handles RPC requests from clients and sends direct replies
-        self.router = self.context.socket(zmq.ROUTER)
-        self.router.bind(f"tcp://*:{port}")
-
-        # PUB: Broadcasts data to all connected clients
-        self.pub = self.context.socket(zmq.PUB)
-        self.pub.bind(f"tcp://*:{port + 1}")
-
-        # PULL: Collects state updates from all clients (Async/Non-blocking)
-        self.pull = self.context.socket(zmq.PULL)
-        self.pull.bind(f"tcp://*:{port + 2}")
-
-        self.poller = zmq.Poller()
-        self.poller.register(self.router, zmq.POLLIN)
-        self.poller.register(self.pull, zmq.POLLIN)
-
-    def broadcast(self, method: str, args: list = None, kwargs: dict = None):
-        """
-        Sends a message to ALL connected clients via the PUB socket.
-        Best for: 'Move to X', 'Attack Target Y', 'Global Sync'.
-        """
-        if not self.pub:
-            print("Error: PUB socket not initialized.")
-            return
-
-        payload = {
-            "method": method,
-            "args": args or [],
-            "kwargs": kwargs or {}
-        }
-        # PUB sockets send as a single frame unless multipart is specifically needed
-        self.pub.send_json(payload)
-
-    def maintain_host(self, port, terminal_function):
-        self.setup_zmq_host(port)
-        try:
-            while self.thread_manager.is_threads_running:
-                events = dict(self.poller.poll(timeout=10))
-
-                # 1. Handle RPC Requests (ROUTER)
-                if self.router in events:
-                    # ROUTER format: [identity, empty, payload]
-                    identity, _, message = self.router.recv_multipart()
-                    data = json.loads(message)
-                    # Convert the ZMQ identity bytes to a UUID object
-                    client_id = uuid.UUID(bytes=identity)
-
-                    if data.get("method") == "handshake":
-                        # Create the identity response
-                        reply_data = {
-                            "status": "registered"
-                        }
-                        reply = json.dumps(reply_data).encode()
-                        print(f"Registering client {client_id}")
-                        # Send back to the specific identity
-                        self.router.send_multipart([identity, b"", reply])
-
-                        # Initialize client in your tracking lists
-                        if client_id not in self.client_list:
-                            c = Client(GameClient(), ZMQTransport(self.router, client_id))
-                            self.client_list[client_id] = c
-                    # result = registry.call(
-                    #     data["method"],
-                    #     data.get("args", []),
-                    #     data.get("kwargs", {})
-                    # )
-                    # reply = json.dumps({
-                    #     "method": data["method"],
-                    #     "returned": result
-                    # }).encode()
-                    # self.router.send_multipart([identity, b"", reply])
-
-                # 2. Handle State Updates (PULL)
-                if self.pull in events:
-                    # PULL format: [payload]
-                    msg = self.pull.recv_json()
-                    cid_str = msg.get("client_id")
-                    if cid_str:
-                        client_id = uuid.UUID(cid_str)
-                        if client_id not in self.client_list:
-                            print("Push notification from unknown client")
-                        else:
-                            self.client_list[client_id].game_client.update_from_dict(msg)
-
-                # 3. Optional: Broadcast global state to all clients via PUB
-                # self.pub.send_json({"type": "sync", "data": global_state})
-
-        finally:
-            self._cleanup_host()
-            if terminal_function: terminal_function()
-
-    def maintain_client(self, ip, port, terminal_function):
-        context = zmq.Context()
-        dealer = None
-        sub = None
-        push = None
-        try:
-            client_id = uuid.uuid4()
-            # DEALER: RPC communication with Host ROUTER
-            dealer = context.socket(zmq.DEALER)
-            dealer.setsockopt(zmq.IDENTITY, client_id.bytes)
-            dealer.connect(f"tcp://{ip}:{port}")
-            #add a handshake
-            # Send a request to the host to ask "Who am I?"
-            print("Beginning handshake")
-            handshake_msg = json.dumps({"method": "handshake"}).encode()
-            dealer.send_multipart([b"", handshake_msg])
-            _, response_raw = dealer.recv_multipart()
-            response = json.loads(response_raw)
-            if response.get("status"):
-                print(f"Connected, server okay'd {client_id}")
-            else:
-                print("Server didn't okay, aborting")
-                return
-
-            # SUB: Listen for broadcasts from Host PUB
-            sub = context.socket(zmq.SUB)
-            sub.connect(f"tcp://{ip}:{port + 1}")
-            sub.setsockopt_string(zmq.SUBSCRIBE, "")
-
-            # PUSH: Send state updates to Host PULL
-            push = context.socket(zmq.PUSH)
-            push.connect(f"tcp://{ip}:{port + 2}")
-
-            poller = zmq.Poller()
-            poller.register(dealer, zmq.POLLIN)
-            poller.register(sub, zmq.POLLIN)
-
-            while self.thread_manager.is_threads_running:
-                # A. Send local state update to host
-                # A. Send local state update to host
-                state = Jsonizer.player_data()
-                state["client_id"] = str(client_id)
-                push.send_json(state)
-
-                # B. Check for incoming messages
-                events = dict(poller.poll(timeout=10))
-
-                if dealer in events:
-                    # Handle RPC response from Host
-                    msg_full = dealer.recv_multipart()
-                    msg: Dict = json.loads(msg_full[-1].decode('utf-8'))
-
-                    # Use registry to handle the returned data (e.g., updating local state)
-                    method = msg.get("method", None)
-                    args = msg.get("args", [])
-                    kwargs = msg.get("kwargs", {})
-                    if method:
-                        ret = RPC.call(method, *args, **kwargs)
-                        j: Dict = {"method": method, "returned": ret}
-                        dealer.send_multipart([b"", json.dumps(j).encode()])
-
-                if sub in events:
-                    broadcast_data = sub.recv_json()
-                    # Assume the broadcast message looks like: {"method": "move_to", "args": [100, 200]}
-                    RPC.call(
-                        broadcast_data.get("method"),
-                        *broadcast_data.get("args", []),
-                        **broadcast_data.get("kwargs", {})
-                    )
-
-                time.sleep(0.05)
-        finally:
-            if dealer: dealer.close()
-            if sub: sub.close()
-            if push: push.close()
-            context.term()
-            if terminal_function: terminal_function()
-
-    def _cleanup_host(self):
-        if self.router: self.router.close()
-        if self.pub: self.pub.close()
-        if self.pull: self.pull.close()
-        if self.context: self.context.term()
-        self.client_list.clear()
-# endregion
-
-
-# region behavior logic
-class TaskStatus(Enum):
-    PENDING = auto()
-    RUNNING = auto()
-    SUCCESS = auto()
-    FAILURE = auto()
-
-
-class Task:
-    def __init__(
-        self,
-        name: str,
-        action: Callable,
-        start_condition: Optional[Callable] = None,
-        exec_condition: Optional[Callable] = None,          # Guard: Can this start/continue?
-        completion_condition: Optional[Callable] = None, # Success: Is this finished?
-        is_recurring: bool = False,
-        interval: float = 0.0
-    ):
-        self.name = name
-        self.action = action
-        self.start_condition = start_condition
-        self.exec_condition = exec_condition
-        self.completion_condition = completion_condition
-        self.is_recurring = is_recurring
-        self.interval = interval
-
-        self.status = TaskStatus.PENDING
-        self.last_run_time = 0.0
-
-    def execute(self, current_time: float) -> TaskStatus:
-        # 1. Handle start condition check
-        if self.status == TaskStatus.PENDING:
-            if self.start_condition:
-                if self.start_condition():
-                    return TaskStatus.RUNNING if current_time - self.interval > self.last_run_time else TaskStatus.PENDING
-            else:
-                return TaskStatus.RUNNING if current_time - self.interval > self.last_run_time else TaskStatus.PENDING
-
-        if self.status == TaskStatus.RUNNING:
-            # 2. Guard Clause (Can we act right now?)
-            if self.exec_condition and not self.exec_condition():
-                # If we were already running and the guard fails, it's a failure.
-                return TaskStatus.FAILURE
-            # 3. Perform Action, never attempt this more than once per interval
-            if current_time - self.interval > self.last_run_time:
-                try:
-                    self.action()
-                    self.last_run_time = current_time
-                except Exception as e:
-                    print(f"Task {self.name} crashed: {e}")
-                    return TaskStatus.FAILURE
-            # 4. Check Completion Condition, this should be checked between intervals
-            # If no completion condition is provided, we assume the action was a one-shot success
-            # unless it is recurring.
-            if self.completion_condition:
-                if self.completion_condition():
-                    return TaskStatus.SUCCESS if not self.is_recurring else TaskStatus.PENDING
-                return TaskStatus.RUNNING
-            return TaskStatus.SUCCESS if not self.is_recurring else TaskStatus.PENDING
-        # if we call a task that already failed or was successful it will reach here and return without change
-        return self.status
-
-
-class TaskManager:
-    def __init__(self):
-        self.active_tasks: List[Task] = []
-
-    def add_task(self, task: Task):
-        self.active_tasks.append(task)
-
-    def update(self):
-        current_time = time.time()
-        still_active = []
-        for task in self.active_tasks:
-            status = task.execute(current_time)
-            task.status = status
-            if status not in (TaskStatus.SUCCESS, TaskStatus.FAILURE):
-                still_active.append(task)
-        self.active_tasks = still_active
-
-
-class State:
-    def enter(self, bot): pass
-    def execute(self, bot): pass
-    def exit(self, bot): pass
-
-
-class Behavior:
-    class Role(Enum):
-        pass
-
-    @dataclass
-    class Signature:
-        required_skills: Set[int]
-
-    SIGNATURES = {}
-
-    def __init__(self, thread_globals: ThreadManager, network_manager: NetworkManager):
-        self.cache_thread_globals: ThreadManager = thread_globals
-        self.network_manager = network_manager
-        self.current_state: State = State()
-        self.tasks = TaskManager()
-
-    def run(self):
-        self.current_state.execute(self)
-        self.tasks.update()
-
-    @staticmethod
-    def name() -> str:
-        ...
-
-    def draw(self):
-        pass
-
-    def wait_for_thread(self, thread_name):
-        while self.cache_thread_globals.is_threads_running and self.cache_thread_globals.thread_manager.threads.get(
-                thread_name, 0) != 0:
-            time.sleep(0.01)
-
-    def identify_players(self) -> Dict[Role, list[Client]]:
-        assignments: Dict[MinionPrinterBehavior.Role, List[Client]] = defaultdict()
-        claimed_clients = set()  # Store the object IDs or client IDs
-
-        for client_id, client in self.network_manager.client_list.items():
-            if client.game_client is None:
-                continue
-            for role in self.Role:
-                sig = self.SIGNATURES[role]
-                client_skills = set(client.game_client.skills.keys())
-                if sig.required_skills.issubset(client_skills):
-                    assignments[role].append(client)
-                    break
-
-        return assignments
-
-    class CastWaitForEffect(Task):
-        def __init__(self, interval: float, client: Client, skill_id: int,
-                     start_condition: Optional[Callable] = None):
-            use_skill = partial(client.transport.send, RPC.CMD.USE_SKILL, skill_id, client.game_client.agent_id)
-            has_effect = partial(client.game_client.effects.get, skill_id, False)
-            super().__init__(f"CastWaitEffect skill {skill_id} client {client.game_client.agent_id}",
-                             use_skill, start_condition, None, has_effect, False, interval)
-
-
-class TestBehavior(Behavior):
-    def run(self):
-        print("=== TestBehavior started ===")
-        while self.cache_thread_globals.is_threads_running:
-            if len(self.network_manager.client_list) > 0:
-                print(f"Test Behavior client_list: {self.network_manager.client_list}")
-                s: SkillData = next(iter(self.network_manager.client_list.values())).game_client.get_skill_data(268)
-                if s:
-                    print(f"First client UA: {s.recharge}, {s.get_recharge}, {s.slot}, {s.id}")
-                self.network_manager.broadcast(RPC.CMD.MOVE.value, list(GW.Player.GetXY()))
-            else:
-                print("Waiting for a client to connect")
-            time.sleep(3)
-
-
-    @staticmethod
-    def name() -> str:
-        return "Test Behavior"
-
-
-class MinionPrinterBehavior(Behavior):
-    class Skills(int, Enum):
-        weapon_of_quickening = 1268
-        seed_of_life = 2105
-        heal_area = 280
-        kareis_healing_circle = 1119
-        blessed_aura = 256
-        shielding_hands = 299
-        unyielding_aura = 268
-        animate_bone_minions = 85
-        dark_aura = 116
-        agony = 145
-        shield_of_absorption = 1399
-        balthazars_spirit = 242
-
-    class Role(Enum):
-        MONA = auto()
-        MONB = auto()
-        RITMO = auto()
-        UNKNOWN = auto()
-
-    SIGNATURES = {
-        Role.RITMO: super().Signature({Skills.weapon_of_quickening.value, Skills.shield_of_absorption.value,
-                               Skills.shielding_hands.value, Skills.heal_area.value, Skills.kareis_healing_circle.value,
-                               Skills.balthazars_spirit.value}),
-        Role.MONA: super().Signature({Skills.unyielding_aura.value, Skills.seed_of_life.value,
-                              Skills.blessed_aura.value, Skills.animate_bone_minions.value, Skills.dark_aura.value, Skills.agony.value})
-    }
-
-    def __init__(self, thread_globals: ThreadManager, network_manager: NetworkManager):
-        super().__init__(thread_globals, network_manager)
-        self.target_minion_count = 20
-        self.roles: Dict[MinionPrinterBehavior.Role, List[Client]] = defaultdict()
-
-    @staticmethod
-    def name() -> str:
-        return "Minion Printer"
-
-    class StateInitializing(State):
-        def execute(self, bot: 'MinionPrinterBehavior'):
-            bot.roles = bot.identify_players()
-            c: Client
-            result = {
-                role.name: [c.game_client.agent_id for c in clients]
-                for role, clients in bot.roles.items()
-            }
-            if len(result[bot.Role.MONA]) == 2 and len(result[bot.Role.RITMO]) == 1:
-                print(f"Identified: {result}. Moving to next state.")
-                bot.current_state = bot.StateFirstDeath()
-            time.sleep(1)
-
-    class StateFirstDeath(State):
-        def execute(self, bot: 'MinionPrinterBehavior'):
-            monks: List[Client] = bot.roles[bot.Role.MONA]
-            ritmo: List[Client] = bot.roles[bot.Role.RITMO]
-            da_wait = Behavior.CastWaitForEffect(0.5, monks[0], bot.Skills.dark_aura)
-            ua_wait = Behavior.CastWaitForEffect(0.5, monks[1], bot.Skills.unyielding_aura)
-            bot.tasks.add_task(da_wait)
-            bot.tasks.add_task(ua_wait)
-            while bot.cache_thread_globals.is_threads_running and (not da_wait.terminate or not ua_wait.terminate):
-                bot.scheduler.run_pending(bot)
-
-            def cast_agony():
-                monks[0].transport.send(RPC.CMD.USE_SKILL, bot.Skills.agony)
-
-            def wait_dead() -> bool:
-                return monks[0].game_client.hp == 0
-
-            cast_agony_until_dead = Behavior.DoUntil(2.0, wait_dead, cast_agony)
-            bot.scheduler.add_task(cast_agony_until_dead)
-            while bot.cache_thread_globals.is_threads_running and not cast_agony_until_dead.terminate:
-                bot.scheduler.run_pending(bot)
-
-    def state_rectify(self) -> State:
-        monks = self.roles[self.Role.MONA]
-        rit = self.roles[self.Role.RITMO]
-        if len(monks) != 2 or len(rit) != 1:
-            return self.StateInitializing()
-        if monks[0].game_client.max_hp > 1 or monks[1].game_client.max_hp > 1:
-            pass
-
-    def draw(self):
-        PyImGui.text("Minion Goal:")
-        PyImGui.same_line(0.0, 0.0)
-        self.target_minion_count = PyImGui.input_int("#binputminions", self.target_minion_count)
-
-    def run(self):
-        self.current_state = self.StateInitializing()
-        while self.cache_thread_globals.is_threads_running:
-            super().run()
-
-
-
-
+# reloading imports so the file can be split up
+def get_widget_lib_dir(widget_file: str, subfolder: str = "lib") -> str:
+    """Resolve the import folder relative to the widget file itself."""
+    widget_dir = os.path.dirname(os.path.abspath(widget_file))
+    return os.path.join(widget_dir, subfolder)
+
+
+def ensure_on_path(lib_dir: str):
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+
+
+def purge_by_path(root_dir: str):
+    """Drop every module whose __file__ lives under root_dir from sys.modules."""
+    root_dir = os.path.abspath(root_dir)
+    to_remove = []
+    for name, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None)
+        if f and os.path.abspath(f).startswith(root_dir + os.sep):
+            to_remove.append(name)
+    for name in to_remove:
+        del sys.modules[name]
+
+
+_WIDGET_DIR = os.path.dirname(os.path.abspath(__file__))   # project root
+_LIB_DIR = os.path.join(_WIDGET_DIR, "cc_lib")
+
+# `import cc_lib.X` resolves cc_lib as a package, so the *parent* of cc_lib
+# (the widget dir) must be on sys.path -- not cc_lib itself. Py4GW does not
+# guarantee this, so add it explicitly.
+ensure_on_path(_WIDGET_DIR)
+
+purge_by_path(_LIB_DIR)          # drop every already-imported cc_lib.* module
+import cc_lib.TestImport         # re-imported fresh from disk on every hot-reload
+print(f"test import print: {cc_lib.TestImport.PRINTOUT}")
+
+# --- split-out cc_lib modules (purged & re-imported above every hot-reload) ---
+from cc_lib.jsonizers import Jsonizer
+from cc_lib.misc_helpers import MultithreadBoosterCache, Vec2, ThreadManager
+from cc_lib.blackboard import GameClient
+from cc_lib.rpc import RPC
+from cc_lib.transport import Client, LocalTransport
+from cc_lib.networking import NetworkManager
+from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill,
+                       MoveTo, Sequence, Parallel, Wait, WaitUntil, TaskManager,
+                       State, StateMachine)
+from cc_lib.behaviors import (TestBehavior, MinionPrinterBehavior, PermaPrintBehavior,
+                              UtilityCombatBehavior, BehaviorSlot, BehaviorManager)
 # endregion
 
 
@@ -931,14 +77,15 @@ class UICache:
         self.ui_timer = 0
         self.confirm = False
         self.header_child_height = 60
-        self.behavior_select_index = 0
+        self.add_behavior_index = 0          # combo selection for the "Add Behavior" control
         self.network_manager: NetworkManager = None
-        self.BEHAVIOR_THREAD_NAME = "BEHAVIOR_THREAD"
         self.NETWORK_THREAD_NAME = "NETWORK_THREAD"
-        self.behavior_map = {
-            0: TestBehavior,
-            1: MinionPrinterBehavior
-        }
+        self.behavior_map = cc_lib.behaviors.BEHAVIOR_MAP
+        # --- virtual drag-and-drop state (native ImGui DnD isn't exposed by this binding) ---
+        # While a row is dragged we stash the client id here; each drop target captures its
+        # screen rect this frame; on release we hit-test the mouse against those rects.
+        self.drag_client_id: Optional[uuid.UUID] = None
+        self.drop_rects: Dict[object, tuple] = {}
 
 
 # region Logic
@@ -947,7 +94,7 @@ class CentralCommanderLogic:
         self.cache = ui_cache
         self.cache.network_manager = network
         self.thread_manager = thread_manager
-        self.active_behavior: Behavior = None
+        self.behaviors = BehaviorManager(network, thread_manager)
 
     def scrub_ip_octet(self, index, value):
         try:
@@ -979,32 +126,13 @@ class CentralCommanderLogic:
         self.thread_manager.start_thread(self.cache.NETWORK_THREAD_NAME, host_thread_func)
 
     def handle_disconnect(self):
+        self.behaviors.stop_all()
         self.cache.is_host = False
         self.cache.is_connected = False
         self.cache.confirm = False
 
     def get_full_ip(self):
         return ".".join(map(str, self.cache.ip_entry))
-
-    def start_behavior(self):
-        """Handles the logic of initializing and starting a behavior thread."""
-        behavior_class = self.cache.behavior_map.get(self.cache.behavior_select_index)
-        if not behavior_class:
-            return None
-
-        # Instantiate and configure
-        b = behavior_class(self.thread_manager, self.cache.network_manager)
-        # b.client_list = client_list
-
-        if b.run:
-            # The Logic class tells the Thread Manager to start the loop
-            self.thread_manager.thread_manager.add_thread(self.cache.BEHAVIOR_THREAD_NAME, b.run)
-            self.active_behavior = b
-
-    def stop_behavior(self):
-        """Logic for cleaning up the environment."""
-        self.thread_manager.thread_manager.stop_thread(self.cache.BEHAVIOR_THREAD_NAME)
-        self.active_behavior = None
 # endregion
 
 
@@ -1012,6 +140,7 @@ class CentralCommanderUI:
     def __init__(self, ui_cache: UICache, logic: CentralCommanderLogic):
         self.cache = ui_cache
         self.logic = logic
+        self.client_selectables_clicked: Dict[uuid.UUID, bool] = dict()
 
     def get_ip(self):
         return f"{self.cache.ip_entry[0]}." \
@@ -1086,38 +215,140 @@ class CentralCommanderUI:
         else:
             self.draw_connected_window()
 
+    # ----------------------------------------------------------- host UI helpers
+    def _client_name(self, cid: uuid.UUID, client: 'Client') -> str:
+        """The character name as reported by the client over the wire (see player_data). We do
+        NOT call GW.Agent.GetNameByID here: a remote client's agent id is only meaningful in its
+        OWN game instance, so resolving it against the host's world always returns "" -- which
+        meant this label was re-querying an async API every single frame and never settling,
+        flickering the whole row. The blackboard name is a plain string, so it renders stably."""
+        name = client.game_client.name if client.game_client else ""
+        return name if name else f"Pending name... ({str(cid)[:8]})"
+
+    def _capture_rect(self, key: object) -> None:
+        """Record the current child window's screen rect as a drop target for this frame."""
+        px, py = PyImGui.get_window_pos()
+        sw, sh = PyImGui.get_window_size()
+        self.cache.drop_rects[key] = (px, py, sw, sh)
+
+    def _draw_client_row(self, cid: uuid.UUID, client: 'Client') -> None:
+        """A client row that can be picked up as a virtual-drag payload. The drag begins once
+        the mouse moves while the row is held (is_item_active), and is resolved on release."""
+        name = self._client_name(cid, client)
+        label = f"{name} : {client.game_client.agent_id} : {cid.__str__()[:4]}"
+        # Highlight the row while it is the active drag payload.
+        PyImGui.selectable(label, self.cache.drag_client_id == cid,
+                           PyImGui.SelectableFlags.NoFlag, (0, 0))
+        # Begin a virtual drag once the row is held down AND the mouse moves. is_item_active()
+        # refers to the selectable just drawn and stays true while the button is held even after
+        # the cursor leaves the row -- exactly the lifetime a drag needs. (The selectable's click
+        # RETURN value is the wrong signal: it only fires on a clean click-release, which never
+        # coincides with is_mouse_dragging, so drags never started.)
+        if (self.cache.drag_client_id is None
+                and PyImGui.is_item_active() and PyImGui.is_mouse_dragging(0, -1)):
+            self.cache.drag_client_id = cid
+
+    def _draw_behavior_slot(self, slot: BehaviorSlot) -> None:
+        mgr = self.logic.behaviors
+        remove = False
+        visible = PyImGui.begin_child(f"slot_{slot.id}", (self.cache.WIDTH - 24, 170), True)
+        try:
+            if visible:
+                self._capture_rect(slot.id)   # this whole window is a drop target
+                if PyImGui.button(f"X##rm{slot.id}"):
+                    remove = True
+                PyImGui.same_line(0.0, 1.0)
+                PyImGui.text(slot.behavior_cls.name() + ("  [running]" if slot.running else ""))
+                if slot.running:
+                    if PyImGui.button(f"Stop##{slot.id}"):
+                        mgr.stop(slot)
+                elif PyImGui.button(f"Start##{slot.id}"):
+                    mgr.start(slot)
+                if slot.instance is not None:
+                    slot.instance.draw()  # the behavior's own settings (minion goal, follow, ...)
+                PyImGui.separator()
+                PyImGui.text("Clients (drag here):")
+                for cid in list(slot.assigned):
+                    client = self.cache.network_manager.client_list.get(cid)
+                    if client is not None:
+                        self._draw_client_row(cid, client)
+        finally:
+            PyImGui.end_child()    # must close even if a behavior's draw() raised, or the stack unbalances
+        if remove:
+            mgr.remove_slot(slot)
+
+    def _resolve_drag(self) -> None:
+        """End-of-frame: show the drag ghost, and on mouse release drop the client into
+        whichever target window the cursor is over -- defaulting to the unassigned pool when
+        the release lands on no target (or the dragged client/target vanished)."""
+        cid = self.cache.drag_client_id
+        if cid is None:
+            return
+        mgr = self.logic.behaviors
+        client = self.cache.network_manager.client_list.get(cid)
+        if client is not None:
+            PyImGui.set_tooltip(self._client_name(cid, client))
+        if PyImGui.is_mouse_released(0):
+            io = PyImGui.get_io()
+            target = None
+            for key, (px, py, sw, sh) in self.cache.drop_rects.items():
+                if px <= io.mouse_pos_x <= px + sw and py <= io.mouse_pos_y <= py + sh:
+                    target = key
+                    break
+            if isinstance(target, int):  # a slot id
+                slot = next((s for s in mgr.slots if s.id == target), None)
+                if slot is not None:
+                    mgr.assign(cid, slot)
+                else:
+                    mgr.unassign(cid)
+            else:                        # "pool" or no target -> unassigned pool
+                mgr.unassign(cid)
+            self.cache.drag_client_id = None
+        elif not PyImGui.is_mouse_down(0):
+            self.cache.drag_client_id = None   # button already up but we missed the release
+
     def draw_host_window(self):
-        """The Host-specific UI section."""
-        if PyImGui.begin_child("Commander Host", (self.cache.WIDTH, 600), True):
-            # Display status (Read-only)
-            PyImGui.text(f"Timer: {self.cache.ui_timer}")
+        """The Host-specific UI section: an unassigned client pool plus one child window per
+        behavior. Clients are virtually dragged between them (see _resolve_drag)."""
+        mgr = self.logic.behaviors
+        self.cache.drop_rects = {}        # rebuilt each frame from the windows drawn below
+
+        # Each begin_child below is paired with end_child in a finally so a mid-frame exception
+        # (e.g. a behavior's own draw() raising) can never skip a close and leave ImGui's window
+        # stack unbalanced -- an unbalanced stack corrupts the next frame and shows as flicker.
+        PyImGui.begin_child("Commander Host", (self.cache.WIDTH, 600), True)
+        try:
+            # --- add a behavior (kept at the top so it's never scrolled out of view once
+            # several behavior slots are open) ---
+            names = [cls.name() for cls in self.cache.behavior_map.values()]
+            self.cache.add_behavior_index = PyImGui.combo(
+                "##addbeh", self.cache.add_behavior_index, names)
+            PyImGui.same_line(0.0, 6.0)
+            if PyImGui.button("Add Behavior"):
+                classes = list(self.cache.behavior_map.values())
+                if 0 <= self.cache.add_behavior_index < len(classes):
+                    mgr.add_slot(classes[self.cache.add_behavior_index])
             PyImGui.separator()
 
-            # Behavior Selection
-            behavior_names = [cls.name() for cls in self.cache.behavior_map.values()]
-            self.cache.behavior_select_index = PyImGui.combo(
-                "Behavior", self.cache.behavior_select_index, behavior_names
-            )
+            # --- unassigned pool ---
+            PyImGui.begin_child("pool", (self.cache.WIDTH - 24, 110), True)
+            try:
+                self._capture_rect("pool")
+                PyImGui.text("Unassigned clients:")
+                for cid in mgr.unassigned_ids():
+                    client = self.cache.network_manager.client_list.get(cid)
+                    if client is not None:
+                        self._draw_client_row(cid, client)
+            finally:
+                PyImGui.end_child()
 
-            # If there is an active behavior, let the behavior draw its own specific settings
-            if self.logic.active_behavior:
-                PyImGui.text("Active Settings:")
-                self.logic.active_behavior.draw()
-                PyImGui.separator()
+            # --- one window per behavior ---
+            for slot in list(mgr.slots):
+                self._draw_behavior_slot(slot)
+        finally:
+            PyImGui.end_child()
 
-            # Action Buttons
-            if self.logic.active_behavior is None:
-                if PyImGui.button("Start Behavior", self.cache.WIDTH):
-                    # Logic Trigger: Request to start a behavior
-                    self.logic.start_behavior()
-            else:
-                if PyImGui.button("Stop Behavior", self.cache.WIDTH):
-                    # Logic Trigger: Request to stop threads
-                    self.logic.stop_behavior()
-        for c in self.cache.network_manager.client_list.keys():
-            PyImGui.text(f"Client: {c}")
-
-        PyImGui.end_child()
+        self._resolve_drag()
 
     def draw_connected_window(self):
         if PyImGui.begin_child("Connected_child", (self.cache.WIDTH, 200), True):
@@ -1149,6 +380,10 @@ class CentralCommander:
     def update(self):
         self.update_thread_manager()
         self.local_game_client.update_from_dict(Jsonizer.player_data())
+        # Self-heal: keep the host visible in its own client list while hosting, even if a prior
+        # _cleanup_host (dormancy/map load) wiped it. Idempotent and cheap.
+        if self.cache_ui.is_host:
+            self.network_manager.ensure_local_client()
 
     def update_thread_manager(self):
         if self.thread_manager.is_threads_running:
@@ -1156,7 +391,7 @@ class CentralCommander:
             # stop all threads when not trying to connect or host, basically go dormant
             if not (self.cache_ui.is_host or self.cache_ui.is_connected):
                 self.thread_manager.is_threads_running = False
-                self.logic.stop_behavior()
+                self.logic.behaviors.stop_all()
                 self.thread_manager.stop_sequential_environment()
 
     def main_thread_performance_delay(self):
@@ -1208,6 +443,16 @@ Y_POS = "y"
 window_x = ini_window.read_int(MODULE_NAME, X_POS, 100)
 window_y = ini_window.read_int(MODULE_NAME, Y_POS, 100)
 window_collapsed = ini_window.read_bool(MODULE_NAME, COLLAPSED, False)
+
+# Bump the hot-reload epoch BEFORE building the new CentralCommander. Behavior worker threads
+# from the previous load capture the old epoch and exit once they see it change (see
+# _current_epoch / Behavior.is_running), so a reload can't leave a behavior commanding clients
+# from an orphaned thread the new manager has no handle to. (Threads started before this guard
+# existed won't self-stop -- restart the GW client once to clear those.)
+try:
+    GW.MultiThreading._cc_epoch = getattr(GW.MultiThreading, "_cc_epoch", 0) + 1
+except Exception:
+    pass
 central_commander = CentralCommander()
 
 
@@ -1223,10 +468,17 @@ def draw_widget():
     new_collapsed = PyImGui.is_window_collapsed()
     end_pos = PyImGui.get_window_pos()
 
-    if is_window_opened:
-        central_commander.draw_in_window()
+    # PyImGui.begin() MUST be paired with PyImGui.end() on EVERY frame, even if drawing the body
+    # throws. If an exception escaped draw_in_window() the end() was skipped, leaving ImGui's
+    # window stack unbalanced -> the next frame renders corrupted -> visible flicker. The
+    # try/finally makes the pairing unconditional so a transient error degrades to one dropped
+    # frame instead of a persistent flicker.
+    try:
+        if is_window_opened:
+            central_commander.draw_in_window()
+    finally:
+        PyImGui.end()
 
-    PyImGui.end()
     if save_window_timer.HasElapsed(1000):
         # Position changed?
         if (end_pos[0], end_pos[1]) != (window_x, window_y):
