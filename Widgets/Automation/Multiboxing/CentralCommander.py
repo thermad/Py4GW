@@ -1,18 +1,10 @@
 # region Imports
-# from __future__ import annotations
-import os, sys, importlib, random, time, traceback
-from abc import ABC, abstractmethod
-from collections import defaultdict
-from functools import partial
+import os, sys, time, traceback, uuid
 
 import Py4GW  # type: ignore
-import PyEffects
 from Py4GWCoreLib import IniHandler, PyImGui, Routines, Timer
 import Py4GWCoreLib as GW
-from typing import List, Dict, Protocol, ParamSpec, TypeVar, Any, Callable, Set, Literal, Type, Optional
-from dataclasses import dataclass, field
-import json, math, uuid
-from enum import Enum, auto
+from typing import Dict, Optional
 
 
 # reloading imports so the file can be split up
@@ -49,19 +41,14 @@ ensure_on_path(_WIDGET_DIR)
 
 purge_by_path(_LIB_DIR)          # drop every already-imported cc_lib.* module
 
-# --- split-out cc_lib modules (purged & re-imported above every hot-reload) ---
+# --- split-out cc_lib modules (purged & re-imported above every hot-reload). bt/rpc load
+# transitively via behaviors/transport, so only the names used here are imported directly. ---
 from cc_lib.jsonizers import Jsonizer
-from cc_lib.misc_helpers import MultithreadBoosterCache, Vec2, ThreadManager
+from cc_lib.misc_helpers import MultithreadBoosterCache, ThreadManager, map_ready
 from cc_lib.blackboard import GameClient
-from cc_lib.rpc import RPC
-from cc_lib.transport import Client, LocalTransport
+from cc_lib.transport import Client
 from cc_lib.networking import NetworkManager
-from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill,
-                       MoveTo, Sequence, Parallel, Wait, WaitUntil, TaskManager,
-                       State, StateMachine)
-from cc_lib.behaviors import (TestBehavior, MinionPrinterBehavior, PermaPrintBehavior,
-                              UtilityCombatBehavior, BehaviorSlot, BehaviorManager,
-                              BEHAVIOR_MAP)
+from cc_lib.behaviors import BehaviorSlot, BehaviorManager, BEHAVIOR_MAP
 # endregion
 
 
@@ -139,7 +126,6 @@ class CentralCommanderUI:
     def __init__(self, ui_cache: UICache, logic: CentralCommanderLogic):
         self.cache = ui_cache
         self.logic = logic
-        self.client_selectables_clicked: Dict[uuid.UUID, bool] = dict()
 
     def get_ip(self):
         return f"{self.cache.ip_entry[0]}." \
@@ -380,8 +366,14 @@ class CentralCommander:
         # NOTE: update_thread_manager() (the watchdog keepalive pump) is now driven from main()
         # UNCONDITIONALLY, before the map-ready gate -- it must run even mid-load or the watchdog
         # reaps the network thread. Keep it OUT of here, since update() only runs once the map is
-        # fully ready. This method now only does the GW-touching state refresh.
-        self.local_game_client.update_from_dict(Jsonizer.player_data())
+        # fully ready. This method does the GW-touching work the network thread must NOT do:
+        #   - build the player_data snapshot (GW reads) and stash it for the network loop to send,
+        #   - execute any RPCs the network loop queued (their GW calls run here, on the main thread).
+        # Both run only when the map is live, since update() itself is map-gated in main().
+        snapshot = Jsonizer.player_data()
+        self.local_game_client.update_from_dict(snapshot)
+        self.network_manager.pump_outbound_state(snapshot)
+        self.network_manager.drain_inbound_rpcs()
         # Self-heal: keep the host visible in its own client list while hosting, even if a prior
         # _cleanup_host (dormancy/map load) wiped it. Idempotent and cheap.
         if self.cache_ui.is_host:
@@ -501,6 +493,12 @@ def configure():
 def main():
     global central_commander
     try:
+        # Publish the "is this instance live" flag for background threads, computed HERE on the
+        # main thread where the GW frame cache is valid (map_ready() uses frame-cached checks that
+        # return stale values / race the cache if called off-thread). The behavior workers and the
+        # client network loop read thread_manager.map_live instead of calling map_ready themselves.
+        central_commander.thread_manager.publish_map_live(map_ready())
+
         # Pump the watchdog keepalives EVERY frame, before the map gate. The watchdog only
         # pauses itself while IsMapLoading() is True, but main()'s gate is stricter (MapValid +
         # IsMapReady + IsPartyLoaded). After a zone there's a window where IsMapLoading() has
@@ -510,11 +508,20 @@ def main():
         # is safe to run mid-load.
         central_commander.update_thread_manager()
 
-        if not Routines.Checks.Map.MapValid():
-            return
-
-        if Routines.Checks.Map.IsMapReady() and Routines.Checks.Party.IsPartyLoaded():
+        # Draw the control window whenever the map DATA is loaded -- deliberately NOT gated on a
+        # healthy party. The old gate drew only when MapValid() was true, and MapValid() requires
+        # Party.IsPartyLoaded(); so when the party went briefly unhealthy (e.g. a member's client
+        # crashed mid-zone) the ENTIRE window vanished and never came back until the party reformed
+        # (a full reboot) -- a widget reload couldn't fix it because the broken state lives in the
+        # GW process, not the widget. The UI only does ImGui + already-synced blackboard reads plus
+        # light GW.Party lookups that return empty safely without a party, so it's fine to draw here.
+        # IsMapReady() still excludes the hard-load window (map data not loaded / mid-transition),
+        # where even those light calls aren't safe.
+        if Routines.Checks.Map.IsMapReady():
             draw_widget()
+
+        # The GW-data refresh (player_data reads the local agent) keeps the full, strict gate.
+        if map_ready():
             central_commander.update()
 
     except ImportError as e:

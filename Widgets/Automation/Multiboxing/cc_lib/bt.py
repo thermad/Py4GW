@@ -121,6 +121,12 @@ class CastWaitForEffect(Task):
 # Default aftercast tacked onto the cast watch-window (HeroAI uses 250ms; res-like skills want more).
 CAST_AFTERCAST = 0.25
 
+# Minimum time a CastSkill stays RUNNING after firing a skill that HAS a cast time, before it may
+# report the caster free. Guards against a lag race where the synced recharge / host-side
+# IsCasting read settles a beat late and we'd otherwise free the client mid-cast (it then starts a
+# second command that interrupts the cast in flight). Instant (0-cast) skills skip this.
+CAST_MIN_HOLD = 0.1
+
 
 class CastSkill(Node):
     """Reusable 'fire a skill and watch it land' leaf -- the general cast primitive. A plain
@@ -184,8 +190,12 @@ class CastSkill(Node):
             self._t0 = now
             self._fired = True
             return Status.RUNNING
-        # Phase 1: give the cast half its activation to actually start before we judge it.
-        if now - self._t0 < 0.5 * self._casttime:
+        # Phase 1: hold before judging completion. A skill with a cast time holds for at least
+        # CAST_MIN_HOLD (100ms) -- and half its activation if that's longer -- so the cast has a
+        # beat to visibly start and we never free the client before it does (a lagged 'not casting'
+        # / 'on cooldown' read otherwise frees it mid-cast). Instant skills (casttime 0) skip ahead.
+        hold = max(0.5 * self._casttime, CAST_MIN_HOLD) if self._casttime > 0 else 0.0
+        if now - self._t0 < hold:
             return Status.RUNNING
         # Phase 2: watch for completion / abort.
         if self._on_cooldown():

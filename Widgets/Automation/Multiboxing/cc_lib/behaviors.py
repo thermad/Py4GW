@@ -16,7 +16,8 @@ from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill
                        State, StateMachine)
 from cc_lib.transport import Client
 from cc_lib.rpc import RPC
-from cc_lib.misc_helpers import Vec2, ThreadManager, map_ready
+from cc_lib import combat_conditions
+from cc_lib.misc_helpers import Vec2, ThreadManager
 from cc_lib.networking import NetworkManager
 
 
@@ -38,12 +39,10 @@ class Tier(int, Enum):
 
 
 class Action:
-    """A candidate the UtilitySelector can choose. ``score`` is cheap and pure given ctx;
-    ``build`` returns the Node (Task / Sequence / Parallel) that carries it out, so execution
-    reuses the existing kernel rather than inventing a second one. Nothing here is per-client:
-    a host-coordinated team play is just an Action whose built Node commands several clients
-    at once (the permaseed relocation choreography is the model). ``involves`` lets a per-client
-    selector know a client is currently owned by a coordinated play and stay quiet meanwhile."""
+    """A candidate the UtilitySelector can choose. ``score`` is cheap/pure given ctx; ``build``
+    returns the kernel Node (Task / Sequence / Parallel) that carries it out. Not per-client: a
+    team play is just an Action whose Node commands several clients at once. ``involves`` lets a
+    per-client selector know its client is owned by a coordinated play and stay quiet meanwhile."""
     name: str = "action"
     tier: "Tier" = Tier.SUSTAINED
 
@@ -73,17 +72,14 @@ class ClientAction(Action):
 
 
 class UtilitySelector(Node):
-    """Decision node: each tick score the applicable Actions and run the best, then COMMIT to
-    its Node until that Node finishes -- re-picking only when the current Action ends or an
-    applicable Action of a STRICTLY higher Tier appears (preemption). Commitment is the
-    utility-engine analog of the kernel's "one step per tick, no blocking loops" rule: a naive
-    argmax-every-tick would thrash mid-cast. This is the Node the refactor memo reserved -- it
-    slots in beside State / StateMachine and replaces hand-ordered cascades like _rit_tank_task.
+    """Decision node: each tick, score the applicable Actions, run the best, then COMMIT to its
+    Node until it finishes -- re-picking only when the current Action ends or a STRICTLY
+    higher-Tier applicable Action appears (preemption). Commitment is the utility analog of the
+    kernel's "one step per tick" rule; a naive argmax-every-tick would thrash mid-cast.
 
     ``actions_provider`` returns the live candidate list (rebuilt as roles / synergies change).
-    ``suspended`` optionally silences the selector entirely (a per-client selector goes quiet
-    while a coordinated team play owns its client -- same idea as _rit_tank_task's ``suspended``).
-    ``on_pick`` is an optional observer ``(name|None) -> None`` for a UI readout of the choice."""
+    ``suspended`` silences the selector entirely (e.g. while a team play owns its client).
+    ``on_pick`` is an optional ``(name|None) -> None`` observer for a UI readout."""
     def __init__(self, name: str, actions_provider: Callable[[], List[Action]],
                  suspended: Optional[Callable[[], bool]] = None,
                  on_pick: Optional[Callable[[Optional[str]], None]] = None):
@@ -350,11 +346,31 @@ class Behavior:
 
     # --- blackboard helpers shared by states/tasks ---
     @staticmethod
+    def has_adrenaline(client: 'Client', skill_id: int) -> bool:
+        """True unless ``skill_id`` is an adrenaline skill that has not charged yet. Adrenaline
+        skills report ``get_recharge == 0`` even before they are ready, so the recharge gate alone
+        would let them fire under-charged; this compares the skill's required adrenaline (static
+        skill data) against the client's SYNCED current adrenaline on that slot. Mirrors HeroAI's
+        IsReadyToCast check (combat.py: ``adrenaline_required > 0 and adrenaline_a < required``).
+        Adrenaline is genuinely client-only self-state, so it travels up in the skillbar sync
+        (jsonizer ``adrenaline_a`` -> ``SkillData.adrenaline_a``) and the host reads it from there."""
+        try:
+            required = int(GW.GLOBAL_CACHE.Skill.Data.GetAdrenaline(int(skill_id)) or 0)
+        except Exception:
+            return True
+        if required <= 0:
+            return True
+        sd = client.game_client.get_skill_data(int(skill_id))
+        return sd is not None and int(sd.adrenaline_a) >= required
+
+    @staticmethod
     def cast(client: 'Client', skill_id: int, target_id: Optional[int] = None) -> bool:
         """Fire one cast of ``skill_id`` from ``client`` if it is off cooldown. Returns
         whether the cast was issued. Slot is resolved from the client's synced skillbar."""
         sd = client.game_client.get_skill_data(int(skill_id))
         if sd is None or sd.slot <= 0 or sd.get_recharge != 0:
+            return False
+        if not Behavior.has_adrenaline(client, skill_id):
             return False
         tgt = client.game_client.agent_id if target_id is None else target_id
         client.transport.send(RPC.CMD.USE_SKILL, sd.slot, tgt)
@@ -370,7 +386,22 @@ class Behavior:
         sd = client.game_client.get_skill_data(int(skill_id))
         if sd is None or sd.slot <= 0 or sd.get_recharge != 0:
             return False
+        if not Behavior.has_adrenaline(client, skill_id):
+            return False
         client.transport.send(RPC.CMD.CAST_TARGETED, sd.slot, int(skill_id), int(target_spec))
+        return True
+
+    @staticmethod
+    def cast_at(client: 'Client', skill_id: int, target_id: int) -> bool:
+        """Fire one cast at a HOST-RESOLVED concrete agent id. The host has already picked the
+        target and decided the cast is feasible (cc_lib.combat_conditions); the client just executes
+        ChangeTarget+UseSkill. Slot is resolved from the synced skillbar; recharge gated host-side."""
+        sd = client.game_client.get_skill_data(int(skill_id))
+        if sd is None or sd.slot <= 0 or sd.get_recharge != 0:
+            return False
+        if not Behavior.has_adrenaline(client, skill_id):
+            return False
+        client.transport.send(RPC.CMD.CAST_AT, sd.slot, int(target_id))
         return True
 
     @staticmethod
@@ -393,13 +424,13 @@ class Behavior:
     # wiping a mid-cast Sequence on a frame where the map momentarily reads not-ready.
     MAP_FAIL_THRESHOLD = 3
 
-    @staticmethod
-    def _map_ready() -> bool:
-        """True only when the local instance is fully live. Worker threads must NOT touch GW
-        APIs during a loading screen -- the instance is being torn down and calling into the
-        native side mid-teardown crashes the client (this is how HeroAI's loops stay safe).
-        Shared with the client network receiver via misc_helpers.map_ready."""
-        return map_ready()
+    def _map_ready(self) -> bool:
+        """True only when the local instance is fully live. Worker threads must NOT touch GW APIs
+        during a loading screen -- mid-teardown native calls crash the client. We read the
+        freshness-checked flag the MAIN thread publishes (ThreadManager.is_map_live) rather than
+        calling map_ready() here: this runs on a worker thread, where map_ready()'s frame-cached GW
+        checks are unsafe, and a frozen flag from a paused main thread must read as not-live."""
+        return self.cache_thread_globals.is_map_live()
 
     def run(self) -> None:
         ctx = self
@@ -464,7 +495,7 @@ class Behavior:
 
 
 class TestBehavior(Behavior):
-    """Connectivity smoke test: every few seconds log the roster and broadcast a move."""
+    """Connectivity smoke test: every few seconds log the roster and nudge each assigned client."""
     @staticmethod
     def name() -> str:
         return "Test Behavior"
@@ -480,10 +511,9 @@ class TestBehavior(Behavior):
             if time.time() - self._last < 3.0:
                 return Status.RUNNING
             self._last = time.time()
-            # Only the clients assigned to THIS behavior -- not the whole roster. network_manager
-            # .broadcast() PUBs to every client regardless of ownership, so two behaviors would
-            # both command all clients; sending per-client over each client's own transport keeps
-            # each behavior scoped to its own window region.
+            # Command only the clients assigned to THIS behavior, per-client over each client's own
+            # transport. A global PUB would hit every client regardless of ownership, so two
+            # behaviors would both drive the whole roster instead of staying scoped.
             clients = ctx.my_clients()
             if clients:
                 first = next(iter(clients.values()))
@@ -1554,26 +1584,21 @@ class FollowLeader(ClientAction):
 
 
 class SharedShoutRotation(Action):
-    """MULTI-ACCOUNT plan: several players carry the same maintainable shout (e.g. Don't Trip), and
-    the team ROTATES casting it so its effect stays up across the party without any one player
-    spamming it. This is the cross-build analog of MaintainEnchant -- the 'bar' is the whole roster,
-    and it lives in the TEAM selector (it commands whichever client is next in the rotation). It is
-    the template for any 'N accounts share a skill, schedule it across them' plan.
+    """MULTI-ACCOUNT plan: several players carry the same maintainable shout (e.g. Don't Trip) and
+    the team ROTATES casting it so the effect stays up party-wide without any one player spamming.
+    The cross-build analog of MaintainEnchant (the 'bar' is the whole roster); lives in the TEAM
+    selector and is the template for any 'N accounts share a skill, schedule it across them' plan.
 
-    Two modes, by how many ALIVE holders are present:
-      * a few copies (min .. EFFECT_GATED-1): time-share the cooldown -- want a cast every
-        recharge/copies seconds and rotate to the next holder, so coverage is even and no copy is
-        wasted (2 copies of a 20s shout -> one every 10s, alternating).
-      * many copies (>= EFFECT_GATED): surplus, so just keep it up -- cast only when the effect is
-        missing, rotating through alive holders (dead ones skipped), letting the spares idle.
+    Two modes, by ALIVE holder count (dead holders are always skipped):
+      * a few copies (min .. EFFECT_GATED-1): time-share -- cast every recharge/copies seconds,
+        rotating holders for even coverage (2 copies of a 20s shout -> one every 10s, alternating).
+      * many copies (>= EFFECT_GATED): surplus -- cast only when the effect is missing; spares idle.
 
-    A shout only buffs allies near the CASTER, so before casting we make sure the whole party is
-    within Earshot of the chosen caster: any client not yet clustered is pulled toward the leader
-    (the rally point) until that earshot condition holds, THEN the shout fires and everyone resumes
-    whatever they were doing. So the plan is build() -> Sequence(gather-until-in-earshot, CastSkill);
-    if the party is already clustered the gather completes instantly and it just casts. While the
-    play runs it ``involves`` the caster PLUS whichever clients are still being gathered, so only
-    those clients' selectors suspend -- a client already in position keeps fighting."""
+    A shout only buffs allies near the CASTER, so build() = Sequence(gather-into-earshot, CastSkill):
+    clients not yet clustered are pulled to the rally point (leader) until all are within Earshot of
+    the caster, then it casts (already-clustered -> gather completes instantly). While it runs it
+    ``involves`` the caster + any client still being gathered, so only those slots suspend -- a
+    client already in position keeps fighting."""
     tier = Tier.SUSTAINED
     EFFECT_GATED = 4          # alive copies at/above which we switch from time-share to effect-gated
     TIMESHARE_SCORE = 0.5     # team-selector score when a time-share cast is due
@@ -1597,6 +1622,8 @@ class SharedShoutRotation(Action):
                 and GW.Agent.IsAlive(c.game_client.agent_id)]
 
     def _recharge(self) -> float:
+        """The skill's base recharge in SECONDS (matches ``time.time()`` used by the time-share
+        math in ``score``)."""
         try:
             return float(GW.GLOBAL_CACHE.Skill.Data.GetRecharge(self.skill_id) or 0.0)
         except Exception:
@@ -1616,6 +1643,15 @@ class SharedShoutRotation(Action):
         # alive holder still has time left on the effect.
         return any(Behavior.effect_remaining(c, self.skill_id) > 0 for c in holders)
 
+    def _ready(self, client: 'Client') -> bool:
+        """The holder's shout is actually off recharge (read from the synced skillbar). Rotation
+        order alone isn't enough: at a rotation boundary the holder whose turn it is can be a hair
+        from recharged -- its own ``recharge``/copies turn lands right as its full recharge expires
+        -- and casting then is silently dropped host-side (``Behavior.cast`` gates on recharge). So
+        readiness must be a precondition for picking a caster, not just rotation position."""
+        sd = client.game_client.get_skill_data(self.skill_id)
+        return sd is not None and sd.slot > 0 and sd.get_recharge == 0
+
     def applicable(self, ctx: "Behavior") -> bool:
         if not getattr(ctx, "cross_synergies_enabled", False):
             return False
@@ -1626,6 +1662,12 @@ class SharedShoutRotation(Action):
         copies = len(holders)
         if copies < self.syn.min_copies:
             return 0.0
+        # Whichever mode we're in, only bid when SOME holder is actually recharged. Otherwise the
+        # team selector commits to a rotation play whose cast is dropped, which advanced the cursor
+        # and reset the clock -- skipping that holder's turn entirely (the bug where the first
+        # caster never got its third cast: its turn arrived a beat before its recharge synced).
+        if not any(self._ready(c) for c in holders):
+            return 0.0
         if copies >= self.EFFECT_GATED:
             return 0.0 if self._effect_up(holders) else self.UPKEEP_SCORE   # surplus: keep it up only
         recharge = self._recharge()
@@ -1634,13 +1676,21 @@ class SharedShoutRotation(Action):
         return self.TIMESHARE_SCORE if due else 0.0
 
     def _next_caster(self, holders: List['Client']) -> Optional['Client']:
-        """Next holder in the rotation (already filtered to alive), advancing the cursor."""
-        if not holders:
+        """Next READY holder in rotation order (alive + shout off recharge), scanning from the
+        cursor and advancing PAST the chosen one. Returns None when no holder is recharged right
+        now -- and in that case leaves the cursor UNTOUCHED so the same holder is retried next tick
+        instead of being skipped (which is exactly what dropped the first caster's later turns)."""
+        n = len(holders)
+        if n == 0:
             return None
-        self._rot %= len(holders)
-        caster = holders[self._rot]
-        self._rot = (self._rot + 1) % len(holders)
-        return caster
+        start = self._rot % n
+        for i in range(n):
+            idx = (start + i) % n
+            c = holders[idx]
+            if self._ready(c):
+                self._rot = (idx + 1) % n
+                return c
+        return None
 
     @staticmethod
     def _pos(client: 'Client') -> 'Vec2':
@@ -1675,11 +1725,16 @@ class SharedShoutRotation(Action):
     def build(self, ctx: "Behavior") -> Node:
         holders = self._alive_holders(ctx)
         caster = self._next_caster(holders)
-        self._caster = caster
-        self._involved = {caster} if caster is not None else set()
-        self._last_cast = time.time()        # reset the time-share clock on every cast
         if caster is None:
+            # No holder recharged this instant -- DON'T reset the time-share clock or advance the
+            # cursor; just idle a tick. The selector re-picks next tick (score stays >0 while due)
+            # and tries again, so the holder casts a beat late instead of losing its turn.
+            self._caster = None
+            self._involved = set()
             return Wait(0.1)
+        self._caster = caster
+        self._involved = {caster}
+        self._last_cast = time.time()        # reset the time-share clock only on a real cast
         # Gather the party within earshot of the caster, THEN cast -- one committed Sequence. If the
         # party is already clustered the gather step SUCCEEDs on its first tick and it just casts.
         return Sequence(self.name, [
@@ -1843,6 +1898,7 @@ class CustomSkillAction(ClientAction):
                                         HeroAISkills.Target.Enemy.value if HeroAISkills.available else 0))
         self._self_buff = HeroAISkills.is_self_buff(descriptor)
         self._combat_only = HeroAISkills.is_combat_only(descriptor)
+        self._resolved_target = 0    # set by applicable(), consumed by build()
         self.name = f"skill {self.skill_id}"
 
     def applicable(self, ctx: "Behavior") -> bool:
@@ -1851,8 +1907,23 @@ class CustomSkillAction(ClientAction):
         sd = self.client.game_client.get_skill_data(self.skill_id)
         if sd is None or sd.slot <= 0 or sd.get_recharge != 0:
             return False
-        # Don't re-apply a self enchant/buff that is still up (the host knows its own effects).
+        # Adrenaline skills read get_recharge==0 even before they're charged, so gate them on the
+        # synced current adrenaline -- otherwise the selector commits to one and CastSkill fires a
+        # cast the client silently drops every cycle.
+        if not Behavior.has_adrenaline(self.client, self.skill_id):
+            return False
+        # Don't re-apply a self enchant/buff that is still up (cheap synced pre-filter).
         if self._self_buff and Behavior.effect_remaining(self.client, self.skill_id) > 0:
+            return False
+        # ALL decisions host-side (CentralCommander rule): the host resolves the concrete target for
+        # this client by scanning its view of the shared instance around the client, then evaluates
+        # HeroAI's cast conditions against it. The client never resolves a target or checks a
+        # condition -- build() just ships the resolved id for the client to execute.
+        self._resolved_target = combat_conditions.resolve_target(
+            self.client, self._target_spec, self.skill_id)
+        if not self._resolved_target:
+            return False
+        if not combat_conditions.can_cast(self.client, self.skill_id, self._resolved_target):
             return False
         return True
 
@@ -1896,10 +1967,12 @@ class CustomSkillAction(ClientAction):
 
     def build(self, ctx: "Behavior") -> Node:
         self._last_fire = time.time()       # settle window: a backstop while recharge re-syncs
-        if self._self_spec:
-            fire = (lambda: Behavior.cast(self.client, self.skill_id))
-        else:
-            fire = (lambda: Behavior.cast_targeted(self.client, self.skill_id, self._target_spec))
+        # Self skills cast with target 0 (UseSkill treats 0 as the caster) so the client doesn't
+        # ChangeTarget away from its current enemy mid-combat; non-self skills cast at the concrete
+        # host-resolved agent id. (The condition gate in applicable() already evaluated against the
+        # resolved target -- which is the client's own agent for a self skill.)
+        target = 0 if self._self_spec else self._resolved_target
+        fire = (lambda: Behavior.cast_at(self.client, self.skill_id, target))
         node = CastSkill(self.client, self.skill_id, fire)
         node.name = self.name
         return node
@@ -1913,19 +1986,23 @@ class GenericCombatEngine:
     OUT_OF_COMBAT_FACTOR = 0.0    # multiplier on a combat-only skill's utility while out of combat
 
     @staticmethod
-    def claimed_skills(client: 'Client', synergies: List[Synergy]) -> Set[int]:
-        """Skills owned by a detected synergy (required + optional) -- excluded from the default."""
+    def claimed_skills(client: 'Client', synergies: List[Synergy],
+                       extra_claimed: Optional[Set[int]] = None) -> Set[int]:
+        """Skills owned by a detected synergy (required + optional) -- excluded from the default.
+        ``extra_claimed`` adds skills owned by a detected CROSS-build synergy (a roster-level combo
+        like a rotated shout) for this client, so the team rotation owns them, not the generic engine."""
         bar = set(client.game_client.skills.keys())
-        claimed: Set[int] = set()
+        claimed: Set[int] = set(extra_claimed or ())
         for syn in detect_synergies(bar, synergies):
             claimed |= set(syn.skills) | set(syn.optional_skills)
         return claimed
 
     @classmethod
-    def actions_for(cls, client: 'Client', synergies: List[Synergy]) -> List[Action]:
+    def actions_for(cls, client: 'Client', synergies: List[Synergy],
+                    extra_claimed: Optional[Set[int]] = None) -> List[Action]:
         if not HeroAISkills.available:
             return []
-        claimed = cls.claimed_skills(client, synergies)
+        claimed = cls.claimed_skills(client, synergies, extra_claimed)
         acts: List[Action] = []
         for skill_id in client.game_client.skills.keys():
             if skill_id in claimed:
@@ -2072,6 +2149,21 @@ class UtilityCombatBehavior(Behavior):
             acts += modules.get(syn.name, lambda c: [])(client)
         return acts
 
+    def _cross_claimed_skills(self, client: 'Client') -> Set[int]:
+        """Skills a DETECTED cross-build synergy owns on THIS client's bar -- the roster-level analog
+        of a Synergy claiming its skills. When 2+ accounts hold a CrossSynergy's shared skill the
+        team rotation (SharedShoutRotation) drives it, so it must be excluded from the generic engine
+        for every holder (otherwise the holder would ALSO cast it loose, double-using/desyncing the
+        rotation). Empty when cross synergies are off or this client holds none."""
+        if not self.cross_synergies_enabled:
+            return set()
+        claimed: Set[int] = set()
+        roster = list(self.my_clients().values())
+        for syn, holders in detect_cross_synergies(roster, self.CROSS_SYNERGIES):
+            if client in holders:
+                claimed.add(syn.required_skill)
+        return claimed
+
     def _client_actions(self, client: 'Client') -> List[Action]:
         acts: List[Action] = [Idle(client)]
         if self.attack_enabled:                                # combat-tier auto-attack
@@ -2084,7 +2176,8 @@ class UtilityCombatBehavior(Behavior):
         # engine below skips them and the combo module is the only thing that fires them.
         acts += self._synergy_actions(client)
         if self.generic_enabled:                               # default engine for unclaimed skills
-            acts += GenericCombatEngine.actions_for(client, self.SYNERGIES)
+            acts += GenericCombatEngine.actions_for(
+                client, self.SYNERGIES, extra_claimed=self._cross_claimed_skills(client))
         if self.examples_enabled:                              # toy single-skill upkeep demos only
             acts += self._generic_actions(client)
         return acts
@@ -2228,14 +2321,18 @@ class UtilityCombatBehavior(Behavior):
             sig = {"__examples__": ctx.examples_enabled,    # toggling rebuilds per-client loadouts
                    "__generic__": ctx.generic_enabled,
                    "__attack__": ctx.attack_enabled,
-                   "__follow__": ctx.follow_enabled}
+                   "__follow__": ctx.follow_enabled,
+                   "__cross__": ctx.cross_synergies_enabled}
             for cid, c in ctx.my_clients().items():
                 if c.game_client is None:
-                    sig[cid] = (False, ())
+                    sig[cid] = (False, (), ())
                     continue
                 bar = set(c.game_client.skills.keys())
                 syns = tuple(s.name for s in detect_synergies(bar, ctx.SYNERGIES))
-                sig[cid] = (bool(bar), syns)
+                # Cross-build claims change which skills the generic engine drops -> part of the
+                # signature so a client becoming/ceasing to be a holder rebuilds its loadout.
+                cross = tuple(sorted(ctx._cross_claimed_skills(c)))
+                sig[cid] = (bool(bar), syns, cross)
             return sig
 
         def _rebuild(self, ctx: "UtilityCombatBehavior") -> None:

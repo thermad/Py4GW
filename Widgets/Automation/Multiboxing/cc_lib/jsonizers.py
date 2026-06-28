@@ -3,6 +3,7 @@
 Depends only on Py4GWCoreLib / PyEffects; nothing else in cc_lib."""
 from typing import Dict, Any
 
+import Py4GW
 import PyEffects
 import Py4GWCoreLib as GW
 
@@ -97,11 +98,32 @@ class Jsonizer:
         # game instance -- so the name must travel over the wire. GetName() is async and may be
         # "" for the first few ticks until GW fills it in; the host keeps the last good value.
         d["name"] = GW.Player.GetName()
-        d["target_id"] = GW.Player.GetTargetID()
+        target_id = GW.Player.GetTargetID()
+        d["target_id"] = target_id
+        # Dagger combo sequence on the client's CURRENT target -- client-only state (the dagger
+        # status is per (attacker, target), so the host querying it in its own world would read the
+        # HOST's status on that agent, not this client's). The host needs it to make the assassin
+        # lead->offhand->dual combo decision host-side. 0 = no marks / no target.
+        try:
+            d["target_dagger_status"] = GW.Agent.GetDaggerStatus(target_id) if target_id else 0
+        except Exception:
+            d["target_dagger_status"] = 0
         d["hp"] = GW.Agent.GetHealth(d["id"])
         d["max_hp"] = GW.Agent.GetMaxHealth(d["id"])
         d["energy"] = GW.Agent.GetEnergy(d["id"])
         d["max_energy"] = GW.Agent.GetMaxEnergy(d["id"])
+        # Caster attributes the host needs but can't read for a remote agent: the live ping and the
+        # Fast Casting attribute level both feed HeroAI's interrupt-feasibility check (does an
+        # interrupt land before the target's cast finishes), which the host now evaluates.
+        try:
+            d["ping"] = int(Py4GW.PingHandler().GetCurrentPing())
+        except Exception:
+            d["ping"] = 0
+        try:
+            # Attribute.FastCasting == 0; GetAttributesDict omits attributes with 0 points.
+            d["fast_casting"] = int(GW.Agent.GetAttributesDict(d["id"]).get(0, 0))
+        except Exception:
+            d["fast_casting"] = 0
         d["skilldata"] = Jsonizer.get_skilldata()
         d["effects"] = Jsonizer.get_effects(d["id"])
         d["buffs"] = Jsonizer.get_buffs(d["id"])

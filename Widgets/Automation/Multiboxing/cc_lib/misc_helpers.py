@@ -18,10 +18,13 @@ def current_epoch() -> int:
 
 def map_ready() -> bool:
     """True only when the local instance is fully live (map valid AND finished loading).
-    Any worker/network thread that touches a GW API must gate on this: calling into the
-    native side during a loading screen (instance teardown) crashes the client. Shared by
-    the behavior worker loop and the client network receiver. Defensive try/except because
-    these checks can themselves throw mid-teardown -> treat as not-ready."""
+
+    MAIN-THREAD ONLY. This calls frame-cached GW functions (Checks.Map.*), and the frame cache
+    is a single global dict reset by a main-thread PreUpdate callback -- so off the main thread
+    it returns stale values and races the cache clear(). Background threads must NOT call this;
+    they read ThreadManager.map_live, which the main thread publishes from here every frame.
+
+    Defensive try/except because these checks can themselves throw mid-teardown -> not-ready."""
     try:
         return Routines.Checks.Map.MapValid() and Routines.Checks.Map.IsMapReady()
     except Exception:
@@ -148,9 +151,37 @@ class Vec2:
 
 
 class ThreadManager:
+    # A frozen flag must read as NOT live. During a hard load screen Py4GW stops rendering, so the
+    # main thread stops calling main() and stops refreshing map_live -- it freezes at its last value
+    # (True). A background thread reading that stale True would call GW into the dying instance and
+    # crash. So we stamp every publish and trust the flag only if it was refreshed this recently.
+    # Must comfortably exceed the main-thread frame interval (even a slow/hitching frame) but be far
+    # below a load duration. Bias low: a false "stale" only costs a skipped heartbeat (harmless); a
+    # false "live" can crash.
+    MAP_LIVE_FRESHNESS = 0.25
+
     def __init__(self):
         self.thread_manager = GW.MultiThreading(2.0, log_actions=True)
         self.is_threads_running = False
+        # Main-thread-published "is the local instance live" signal. Background threads (behavior
+        # workers, the client network loop) MUST read it via is_map_live() -- NEVER call map_ready()
+        # themselves: map_ready() goes through frame-cached GW functions whose cache is a single
+        # global dict reset by a main-thread PreUpdate callback, so off-thread it returns stale
+        # values AND races the cache's clear(). The main thread calls publish_map_live() every frame.
+        self.map_live = False
+        self.map_live_ts = 0.0
+
+    def publish_map_live(self, value: bool) -> None:
+        """MAIN THREAD ONLY: publish the current liveness + a freshness timestamp."""
+        self.map_live = value
+        self.map_live_ts = time.time()
+
+    def is_map_live(self) -> bool:
+        """Thread-safe liveness for background threads: the main-thread flag, but only if it was
+        refreshed within MAP_LIVE_FRESHNESS. If the main thread stalled (hard load pausing main()),
+        the flag is stale -> report NOT live so background work stops touching GW even though the
+        last published value was a frozen True. Plain attribute reads are GIL-atomic."""
+        return self.map_live and (time.time() - self.map_live_ts) < self.MAP_LIVE_FRESHNESS
 
     def start_thread(self, name, func):
         self.is_threads_running = True

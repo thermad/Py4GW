@@ -412,6 +412,9 @@
     "enc:\\\\x13A7\\\\x8239\\\\xABCE\\\\x0D26": [
       "Mountain Troll"
     ],
+    "enc:\\\\x13D2\\\\xC00C\\\\xEB57\\\\x223A": [
+      "Enslaved Ettin"
+    ],
     "enc:\\\\x13FA\\\\xC3B1\\\\xAC60\\\\x320F": [
       "Jonar Stonebender"
     ],
@@ -2656,6 +2659,12 @@
     "enc:\\\\x8102\\\\x05BD\\\\x9C5E\\\\x5B24": [
       "Paw Darkflame"
     ],
+    "enc:\\\\x8102\\\\x0632\\\\xB63A\\\\xFC97\\\\x2415": [
+      "Fronis Irontoe"
+    ],
+    "enc:\\\\x8102\\\\x0634\\\\x8201\\\\x98DD\\\\x5728": [
+      "Norn Brawler"
+    ],
     "enc:\\\\x8102\\\\x063A\\\\x82F6\\\\x982C\\\\x246B": [
       "Gharaz the Glutton"
     ],
@@ -2710,6 +2719,9 @@
     "enc:\\\\x8102\\\\x192C\\\\xAD98\\\\xB165\\\\x7E8C": [
       "Zho"
     ],
+    "enc:\\\\x8102\\\\x1930\\\\xEF38\\\\x9B75\\\\x3345": [
+      "Lieutenant Mahgma"
+    ],
     "enc:\\\\x8102\\\\x2044\\\\xC97B\\\\xB5B1\\\\x09F9": [
       "Avarr the Fallen"
     ],
@@ -2730,6 +2742,15 @@
     ],
     "enc:\\\\x8102\\\\x20AE\\\\xFE30\\\\x9F20\\\\x237E": [
       "Stone Summit Carver"
+    ],
+    "enc:\\\\x8102\\\\x20AF\\\\xC89E\\\\x88F7\\\\x5A3F": [
+      "Stone Summit Crusher"
+    ],
+    "enc:\\\\x8102\\\\x20B0\\\\x987D\\\\xBD5F\\\\x30B8": [
+      "Stone Summit Carver"
+    ],
+    "enc:\\\\x8102\\\\x20B1\\\\xA3FB\\\\x9910\\\\x7611": [
+      "Stone Summit Ranger"
     ],
     "enc:\\\\x8102\\\\x21EF\\\\xF2C0\\\\xC21A\\\\x7694": [
       "Arctic Wolf"

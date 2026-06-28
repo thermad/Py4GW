@@ -3,8 +3,9 @@
 Owns the host<->client wire protocol and the per-client Client list. Depends on the
 lower cc_lib leaves (rpc/transport/blackboard/jsonizers/misc_helpers); nothing depends
 on it except the behavior + UI layers above."""
-import os, sys, json, time, uuid
-from typing import Dict
+import sys, json, time, uuid
+from collections import deque
+from typing import Dict, Optional
 
 # zmq's vendored internals do some bare imports, so its parent dir must be on sys.path
 # before the (fully-qualified) import below. Idempotent; safe to re-run on every reload.
@@ -13,11 +14,10 @@ if _zmq_lib_path not in sys.path:
     sys.path.insert(0, _zmq_lib_path)
 import Py4GWCoreLib.ExternalLibs.zmq as zmq
 
-from cc_lib.jsonizers import Jsonizer
 from cc_lib.blackboard import GameClient
 from cc_lib.rpc import RPC
 from cc_lib.transport import Client, LocalTransport
-from cc_lib.misc_helpers import ThreadManager, map_ready, current_epoch
+from cc_lib.misc_helpers import ThreadManager, current_epoch
 
 
 class ZMQTransport(Client.Transport):
@@ -49,6 +49,17 @@ class NetworkManager:
         self.local_client_id = uuid.uuid4()
         self.local_client = Client(local_game_client, LocalTransport())
 
+        # GW work is kept OFF the network thread (calling GW from a background thread crashes during
+        # instance teardown). The MAIN thread produces the outbound state snapshot and executes
+        # inbound RPCs; the network thread only moves bytes.
+        #   outbound_state: latest player_data() dict, refreshed by the main thread (update());
+        #                   the client network loop just sends it -- no GW call on that thread.
+        #   inbound_rpcs:   commands received by the network loop, drained+executed on the main
+        #                   thread. Bounded so a backlog during a load can't grow without limit;
+        #                   deque append/popleft are individually GIL-atomic (no lock needed).
+        self.outbound_state: Optional[dict] = None
+        self.inbound_rpcs: "deque" = deque(maxlen=64)
+
         # Host Sockets
         self.router = None  # RPC (Bidirectional)
         self.pub = None     # Broadcast (Host -> All)
@@ -66,6 +77,26 @@ class NetworkManager:
         if self.local_client_id not in self.client_list:
             self.client_list[self.local_client_id] = self.local_client
 
+    def pump_outbound_state(self, state: dict) -> None:
+        """MAIN THREAD: stash the latest local player_data snapshot for the client network loop
+        to send. Keeps GW reads (player_data) off the network thread."""
+        self.outbound_state = state
+
+    def drain_inbound_rpcs(self) -> None:
+        """MAIN THREAD: execute the commands the client network loop queued. Runs here so every
+        RPC's GW calls happen on the main thread (frame-cache valid, pause-safe). The caller only
+        invokes this when the map is live (it's driven from the map-gated update())."""
+        q = self.inbound_rpcs
+        while q:
+            try:
+                method, args, kwargs = q.popleft()
+            except IndexError:
+                break
+            try:
+                RPC.call(method, *args, **kwargs)
+            except Exception as e:
+                print(f"inbound RPC '{method}' error: {e}")
+
     def setup_zmq_host(self, port):
         # A previous host session's _cleanup_host may have cleared the list; make sure the host
         # is back in its own client list before the new session starts polling.
@@ -74,36 +105,22 @@ class NetworkManager:
 
         # ROUTER: Handles RPC requests from clients and sends direct replies
         self.router = self.context.socket(zmq.ROUTER)
+        self.router.setsockopt(zmq.LINGER, 0)
         self.router.bind(f"tcp://*:{port}")
 
         # PUB: Broadcasts data to all connected clients
         self.pub = self.context.socket(zmq.PUB)
+        self.pub.setsockopt(zmq.LINGER, 0)
         self.pub.bind(f"tcp://*:{port + 1}")
 
         # PULL: Collects state updates from all clients (Async/Non-blocking)
         self.pull = self.context.socket(zmq.PULL)
+        self.pull.setsockopt(zmq.LINGER, 0)
         self.pull.bind(f"tcp://*:{port + 2}")
 
         self.poller = zmq.Poller()
         self.poller.register(self.router, zmq.POLLIN)
         self.poller.register(self.pull, zmq.POLLIN)
-
-    def broadcast(self, method: str, args: list = None, kwargs: dict = None):
-        """
-        Sends a message to ALL connected clients via the PUB socket.
-        Best for: 'Move to X', 'Attack Target Y', 'Global Sync'.
-        """
-        if not self.pub:
-            print("Error: PUB socket not initialized.")
-            return
-
-        payload = {
-            "method": method,
-            "args": args or [],
-            "kwargs": kwargs or {}
-        }
-        # PUB sockets send as a single frame unless multipart is specifically needed
-        self.pub.send_json(payload)
 
     def maintain_host(self, port, terminal_function):
         self.setup_zmq_host(port)
@@ -112,55 +129,48 @@ class NetworkManager:
         epoch = current_epoch()
         try:
             while self.thread_manager.is_threads_running and epoch == current_epoch():
-                events = dict(self.poller.poll(timeout=10))
+                # A malformed/partial frame from a crashing client (json.loads / recv_json / a
+                # bad identity) must not escape and kill the host network thread -- catch per
+                # iteration and keep serving the surviving clients.
+                try:
+                    events = dict(self.poller.poll(timeout=10))
 
-                # 1. Handle RPC Requests (ROUTER)
-                if self.router in events:
-                    # ROUTER format: [identity, empty, payload]
-                    identity, _, message = self.router.recv_multipart()
-                    data = json.loads(message)
-                    # Convert the ZMQ identity bytes to a UUID object
-                    client_id = uuid.UUID(bytes=identity)
+                    # 1. Handle RPC Requests (ROUTER)
+                    if self.router in events:
+                        # ROUTER format: [identity, empty, payload]
+                        identity, _, message = self.router.recv_multipart()
+                        data = json.loads(message)
+                        # Convert the ZMQ identity bytes to a UUID object
+                        client_id = uuid.UUID(bytes=identity)
 
-                    if data.get("method") == "handshake":
-                        # Create the identity response
-                        reply_data = {
-                            "status": "registered"
-                        }
-                        reply = json.dumps(reply_data).encode()
-                        print(f"Registering client {client_id}")
-                        # Send back to the specific identity
-                        self.router.send_multipart([identity, b"", reply])
+                        if data.get("method") == "handshake":
+                            # Create the identity response
+                            reply_data = {
+                                "status": "registered"
+                            }
+                            reply = json.dumps(reply_data).encode()
+                            print(f"Registering client {client_id}")
+                            # Send back to the specific identity
+                            self.router.send_multipart([identity, b"", reply])
 
-                        # Initialize client in your tracking lists
-                        if client_id not in self.client_list:
-                            c = Client(GameClient(), ZMQTransport(self.router, client_id))
-                            self.client_list[client_id] = c
-                    # result = registry.call(
-                    #     data["method"],
-                    #     data.get("args", []),
-                    #     data.get("kwargs", {})
-                    # )
-                    # reply = json.dumps({
-                    #     "method": data["method"],
-                    #     "returned": result
-                    # }).encode()
-                    # self.router.send_multipart([identity, b"", reply])
+                            # Initialize client in your tracking lists
+                            if client_id not in self.client_list:
+                                c = Client(GameClient(), ZMQTransport(self.router, client_id))
+                                self.client_list[client_id] = c
 
-                # 2. Handle State Updates (PULL)
-                if self.pull in events:
-                    # PULL format: [payload]
-                    msg = self.pull.recv_json()
-                    cid_str = msg.get("client_id")
-                    if cid_str:
-                        client_id = uuid.UUID(cid_str)
-                        if client_id not in self.client_list:
-                            print("Push notification from unknown client")
-                        else:
-                            self.client_list[client_id].game_client.update_from_dict(msg)
-
-                # 3. Optional: Broadcast global state to all clients via PUB
-                # self.pub.send_json({"type": "sync", "data": global_state})
+                    # 2. Handle State Updates (PULL)
+                    if self.pull in events:
+                        # PULL format: [payload]
+                        msg = self.pull.recv_json()
+                        cid_str = msg.get("client_id")
+                        if cid_str:
+                            client_id = uuid.UUID(cid_str)
+                            if client_id not in self.client_list:
+                                print("Push notification from unknown client")
+                            else:
+                                self.client_list[client_id].game_client.update_from_dict(msg)
+                except Exception as e:
+                    print(f"maintain_host loop error (continuing): {e}")
 
         finally:
             self._cleanup_host()
@@ -176,6 +186,7 @@ class NetworkManager:
             # DEALER: RPC communication with Host ROUTER
             dealer = context.socket(zmq.DEALER)
             dealer.setsockopt(zmq.IDENTITY, client_id.bytes)
+            dealer.setsockopt(zmq.LINGER, 0)   # never block close()/term() on a dead host
             dealer.connect(f"tcp://{ip}:{port}")
             #add a handshake
             # Send a request to the host to ask "Who am I?"
@@ -192,11 +203,13 @@ class NetworkManager:
 
             # SUB: Listen for broadcasts from Host PUB
             sub = context.socket(zmq.SUB)
+            sub.setsockopt(zmq.LINGER, 0)
             sub.connect(f"tcp://{ip}:{port + 1}")
             sub.setsockopt_string(zmq.SUBSCRIBE, "")
 
             # PUSH: Send state updates to Host PULL
             push = context.socket(zmq.PUSH)
+            push.setsockopt(zmq.LINGER, 0)
             push.connect(f"tcp://{ip}:{port + 2}")
 
             poller = zmq.Poller()
@@ -210,51 +223,47 @@ class NetworkManager:
             # moves lets a reload cleanly retire this thread instead of orphaning it.
             epoch = current_epoch()
             while self.thread_manager.is_threads_running and epoch == current_epoch():
-                # Don't touch GW APIs while this client is mid-loading-screen: every inbound RPC
-                # (move/cast/interact) calls into the native side, and player_data() reads it --
-                # doing so during instance teardown crashes the client (the remote-crash symptom).
-                # We must NOT skip the poll/recv, though: leaving frames unread backs up the ZMQ
-                # buffers and replays stale move/cast orders the instant the new map loads. So we
-                # always drain, and only *dispatch* when the map is live (no debounce -- a single
-                # transient not-ready just drops one order, which the host re-issues next tick).
+                # This thread makes NO GW calls. All GW work is on the main thread:
+                #   - outbound: the main thread refreshes self.outbound_state (player_data); here we
+                #     just SEND that pre-built dict -- no GW read on this thread, so a hard load that
+                #     pauses the main thread can never make us read GW into a dying instance.
+                #   - inbound: we ENQUEUE commands; the main thread drains+executes them (gated on
+                #     map_ready there). We still always recv to drain the ZMQ buffer, but only
+                #     enqueue while is_map_live() so stale orders during a load are discarded rather
+                #     than replayed on the new map. is_map_live() is freshness-checked, so a frozen
+                #     flag from a paused main thread reads as not-live.
                 #
-                # map_ready() is re-checked immediately before EACH native call rather than once
-                # per loop: poll() below blocks up to 10ms, which is plenty of time for the map to
-                # begin tearing down between a top-of-loop check and the actual UseSkill -> a TOCTOU
-                # crash window. Re-checking right before the call shrinks that window to ~nothing.
+                # A malformed frame / transient ZMQ error must not escape and kill this thread
+                # (which would silently drop the connection). Catch per iteration and continue.
+                try:
+                    # A. Send the latest main-thread-built state snapshot to the host.
+                    if self.thread_manager.is_map_live():
+                        snapshot = self.outbound_state
+                        if snapshot is not None:
+                            snapshot = dict(snapshot)        # shallow copy: don't race the main thread
+                            snapshot["client_id"] = str(client_id)
+                            push.send_json(snapshot)
 
-                # A. Send local state update to host (only when live; a stale read would crash).
-                if map_ready():
-                    state = Jsonizer.player_data()
-                    state["client_id"] = str(client_id)
-                    push.send_json(state)
+                    # B. Check for incoming messages
+                    events = dict(poller.poll(timeout=10))
 
-                # B. Check for incoming messages
-                events = dict(poller.poll(timeout=10))
+                    if dealer in events:
+                        msg_full = dealer.recv_multipart()       # always drain the frame
+                        msg: Dict = json.loads(msg_full[-1].decode('utf-8'))
+                        method = msg.get("method", None)
+                        # Enqueue for the main thread (no host reply: the host ROUTER drops RPC
+                        # return values by design -- client state flows back via PUSH/PULL).
+                        if method and self.thread_manager.is_map_live():
+                            self.inbound_rpcs.append((method, msg.get("args", []), msg.get("kwargs", {})))
 
-                if dealer in events:
-                    # Handle RPC response from Host
-                    msg_full = dealer.recv_multipart()       # always drain the frame
-                    msg: Dict = json.loads(msg_full[-1].decode('utf-8'))
-
-                    # Use registry to handle the returned data (e.g., updating local state)
-                    method = msg.get("method", None)
-                    args = msg.get("args", [])
-                    kwargs = msg.get("kwargs", {})
-                    if method and map_ready():               # fresh check right before the native call
-                        ret = RPC.call(method, *args, **kwargs)
-                        j: Dict = {"method": method, "returned": ret}
-                        dealer.send_multipart([b"", json.dumps(j).encode()])
-
-                if sub in events:
-                    broadcast_data = sub.recv_json()         # always drain the frame
-                    if map_ready():                          # fresh check right before the native call
-                        # Assume the broadcast message looks like: {"method": "move_to", "args": [100, 200]}
-                        RPC.call(
-                            broadcast_data.get("method"),
-                            *broadcast_data.get("args", []),
-                            **broadcast_data.get("kwargs", {})
-                        )
+                    if sub in events:
+                        broadcast_data = sub.recv_json()         # always drain the frame
+                        method = broadcast_data.get("method", None)
+                        if method and self.thread_manager.is_map_live():
+                            self.inbound_rpcs.append((method, broadcast_data.get("args", []),
+                                                      broadcast_data.get("kwargs", {})))
+                except Exception as e:
+                    print(f"maintain_client loop error (continuing): {e}")
 
                 time.sleep(0.05)
         finally:

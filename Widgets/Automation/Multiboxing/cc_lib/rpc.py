@@ -35,6 +35,7 @@ class RPC:
         DROP_BOND = "drop_bond"
         CHANGE_TARGET = "change_target"   # host sets a client's target to a concrete agent id it knows
         CAST_TARGETED = "cast_targeted"   # client resolves the target for a Skilltarget spec, then casts
+        CAST_AT = "cast_at"               # host-resolved concrete cast: ChangeTarget(agent)+UseSkill(slot)
         INTERACT = "interact"             # interact an agent: host-given id, else client picks an enemy
 
     @classmethod
@@ -133,12 +134,27 @@ class RPC:
         """CLIENT-SIDE: resolve ``target_spec`` locally, and only if a target exists change to it
         and fire ``slot``. The resolve+change+cast happen atomically in the client's own world, so
         there is no cross-network race between a separate ChangeTarget and the cast, and no reliance
-        on the host learning the resolved id (the host ROUTER drops RPC return values by design)."""
+        on the host learning the resolved id (the host ROUTER drops RPC return values by design).
+
+        NOTE: the generic combat engine no longer uses this client-side resolution path -- per the
+        CentralCommander 'all decisions host-side' rule the host now resolves the target AND
+        evaluates cast conditions itself (cc_lib.combat_conditions) and issues a concrete CAST_AT.
+        This is kept for any caller that still wants the client to pick a target for a bare spec."""
         target_id = RPC.resolve_combat_target(int(target_spec), int(skill_id))
         if not target_id:
             return
         GW.Player.ChangeTarget(target_id)
         GW.GLOBAL_CACHE.SkillBar.UseSkill(int(slot), target_id)
+
+    @staticmethod
+    def cast_at(slot: int, agent_id: int) -> None:
+        """CLIENT-SIDE pure executor: change to the host-resolved ``agent_id`` and fire ``slot`` on
+        it -- no resolution, no condition checks (the host already made every decision). agent_id 0
+        means self/no-target (UseSkill treats 0 as the caster)."""
+        agent_id = int(agent_id or 0)
+        if agent_id:
+            GW.Player.ChangeTarget(agent_id)
+        GW.GLOBAL_CACHE.SkillBar.UseSkill(int(slot), agent_id)
 
     @staticmethod
     def interact(agent_id: int = 0) -> None:
@@ -191,5 +207,6 @@ RPC.register(RPC.CMD.DROP_BOND, GW.GLOBAL_CACHE.Effects.DropBuff)
 RPC.register(RPC.CMD.RELATIVE_MOVE, RPC.relative_move)
 RPC.register(RPC.CMD.CHANGE_TARGET, GW.Player.ChangeTarget)
 RPC.register(RPC.CMD.CAST_TARGETED, RPC.cast_targeted)
+RPC.register(RPC.CMD.CAST_AT, RPC.cast_at)
 RPC.register(RPC.CMD.INTERACT, RPC.interact)
 
