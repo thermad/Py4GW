@@ -12,11 +12,12 @@ import Py4GWCoreLib as GW
 from Py4GWCoreLib import PyImGui, Routines
 
 from cc_lib.bt import (Status, Node, Task, DoUntil, CastWaitForEffect, CastSkill,
-                       MoveTo, Sequence, Parallel, Wait, WaitUntil, TaskManager,
+                       MoveTo, MoveToAgent, Sequence, Parallel, Wait, WaitUntil, TaskManager,
                        State, StateMachine)
 from cc_lib.transport import Client
 from cc_lib.rpc import RPC
 from cc_lib import combat_conditions
+from cc_lib import curves
 from cc_lib.misc_helpers import Vec2, ThreadManager
 from cc_lib.networking import NetworkManager
 
@@ -69,6 +70,71 @@ class ClientAction(Action):
 
     def involves(self, client: "Client") -> bool:
         return client is self.client
+
+
+class CastClaims:
+    """Host-side cast 'whiteboard' (HeroAI's CoordinatesViaWhiteboard idea, but party-wide and
+    host-owned): while one client is casting a particular skill at a particular friendly, every OTHER
+    client skips that same (skill, target) so the party doesn't waste N copies of a skill on a target
+    a single cast already covers (e.g. four clients all enchanting one ally with Double Dragon). The
+    whole party is driven by ONE behavior worker thread (PartyUtilitySelector ticks every slot in
+    sequence), so a plain dict needs no lock. Claims auto-expire on a short lease as a backstop; the
+    normal path (ClaimedCast) releases them the instant the cast node finishes or is preempted."""
+    def __init__(self):
+        self._claims: "Dict[tuple, tuple]" = {}   # (skill_id, target_id) -> (owner_id, expires_at)
+
+    def held_by_other(self, skill_id: int, target_id: int, owner: "Client") -> bool:
+        key = (int(skill_id), int(target_id))
+        rec = self._claims.get(key)
+        if rec is None:
+            return False
+        owner_id, expires = rec
+        if time.time() >= expires:                 # lapsed backstop -> free it
+            del self._claims[key]
+            return False
+        return owner_id != id(owner)
+
+    def acquire(self, skill_id: int, target_id: int, owner: "Client", lease: float) -> None:
+        self._claims[(int(skill_id), int(target_id))] = (id(owner), time.time() + lease)
+
+    def release(self, skill_id: int, target_id: int, owner: "Client") -> None:
+        key = (int(skill_id), int(target_id))
+        rec = self._claims.get(key)
+        if rec is not None and rec[0] == id(owner):
+            del self._claims[key]
+
+
+class ClaimedCast(Node):
+    """Wrap a cast Node so its (skill, target) stays CLAIMED in a shared CastClaims for exactly as
+    long as the cast is in flight: acquired on enter, heart-beated each tick, released the moment the
+    inner node finishes (cast resolved) or is preempted (cancel). Other clients see the claim via
+    CastClaims.held_by_other and skip a duplicate cast on the same friendly. The lease is only a
+    backstop against a teardown path being missed -- the heartbeat keeps it alive while running."""
+    LEASE = 2.0    # backstop TTL; refreshed every tick, so it just bounds a leaked claim's lifetime
+
+    def __init__(self, claims: "CastClaims", skill_id: int, target_id: int,
+                 owner: "Client", inner: Node):
+        self.claims = claims
+        self.skill_id = int(skill_id)
+        self.target_id = int(target_id)
+        self.claim_owner = owner
+        self.inner = inner
+        self.name = getattr(inner, "name", "claimed cast")
+
+    def enter(self, ctx: "Behavior") -> None:
+        self.claims.acquire(self.skill_id, self.target_id, self.claim_owner, self.LEASE)
+        self.inner.enter(ctx)
+
+    def tick(self, ctx: "Behavior") -> Status:
+        self.claims.acquire(self.skill_id, self.target_id, self.claim_owner, self.LEASE)  # heartbeat
+        st = self.inner.tick(ctx)
+        if st != Status.RUNNING:
+            self.claims.release(self.skill_id, self.target_id, self.claim_owner)
+        return st
+
+    def cancel(self) -> None:
+        self.claims.release(self.skill_id, self.target_id, self.claim_owner)
+        self.inner.cancel()
 
 
 class UtilitySelector(Node):
@@ -436,6 +502,9 @@ class Behavior:
         ctx = self
         self._running = True
         self._epoch = _current_epoch()   # any later reload bumps the global epoch -> is_running False
+        # The slot reuses this instance across stop/start (so settings persist), so wipe any
+        # in-flight work left from a previous run before re-priming -- a clean slate each start.
+        self.tasks.cancel_all()
         self.root.enter(ctx)
         map_fail_streak = 0
         torn_down = False                # True while we've aborted work and are waiting for the map
@@ -1268,8 +1337,8 @@ class MaintainEnchant(ClientAction):
         rem = Behavior.effect_remaining(self.client, self.skill_id)
         if rem >= self.refresh_below:
             return 0.0
-        # 0 just below the window, rising to ~0.9 once the buff is fully down.
-        return 0.9 * clamp01((self.refresh_below - rem) / self.refresh_below)
+        # 0 just below the window, rising to ~0.9 once the buff is fully down (near-expiry ramp).
+        return 0.9 * curves.ramp(rem, self.refresh_below, 0.0)
 
     def build(self, ctx: "Behavior") -> Node:
         self._last_fire = time.time()   # open the settle window so we don't re-fire next frame
@@ -1314,7 +1383,7 @@ class SelfHeal(ClientAction):
         frac = self._hp_fraction()
         if frac is None:
             return 0.0
-        return clamp01((self.heal_below - frac) / self.heal_below)  # 0 at the threshold -> 1 near death
+        return curves.ramp(frac, self.heal_below, 0.0)   # 0 at the threshold -> 1 near death
 
     def build(self, ctx: "Behavior") -> Node:
         self._last_fire = time.time()
@@ -1505,6 +1574,7 @@ class FollowLeader(ClientAction):
     SUSTAINED_PEAK = 0.5     # max score inside the scaling band (just below the leash)
     # Fallback knobs if the behavior doesn't define them (it does, via draw()).
     DEF_MIN, DEF_LEASH, DEF_SPREAD = 300.0, 1500.0, 250.0
+    DEF_MELEE_BONUS = 700.0  # extra leash (units) granted to a melee client while in combat
 
     def __init__(self, client: 'Client'):
         super().__init__(client)
@@ -1514,6 +1584,33 @@ class FollowLeader(ClientAction):
         return (float(getattr(ctx, "follow_min_distance", self.DEF_MIN)),
                 float(getattr(ctx, "follow_hard_leash", self.DEF_LEASH)),
                 float(getattr(ctx, "follow_spread_radius", self.DEF_SPREAD)))
+
+    def _melee_in_combat(self, ctx: "Behavior") -> bool:
+        """True when this client wields a melee weapon AND is currently in combat -- the case where
+        we slacken the leash so it can chase a foe out to the extended leash without being tugged."""
+        aid = self.client.game_client.agent_id
+        if not aid:
+            return False
+        in_combat = getattr(ctx, "client_in_combat", None)
+        if in_combat is None or not in_combat(self.client):
+            return False
+        try:
+            return bool(GW.Agent.IsMelee(aid))
+        except Exception:
+            return False
+
+    def _effective_knobs(self, ctx: "Behavior") -> tuple:
+        """The follow knobs adjusted for context. A melee client in combat gets its hard leash
+        extended by ``follow_melee_combat_leash_bonus`` AND its deadzone pushed up to that extended
+        leash -- so it has NO desire to return to the leader until it's about to be left behind,
+        letting it commit to melee far out toward the maximum distance. Out of combat (or ranged),
+        the normal min/leash band applies unchanged."""
+        min_d, leash, spread = self._knobs(ctx)
+        if self._melee_in_combat(ctx):
+            bonus = float(getattr(ctx, "follow_melee_combat_leash_bonus", self.DEF_MELEE_BONUS))
+            leash = leash + bonus
+            min_d = max(min_d, leash - 1.0)   # suppress the sustained ramp; only the hard leash tugs
+        return min_d, leash, spread
 
     def _leader(self, ctx: "Behavior") -> tuple:
         login = getattr(ctx, "follow_login_number", None)
@@ -1543,7 +1640,7 @@ class FollowLeader(ClientAction):
     def _refresh(self, ctx: "Behavior") -> Optional[float]:
         """Compute distance and set the dynamic tier; returns the distance (None = inert)."""
         dist, _ = self._distance(ctx)
-        _, leash, _s = self._knobs(ctx)
+        _, leash, _s = self._effective_knobs(ctx)
         self.tier = Tier.REACTIVE if (dist is not None and dist >= leash) else Tier.SUSTAINED
         return dist
 
@@ -1551,18 +1648,18 @@ class FollowLeader(ClientAction):
         if not getattr(ctx, "follow_enabled", False):
             return False
         dist = self._refresh(ctx)
-        min_d, _leash, _s = self._knobs(ctx)
+        min_d, _leash, _s = self._effective_knobs(ctx)
         return dist is not None and dist >= min_d
 
     def score(self, ctx: "Behavior") -> float:
         dist = self._refresh(ctx)
-        min_d, leash, _s = self._knobs(ctx)
+        min_d, leash, _s = self._effective_knobs(ctx)
         if dist is None or dist < min_d:
             return 0.0
         if dist >= leash:
             return 1.0                                   # interrupt: forced follow
         t = (dist - min_d) / max(1.0, leash - min_d)     # 0 at min, 1 at leash
-        return self.SUSTAINED_PEAK * clamp01(t) ** self.CURVE_EXP
+        return self.SUSTAINED_PEAK * curves.power(t, self.CURVE_EXP)
 
     def build(self, ctx: "Behavior") -> Node:
         def move():
@@ -1571,7 +1668,7 @@ class FollowLeader(ClientAction):
                 return
             _m, _l, spread = self._knobs(ctx)
             slot = self._slot(ctx, leader_pos, spread)
-            self.client.transport.send(RPC.CMD.MOVE, slot.x, slot.y)
+            self.client.move(slot.x, slot.y)
 
         def arrived():
             dist, _ = self._distance(ctx)
@@ -1581,6 +1678,209 @@ class FollowLeader(ClientAction):
         # A recurring move that re-reads the leader each interval (live follow) and SUCCEEDs once
         # back inside the deadzone, handing control back to the selector.
         return Task("follow", move, done=arrived, interval=0.1)
+
+
+class StandInDoubleDragon(ClientAction):
+    """Positioning for a client that CARRIES the Double Dragon enchantment on itself: walk onto the
+    densest adjacent-range enemy cluster within ``LEADER_RANGE`` of the leader, so the enchantment's
+    per-second adjacent fire damage hits as many foes as possible. Only active while the client
+    actually has the enchantment up (synced effect) and is NOT the leader -- the leader anchors the
+    group and must never be pulled toward foes, so this is inert for whichever client is the leader.
+
+    SUSTAINED tier: it competes with offense by score and yields to REACTIVE work (heals/forced
+    follow), but won't thrash a running cast. The move node re-reads the best cluster each interval
+    (the ball drifts) and releases once the client is standing in it; all moves go through
+    ``client.move`` so they obey the per-client once-per-second movement throttle."""
+    name = "stand in double dragon"
+    tier = Tier.SUSTAINED
+    LEADER_RANGE = 700.0     # only chase clusters this close to the leader (stay with the group)
+    BASE = 0.35             # above plain offense (~0.15) so it positions, below reactive support
+
+    def __init__(self, client: 'Client', skill_id: int):
+        super().__init__(client)
+        self.skill_id = int(skill_id)
+
+    def _leader(self, ctx: "Behavior") -> tuple:
+        login = getattr(ctx, "leader_login_number", None) or getattr(ctx, "follow_login_number", None)
+        leader_id = (GW.Party.Players.GetAgentIDByLoginNumber(login) if login
+                     else GW.Party.GetPartyLeaderID())
+        if not leader_id:
+            return None, 0
+        return GW.Agent.GetXY(leader_id), int(leader_id)
+
+    def _target_pos(self, ctx: "Behavior"):
+        """The world point to stand on, or None when inert (no leader / we ARE the leader / no
+        cluster in range)."""
+        leader_xy, leader_id = self._leader(ctx)
+        if leader_xy is None or self.client.game_client.agent_id == leader_id:
+            return None
+        return combat_conditions.double_dragon_stand_pos(self.client, leader_xy, self.LEADER_RANGE)
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if Behavior.effect_remaining(self.client, self.skill_id) <= 0:   # only while enchanted with it
+            return False
+        return self._target_pos(ctx) is not None
+
+    def score(self, ctx: "Behavior") -> float:
+        return self.BASE
+
+    def build(self, ctx: "Behavior") -> Node:
+        def move():
+            pos = self._target_pos(ctx)
+            if pos is not None:
+                self.client.move(pos[0], pos[1])
+
+        def arrived():
+            pos = self._target_pos(ctx)
+            if pos is None:
+                return True
+            here = Vec2.from_tuple(GW.Agent.GetXY(self.client.game_client.agent_id))
+            return (here - Vec2(pos[0], pos[1])).magnitude() <= GW.Range.Adjacent.value
+
+        return Task("stand in double dragon", move, done=arrived, interval=0.1)
+
+
+class MaintainHeroicRefrain(ClientAction):
+    """Per-client plan for the paragon that carries Heroic Refrain. The refrain's +attribute bonus
+    scales with the CASTER's Leadership, so it has a bootstrap then a maintenance/spread shape
+    (mirrors HeroAI's Leadership.Heroic_Refrain coroutine):
+
+      1. BOOTSTRAP -- while the holder's synced Leadership is below 20, self-cast repeatedly. Each
+         cast re-applies the refrain at the current (now higher) Leadership, ratcheting the
+         attribute up until it caps at 20. (Requires the synced ``attributes`` blackboard field.)
+      2. SELF -- once at 20, keep the maxed refrain on the holder (self-cast if it has lapsed).
+      3. SPREAD -- with the holder maxed and buffed, cast it on any ally that lacks it, so the
+         whole party carries the Leadership-20 version.
+
+    After everyone has it, the buff is essentially free to maintain: Heroic Refrain re-applies
+    whenever a chant/shout ENDS on the bearer, so the shared-shout rotation's drop window (see
+    SharedShoutRotation / shout_drop_window) keeps refreshing it without further casts here.
+
+    SUSTAINED tier: it competes by score and won't thrash a running cast or preempt REACTIVE work;
+    the bootstrap scores highest (it's foundational and wants to finish promptly), self-refresh
+    next, spread lowest. Ally-target (spread) casts go through the cast-claim whiteboard so two
+    paragons don't both buff the same ally."""
+    tier = Tier.SUSTAINED
+    LEADERSHIP_ATTR = 40        # GW Attribute.Leadership
+    LEADERSHIP_MAX = 20
+    BOOTSTRAP_SCORE = 0.70      # ratchet Leadership to 20: strongest sustained priority
+    SELF_SCORE = 0.55           # holder is maxed but missing the buff -> refresh self
+    SPREAD_SCORE = 0.45         # an ally lacks the buff -> spread the maxed version
+
+    def __init__(self, client: 'Client', skill_id: int, settle: float = CAST_SETTLE):
+        super().__init__(client)
+        self.skill_id = int(skill_id)
+        self.settle = settle
+        self._last_fire = 0.0
+        self.name = "heroic refrain"
+        self._phase: Optional[str] = None     # "bootstrap" | "self" | "spread" (set by applicable)
+        self._target = 0
+
+    def _leadership(self) -> int:
+        return self.client.game_client.get_attribute(self.LEADERSHIP_ATTR)
+
+    def _self_has(self) -> bool:
+        return Behavior.effect_remaining(self.client, self.skill_id) > 0
+
+    def _ready(self) -> bool:
+        sd = self.client.game_client.get_skill_data(self.skill_id)
+        return sd is not None and sd.slot > 0 and sd.get_recharge == 0
+
+    def _client_has(self, other: 'Client') -> bool:
+        """True if a CONNECTED client already carries the refrain, read from ITS synced effects --
+        the canonical, reliable source. Includes the skill's SharedEffects so a refrain that lands
+        under a different effect id still counts as present (mirrors combat_conditions._has_effect)."""
+        active = other.game_client.effects
+        return any(int(sid) in active for sid in combat_conditions.shared_effect_ids(self.skill_id))
+
+    def _spread_target(self, ctx: "Behavior") -> int:
+        """A CONNECTED client near the holder that still lacks Heroic Refrain (per its synced
+        effects), so the holder spreads the maxed buff to it -- lowest-HP qualifier as a harmless
+        tiebreak. Scoped to ctx.my_clients(), NOT a raw party scan: a non-connected player's effects
+        aren't reliably readable host-side, so a party scan reads them as 'missing' forever and the
+        paragon spams the cast at them. Returns 0 when every connected client in earshot has it."""
+        me = self.client.game_client.agent_id
+        try:
+            hx, hy = GW.Agent.GetXY(me)
+        except Exception:
+            return 0
+        earshot = float(GW.Range.Earshot.value)
+        best, best_hp = 0, 2.0
+        for other in ctx.my_clients().values():
+            gc = other.game_client
+            aid = int(gc.agent_id or 0)
+            if not aid or aid == me:
+                continue
+            if not GW.Agent.IsAlive(aid):
+                continue
+            if self._client_has(other):
+                continue
+            try:
+                ax, ay = GW.Agent.GetXY(aid)
+            except Exception:
+                continue
+            if (ax - hx) ** 2 + (ay - hy) ** 2 > earshot * earshot:
+                continue
+            hp = (gc.hp / gc.max_hp) if gc.max_hp else 1.0
+            if hp < best_hp:
+                best, best_hp = aid, hp
+        return best
+
+    def _resolve(self, ctx: "Behavior") -> tuple:
+        """Decide what to do this tick: ('bootstrap'|'self'|'spread', target_agent_id), or
+        (None, 0) when the holder is maxed, buffed, and every connected client already carries it."""
+        me = self.client.game_client.agent_id
+        if self._leadership() < self.LEADERSHIP_MAX:
+            return ("bootstrap", me)
+        if not self._self_has():
+            return ("self", me)
+        tgt = self._spread_target(ctx)
+        if tgt and tgt != me:
+            return ("spread", int(tgt))
+        return (None, 0)
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        if time.time() - self._last_fire < self.settle:
+            return False
+        if not self._ready():
+            return False
+        self._phase, self._target = self._resolve(ctx)
+        if self._phase is None:
+            return False
+        # Spread: skip if another client is already casting Heroic Refrain on this same ally.
+        if self._phase == "spread":
+            claims = getattr(ctx, "cast_claims", None)
+            if claims is not None and claims.held_by_other(self.skill_id, self._target, self.client):
+                return False
+        return True
+
+    def score(self, ctx: "Behavior") -> float:
+        if self._phase == "bootstrap":
+            # Further from 20 -> slightly higher, so it finishes ratcheting promptly.
+            deficit = (self.LEADERSHIP_MAX - self._leadership()) / float(self.LEADERSHIP_MAX)
+            return clamp01(self.BOOTSTRAP_SCORE + 0.20 * curves.clamp01(deficit))
+        if self._phase == "self":
+            return self.SELF_SCORE
+        if self._phase == "spread":
+            return self.SPREAD_SCORE
+        return 0.0
+
+    def build(self, ctx: "Behavior") -> Node:
+        self._last_fire = time.time()
+        tgt = self._target
+        me = self.client.game_client.agent_id
+        if tgt == me:
+            # Self-cast (bootstrap / self-refresh): cast() targets the caster by default.
+            return CastSkill(self.client, self.skill_id,
+                             lambda: Behavior.cast(self.client, self.skill_id))
+        # Spread to an ally: host-resolved concrete target -> cast_at, wrapped in the claim so a
+        # second paragon won't double-buff this ally.
+        node: Node = CastSkill(self.client, self.skill_id,
+                               lambda t=tgt: Behavior.cast_at(self.client, self.skill_id, t))
+        claims = getattr(ctx, "cast_claims", None)
+        if claims is not None:
+            node = ClaimedCast(claims, self.skill_id, tgt, self.client, node)
+        return node
 
 
 class SharedShoutRotation(Action):
@@ -1668,6 +1968,17 @@ class SharedShoutRotation(Action):
         # caster never got its third cast: its turn arrived a beat before its recharge synced).
         if not any(self._ready(c) for c in holders):
             return 0.0
+        # DROP WINDOW: let the shout fully lapse on everyone before recasting, leaving a brief
+        # uptime gap. This is what keeps paragon refrains that re-apply when a chant/shout ENDS on
+        # a player (Heroic Refrain) topped up -- if the rotation never let the shout drop, the
+        # refrain would never get its refresh trigger. So unless the operator wants permanent
+        # uptime, don't bid while ANY alive holder still carries the effect; wait until it has
+        # ended on every holder. (Below the surplus threshold this also REPLACES the time-share
+        # interval as the pacing signal -- the effect-down edge is what gates the next cast.)
+        if getattr(ctx, "shout_drop_window", True):
+            if self._effect_up(holders):
+                return 0.0
+            return self.UPKEEP_SCORE if copies >= self.EFFECT_GATED else self.TIMESHARE_SCORE
         if copies >= self.EFFECT_GATED:
             return 0.0 if self._effect_up(holders) else self.UPKEEP_SCORE   # surplus: keep it up only
         recharge = self._recharge()
@@ -1716,7 +2027,7 @@ class SharedShoutRotation(Action):
                 if c.game_client is None:
                     continue
                 if (self._pos(c) - rally).magnitude() > radius:   # not yet clustered -> pull it in
-                    c.transport.send(RPC.CMD.MOVE, rally.x, rally.y)
+                    c.move(rally.x, rally.y)
                     involved.add(c)
             self._involved = involved
 
@@ -1769,6 +2080,7 @@ class HeroAISkills:
     Type = None                   # HeroAI SkillType enum
     NATURE_TIER: "Dict[int, tuple]" = {}    # nature value -> (Tier, base weight)
     CUSTOM_BONUS: "Dict[int, float]" = {}   # CustomA..N nature value -> additive score bonus
+    ALLY_TARGET_SPECS: "Set[int]" = set()   # Skilltarget values that hit a friendly (claim-dedup'd)
 
     @classmethod
     def load(cls) -> None:
@@ -1810,6 +2122,15 @@ class HeroAISkills:
             member = getattr(N, f"Custom{letter}", None)
             if member is not None:
                 cls.CUSTOM_BONUS[member.value] = 0.30 - i * 0.015   # 0.30 down to ~0.11
+        # Target specs that hit a FRIENDLY (ally/minion). A second cast of the same skill on the same
+        # friendly is wasted (one heal/enchant/buff/res is enough), so the cast-claim whiteboard dedups
+        # these across clients. ENEMY specs are deliberately excluded -- piling damage on one foe is
+        # focus fire, not waste. Self is excluded too (its target is per-caster, never shared).
+        ally_specs = ("Ally", "AllyCaster", "AllyMartial", "AllyMartialMelee", "AllyMartialRanged",
+                      "OtherAlly", "DeadAlly", "AllyNPCByModel", "MinionOrAllyNonEnchanted",
+                      "MinionNonEnchanted", "AllyNonEnchanted")
+        cls.ALLY_TARGET_SPECS = {getattr(Skilltarget, n).value
+                                 for n in ally_specs if hasattr(Skilltarget, n)}
         cls.available = True
 
     @classmethod
@@ -1836,6 +2157,38 @@ class HeroAISkills:
         """True for targets the host can resolve itself (no client-side scan / no CAST_TARGETED)."""
         return cls.available and int(target_spec) == cls.Target.Self.value
 
+    _SHOUT_CACHE: "Dict[int, bool]" = {}   # skill_id -> is party-earshot shout (static skill data)
+
+    @classmethod
+    def is_party_earshot_shout(cls, skill_id: int) -> bool:
+        """True for a maintainable PARTY-EARSHOT shout: a Shout (GW flag) with a real recharge that
+        is cast on Self and so buffs every ally within earshot of the caster (Don't Trip, Fall Back,
+        Stand Your Ground, ...). Single-target shouts (e.g. Make Haste -> AllyMartial) are excluded
+        by the Self-target test. These are exactly the shouts a team can ROTATE to keep up party-wide
+        (SharedShoutRotation). Needs the HeroAI descriptor for the target; unknown shouts -> False.
+        Memoized -- it reads only static skill data, so it's queried freely in the loadout signature."""
+        sid = int(skill_id)
+        cached = cls._SHOUT_CACHE.get(sid)
+        if cached is not None:
+            return cached
+        result = cls._compute_party_earshot_shout(sid)
+        cls._SHOUT_CACHE[sid] = result
+        return result
+
+    @classmethod
+    def _compute_party_earshot_shout(cls, skill_id: int) -> bool:
+        if not cls.available:
+            return False
+        try:
+            if not GW.GLOBAL_CACHE.Skill.Flags.IsShout(int(skill_id)):
+                return False
+            if float(GW.GLOBAL_CACHE.Skill.Data.GetRecharge(int(skill_id)) or 0.0) <= 0.0:
+                return False    # instant / no-recharge -> nothing to rotate
+        except Exception:
+            return False
+        desc = cls.descriptor(skill_id)
+        return desc is not None and cls.is_self_spec(getattr(desc, "TargetAllegiance", -1))
+
     @classmethod
     def is_self_buff(cls, descriptor) -> bool:
         """A self-targeted enchant/buff to refresh only while it is NOT already up."""
@@ -1846,6 +2199,23 @@ class HeroAISkills:
         nature = int(getattr(descriptor, "Nature", -1))
         N = cls.Nature
         return nature in (N.Buff.value, N.SelfTargeted.value, N.EnergyBuff.value)
+
+    @classmethod
+    def is_teardown(cls, descriptor) -> bool:
+        """A 'teardown' skill -- one that consumes one of the CASTER's Dervish enchantments to power
+        its bonus effect (HeroAI flags these ``Conditions.HasDervishEnchantment``; e.g. Signet of
+        Pious Light, Dwayna's Touch). Worth far less with no enchantment up to feed it, so the engine
+        penalizes it hard when the caster is unfed (see CustomSkillAction._context_multiplier)."""
+        if not cls.available or descriptor is None:
+            return False
+        conds = getattr(descriptor, "Conditions", None)
+        return bool(getattr(conds, "HasDervishEnchantment", False))
+
+    @classmethod
+    def is_ally_target(cls, target_spec: int) -> bool:
+        """True when ``target_spec`` resolves to a FRIENDLY (ally/minion) -- the skills whose
+        duplicate-cast-on-the-same-target the cast-claim whiteboard should dedup (see CastClaims)."""
+        return cls.available and int(target_spec) in cls.ALLY_TARGET_SPECS
 
     @classmethod
     def is_combat_only(cls, descriptor) -> bool:
@@ -1891,6 +2261,7 @@ class CustomSkillAction(ClientAction):
         self.settle = settle
         self._last_fire = 0.0
         nature = int(getattr(descriptor, "Nature", -1))
+        self._nature = nature
         self.tier, self._base = HeroAISkills.tier_and_base(nature)
         self._custom_bonus = HeroAISkills.custom_bonus(nature)
         self._self_spec = HeroAISkills.is_self_spec(getattr(descriptor, "TargetAllegiance", -1))
@@ -1898,6 +2269,10 @@ class CustomSkillAction(ClientAction):
                                         HeroAISkills.Target.Enemy.value if HeroAISkills.available else 0))
         self._self_buff = HeroAISkills.is_self_buff(descriptor)
         self._combat_only = HeroAISkills.is_combat_only(descriptor)
+        self._teardown = HeroAISkills.is_teardown(descriptor)
+        # Ally/support-targeted skills are cast-claim dedup'd across clients (one heal/enchant/buff on
+        # a given friendly is enough). Offense is left alone -- piling damage on one foe is focus fire.
+        self._ally_target = HeroAISkills.is_ally_target(self._target_spec)
         self._resolved_target = 0    # set by applicable(), consumed by build()
         self.name = f"skill {self.skill_id}"
 
@@ -1925,6 +2300,13 @@ class CustomSkillAction(ClientAction):
             return False
         if not combat_conditions.can_cast(self.client, self.skill_id, self._resolved_target):
             return False
+        # Cast-claim dedup: if another client is already casting this same skill at this same friendly,
+        # skip -- a single cast covers it (no N clients wasting Double Dragon / a heal on one ally).
+        if self._ally_target:
+            claims = getattr(ctx, "cast_claims", None)
+            if claims is not None and claims.held_by_other(
+                    self.skill_id, self._resolved_target, self.client):
+                return False
         return True
 
     def score(self, ctx: "Behavior") -> float:
@@ -1932,27 +2314,58 @@ class CustomSkillAction(ClientAction):
         gc = self.client.game_client
         conditions = getattr(self.desc, "Conditions", None)
 
-        # --- magnitude modifiers: turn HeroAI's threshold features into degree ---
+        # --- magnitude modifiers: turn HeroAI's threshold features into degree (see cc_lib.curves) ---
         # Self-heal style: the worse our HP, the stronger the pull (only meaningful self-side).
         less_life = float(getattr(conditions, "LessLife", 0) or 0)
         if less_life > 0 and gc.max_hp > 0 and self._self_spec:
             frac = gc.hp / gc.max_hp
             if frac >= less_life:
                 return 0.0          # comfortable -> don't spend the cast
-            s += 0.6 * clamp01((less_life - frac) / less_life)
+            s += 0.6 * curves.ramp(frac, less_life, 0.0)        # deeper HP deficit -> stronger
 
         # Energy skills: stronger the lower our energy is relative to the skill's threshold.
         less_energy = float(getattr(conditions, "LessEnergy", 0) or 0)
         if less_energy > 0 and gc.max_energy > 0:
             efrac = gc.energy / gc.max_energy
-            s += 0.3 * clamp01((less_energy - efrac) / less_energy)
+            s += 0.3 * curves.ramp(efrac, less_energy, 0.0)
 
         # Self enchant upkeep: rise as it nears expiry (mirrors MaintainEnchant's curve).
         if self._self_buff:
             rem = Behavior.effect_remaining(self.client, self.skill_id)
-            s += 0.3 * clamp01((4000 - rem) / 4000)
+            s += 0.3 * curves.ramp(rem, 4000.0, 0.0)
+
+        # --- target-aware priority bumps (resolved target is fresh: applicable() ran first) ---
+        tgt = self._resolved_target
+        if tgt:
+            # Interrupt: scale the bump by how dangerous the target's in-progress cast is, so the
+            # rupt is spent on a rez / Meteor Shower (~0.45) not a Flare (~0.06). HeroAI can't do this.
+            if HeroAISkills.available and self._nature == HeroAISkills.Nature.Interrupt.value:
+                s += min(0.45, combat_conditions.casting_danger(tgt) * 0.03)
+            # Cluster value (AoE skills, cleave weapons, AoE-setup hexes): the more enemies bunched
+            # at the resolved target, the more it's worth (up to +0.32).
+            if combat_conditions.is_cluster_skill(self.skill_id):
+                extra = combat_conditions.aoe_cluster_size(tgt, self.skill_id) - 1
+                if extra > 0:
+                    s += 0.08 * min(extra, 4)
+            # Press the attack on a healer caught mid-cast (the focus target resolve_target picked).
+            elif combat_conditions.is_casting_monk_skill(tgt):
+                s += 0.05
 
         return clamp01(s) * self._context_multiplier(ctx)
+
+    def _is_melee_attack(self) -> bool:
+        """True when this is a weapon ATTACK skill being used by a client wielding a MELEE weapon
+        (so it needs to be in melee range to land). Bow/spear attack skills are martial-ranged and
+        skip the approach. Read host-side by agent id from the shared instance."""
+        if not HeroAISkills.available:
+            return False
+        if int(getattr(self.desc, "SkillType", -1)) != HeroAISkills.Type.Attack.value:
+            return False
+        aid = self.client.game_client.agent_id
+        try:
+            return bool(aid and GW.Agent.IsMelee(aid))
+        except Exception:
+            return False
 
     def _context_multiplier(self, ctx: "Behavior") -> float:
         """Situational utility multipliers (extend here). Currently: a combat-only skill is scaled
@@ -1963,6 +2376,12 @@ class CustomSkillAction(ClientAction):
             in_combat = getattr(ctx, "client_in_combat", None)
             if in_combat is not None and not in_combat(self.client):
                 mult *= GenericCombatEngine.OUT_OF_COMBAT_FACTOR
+        # Teardown skills (Signet of Pious Light, Dwayna's Touch, ...) consume one of the caster's
+        # Dervish enchantments for their payoff. With none up to feed them they still function but are
+        # worth a fraction of their value, so crush the score -- the selector will pick almost
+        # anything else first, yet the skill stays castable as a last resort (not a hard zero).
+        if self._teardown and not combat_conditions.caster_has_dervish_enchantment(self.client):
+            mult *= GenericCombatEngine.NO_DERVISH_FEED_FACTOR
         return mult
 
     def build(self, ctx: "Behavior") -> Node:
@@ -1975,6 +2394,20 @@ class CustomSkillAction(ClientAction):
         fire = (lambda: Behavior.cast_at(self.client, self.skill_id, target))
         node = CastSkill(self.client, self.skill_id, fire)
         node.name = self.name
+        # Melee attack skills: walk into range first. The selector commits to the whole Sequence,
+        # so the client closes the gap (150 tolerance ~= melee range) and only then fires -- no
+        # whiffed melee cast from out of range. MoveToAgent tracks the target if it kites and FAILs
+        # the Sequence (dropping the pick) if it dies mid-approach.
+        if target and self._is_melee_attack():
+            node = Sequence(self.name, [
+                MoveToAgent(self.client, target, tolerance=150.0),
+                node,
+            ])
+        # For ally/support skills, hold a party-wide claim on (skill, target) while this cast runs so
+        # no other client double-casts the same skill on the same friendly (see CastClaims).
+        claims = getattr(ctx, "cast_claims", None)
+        if self._ally_target and claims is not None and self._resolved_target:
+            return ClaimedCast(claims, self.skill_id, self._resolved_target, self.client, node)
         return node
 
 
@@ -1984,6 +2417,7 @@ class GenericCombatEngine:
     module). Stateless -- all knobs are class constants -- so it reads as one unit and the behavior
     just calls ``actions_for``."""
     OUT_OF_COMBAT_FACTOR = 0.0    # multiplier on a combat-only skill's utility while out of combat
+    NO_DERVISH_FEED_FACTOR = 0.05  # multiplier on a teardown skill's utility when no Dervish enchant feeds it
 
     @staticmethod
     def claimed_skills(client: 'Client', synergies: List[Synergy],
@@ -2014,6 +2448,47 @@ class GenericCombatEngine:
         return acts
 
 
+class GlyphThenElite(ClientAction):
+    """Pair Glyph of Swiftness with the bar's ELITE skill: cast the glyph FIRST (it cuts the recharge
+    of the next spell) then the elite, as ONE committed Sequence -- so a long-recharge elite comes
+    back sooner. Wired as a FALLBACK rule, only when no per-bar synergy already claims the glyph
+    (e.g. the perma Shadow Form combo owns glyph+SF -- that takes precedence).
+
+    Reuses a CustomSkillAction for the elite, so the combo inherits ALL of the elite's behavior:
+    target resolution, cast-condition gates, recharge/adrenaline gating, AoE/interrupt/cluster score
+    bumps, and the cast-claim dedup. This plan just (1) prepends the glyph cast and (2) bids
+    GLYPH_BONUS above the elite cast on its own, so the engine prefers the sped-up combo whenever the
+    glyph is available. The glyph is OPTIONAL: if it's on recharge its CastSkill no-ops and the
+    Sequence falls straight through to the elite (mirrors MaintainShadowForm)."""
+    GLYPH_BONUS = 0.10    # how much the sped-up combo out-bids the elite cast alone
+
+    def __init__(self, client: 'Client', glyph_id: int, elite_id: int, elite_descriptor,
+                 settle: float = CAST_SETTLE):
+        super().__init__(client)
+        self.glyph = int(glyph_id)
+        self.elite = int(elite_id)
+        # The elite as a normal generic action -- the single source of its targeting/gating/scoring.
+        self._elite_action = CustomSkillAction(client, elite_id, elite_descriptor, settle=settle)
+        self.tier = self._elite_action.tier   # commit/preempt exactly like the elite would
+        self.name = f"glyph -> elite {self.elite}"
+
+    def applicable(self, ctx: "Behavior") -> bool:
+        # Delegate: this also resolves the elite's target (consumed by its build()). Glyph readiness
+        # is intentionally NOT gated -- a recharging glyph just drops out of the Sequence.
+        return self._elite_action.applicable(ctx)
+
+    def score(self, ctx: "Behavior") -> float:
+        return clamp01(self._elite_action.score(ctx) + self.GLYPH_BONUS)
+
+    def build(self, ctx: "Behavior") -> Node:
+        # Glyph (self-cast) -> elite, as one committed unit. The elite node carries its own cast-claim
+        # wrapper (for ally elites) and melee approach (for melee attack elites) via its build().
+        return Sequence(self.name, [
+            CastSkill(self.client, self.glyph, lambda: Behavior.cast(self.client, self.glyph)),
+            self._elite_action.build(ctx),
+        ])
+
+
 class UtilityCombatBehavior(Behavior):
     """Host-driven utility combat. Every controlled client runs its OWN UtilitySelector, built
     from generic actions plus the action modules of whatever synergies its skillbar carries --
@@ -2039,11 +2514,12 @@ class UtilityCombatBehavior(Behavior):
 
     # Cross-build (multi-account) synergies: capabilities that emerge from several accounts each
     # carrying a shared skill, not from one bar. Detected across the whole roster (detect_cross_
-    # synergies) and driven by team-level rotation plans (SharedShoutRotation), which live in the
-    # team selector. EXAMPLE: 2+ players holding Don't Trip -> rotate it to keep anti-knockdown up.
-    CROSS_SYNERGIES: List[CrossSynergy] = [
-        CrossSynergy("dont_trip", Skills.dont_trip.value, min_copies=2, provides="anti_knockdown"),
-    ]
+    # synergies) and driven by team-level rotation plans (SharedShoutRotation), in the team selector.
+    # NOTE: PARTY-EARSHOT SHOUTS (Don't Trip, Fall Back, Stand Your Ground, ...) are now detected
+    # AUTOMATICALLY across the roster (see _shared_shout_ids) -- they no longer need an entry here.
+    # This list is the extension point for any EXPLICIT cross-build combo that isn't an auto-detected
+    # party shout (e.g. a multi-skill A-has-X / B-has-Y play).
+    CROSS_SYNERGIES: List[CrossSynergy] = []
 
     # Each Synergy is a skill cluster that, present together on a bar, unlocks a combo. Detection
     # is independent per synergy (a bar can carry several at once), and a detected synergy CLAIMS
@@ -2095,10 +2571,38 @@ class UtilityCombatBehavior(Behavior):
         self.follow_min_distance = 300
         self.follow_hard_leash = 1500
         self.follow_spread_radius = 250
-        # Cross-build (multi-account) synergies: real engine content (not demo), ships ON. Each
-        # registered CrossSynergy gets a persistent SharedShoutRotation in the team action pool (it
-        # self-gates via applicable() until enough copies are actually present on the roster).
+        # Melee clients get this many extra units of leash WHILE IN COMBAT (and their sustained
+        # follow desire suppressed up to that extended leash), so a fighter can stay on a foe far
+        # out toward the max distance instead of being tugged back. Read live by FollowLeader.
+        self.follow_melee_combat_leash_bonus = 700
+        # Double Dragon: when a client carries the enchantment, position it onto the densest enemy
+        # cluster near the leader so its adjacent-fire AoE hits the most foes (StandInDoubleDragon).
+        # Ships ON; self-gates -- inert unless the skill is on the bar and the enchant is up.
+        self.double_dragon_enabled = True
+        # Heroic Refrain: the paragon holding it self-casts to ratchet Leadership to 20, then spreads
+        # the maxed +attribute refrain to the party (MaintainHeroicRefrain). Ships ON; self-gates --
+        # inert unless the skill is on a bar. Maintained thereafter by the shout drop window below.
+        self.heroic_refrain_enabled = True
+        # Shared-shout DROP WINDOW: let rotated party shouts fully lapse before recasting (a brief
+        # uptime gap) instead of holding 100% uptime. Required for Heroic Refrain, which re-applies
+        # itself whenever a shout/chant ENDS on the bearer -- no drop, no refresh. Read live by
+        # SharedShoutRotation.score (team actions aren't signature-cached, so no rebuild needed).
+        self.shout_drop_window = True
+        # Party-wide cast-claim whiteboard: while one client casts an ally/support skill at a friendly,
+        # other clients skip that same (skill, target) so the party doesn't waste duplicate casts on
+        # one ally (Double Dragon, heals, enchants, res, ...). Read by every CustomSkillAction via ctx.
+        self.cast_claims = CastClaims()
+        # Glyph of Swiftness -> elite: when a bar carries the glyph and an elite, and no synergy
+        # already claims the glyph, pair them (glyph first to cut the elite's recharge). Ships ON;
+        # self-gates (no glyph / no elite / glyph synergy-claimed -> inert). See GlyphThenElite.
+        self.glyph_elite_enabled = True
+        # Cross-build (multi-account) shared shouts + synergies: real engine content (not demo), ON.
+        # Every PARTY-EARSHOT shout carried by >= SHARED_SHOUT_MIN_COPIES roster bars is auto-detected
+        # and rotated across its holders so it stays up party-wide (the generalized Don't Trip logic);
+        # any explicit CROSS_SYNERGIES get the same treatment. Each rotation is a persistent
+        # SharedShoutRotation (keyed by skill id so its rotation state survives across ticks).
         self.cross_synergies_enabled = True
+        self._shout_rotations: Dict[int, 'SharedShoutRotation'] = {}   # skill_id -> persistent rotation
         self.team_actions: List[Action] = (
             [SharedShoutRotation(cs) for cs in self.CROSS_SYNERGIES] + [RegroupAll()])
         # One party engine (built in StateCombat.enter), not N per-client selectors. The behavior
@@ -2149,20 +2653,85 @@ class UtilityCombatBehavior(Behavior):
             acts += modules.get(syn.name, lambda c: [])(client)
         return acts
 
+    SHARED_SHOUT_MIN_COPIES = 2   # roster bars that must carry a party shout before the team rotates it
+
+    def _shared_shout_ids(self) -> Set[int]:
+        """Party-earshot shout skill ids carried by >= SHARED_SHOUT_MIN_COPIES bars on the roster --
+        the shouts the team auto-rotates (the generalized Don't Trip sharing). Pure over the bars."""
+        if not (self.cross_synergies_enabled and HeroAISkills.available):
+            return set()
+        counts: Dict[int, int] = defaultdict(int)
+        for c in self.my_clients().values():
+            if c.game_client is None:
+                continue
+            for sid in c.game_client.skills.keys():
+                if HeroAISkills.is_party_earshot_shout(sid):
+                    counts[int(sid)] += 1
+        return {sid for sid, n in counts.items() if n >= self.SHARED_SHOUT_MIN_COPIES}
+
+    def _shared_shout_actions(self) -> List[Action]:
+        """One persistent SharedShoutRotation per currently-shared party shout (rotation state lives in
+        the cached instance, so it must survive ticks -- hence the keyed cache, not fresh objects)."""
+        ids = self._shared_shout_ids()
+        for sid in ids:
+            if sid not in self._shout_rotations:
+                try:
+                    name = GW.GLOBAL_CACHE.Skill.GetName(sid) or f"shout {sid}"
+                except Exception:
+                    name = f"shout {sid}"
+                self._shout_rotations[sid] = SharedShoutRotation(
+                    CrossSynergy(str(name), sid, min_copies=self.SHARED_SHOUT_MIN_COPIES))
+        for sid in [s for s in self._shout_rotations if s not in ids]:   # prune shouts no longer shared
+            del self._shout_rotations[sid]
+        return [self._shout_rotations[sid] for sid in ids]
+
     def _cross_claimed_skills(self, client: 'Client') -> Set[int]:
-        """Skills a DETECTED cross-build synergy owns on THIS client's bar -- the roster-level analog
-        of a Synergy claiming its skills. When 2+ accounts hold a CrossSynergy's shared skill the
-        team rotation (SharedShoutRotation) drives it, so it must be excluded from the generic engine
-        for every holder (otherwise the holder would ALSO cast it loose, double-using/desyncing the
-        rotation). Empty when cross synergies are off or this client holds none."""
+        """Skills a team rotation owns on THIS client's bar -- the roster-level analog of a Synergy
+        claiming its skills. Covers BOTH auto-detected shared party shouts and any explicit
+        CROSS_SYNERGIES: when 2+ accounts hold the shared skill the team rotation drives it, so it
+        must be excluded from the generic engine for every holder (else the holder ALSO casts it
+        loose, double-using / desyncing the rotation). Empty when off or this client holds none."""
         if not self.cross_synergies_enabled:
             return set()
         claimed: Set[int] = set()
+        gc = client.game_client
+        # Auto-detected shared party shouts this client carries.
+        if gc is not None:
+            bar = gc.skills.keys()
+            claimed |= {sid for sid in self._shared_shout_ids() if sid in bar}
+        # Explicit cross-build synergies.
         roster = list(self.my_clients().values())
         for syn, holders in detect_cross_synergies(roster, self.CROSS_SYNERGIES):
             if client in holders:
                 claimed.add(syn.required_skill)
         return claimed
+
+    @staticmethod
+    def _find_elite(bar: Set[int]) -> int:
+        """The elite skill on a bar (a GW bar carries at most one), or 0 if none / unknown."""
+        for sid in bar:
+            try:
+                if GW.GLOBAL_CACHE.Skill.Flags.IsElite(int(sid)):
+                    return int(sid)
+            except Exception:
+                continue
+        return 0
+
+    def _glyph_elite_pair(self, client: 'Client') -> Optional[tuple]:
+        """``(glyph_id, elite_id)`` when the Glyph-of-Swiftness -> elite fallback applies to this
+        client: the toggle is on, the glyph is on the bar, NO detected synergy already claims the
+        glyph (that combo wins), and the bar has an elite. ``None`` otherwise. Single source for both
+        the action wiring and the generic-engine claim, and part of the loadout signature."""
+        if not (self.glyph_elite_enabled and HeroAISkills.available):
+            return None
+        glyph = self.Skills.glyph_of_swiftness.value
+        bar = set(client.game_client.skills.keys())
+        if glyph not in bar:
+            return None
+        if glyph in GenericCombatEngine.claimed_skills(client, self.SYNERGIES):
+            return None                          # a synergy already owns the glyph -> defer to it
+        elite = self._find_elite(bar)
+        return (glyph, elite) if elite else None
 
     def _client_actions(self, client: 'Client') -> List[Action]:
         acts: List[Action] = [Idle(client)]
@@ -2170,26 +2739,59 @@ class UtilityCombatBehavior(Behavior):
             acts.append(AttackAction(client))
         if self.follow_enabled:                                # trail the leader (deadzone/leash/spread)
             acts.append(FollowLeader(client))
+        if self.double_dragon_enabled:                         # position into a cluster while DD-enchanted
+            dd = combat_conditions.double_dragon_skill_id()
+            if dd and dd in client.game_client.skills:
+                acts.append(StandInDoubleDragon(client, dd))
+        if self.heroic_refrain_enabled:                        # bootstrap Leadership to 20, then spread
+            hr = combat_conditions.heroic_refrain_skill_id()
+            if hr and hr in client.game_client.skills:
+                acts.append(MaintainHeroicRefrain(client, hr))
         # Authored combination plans for any synergy detected on the bar. These are the REAL combo
         # library (e.g. perma Shadow Form), so they run whenever their synergy is present -- NOT
         # gated behind the example toggle. A detected synergy also claims its skills, so the generic
         # engine below skips them and the combo module is the only thing that fires them.
         acts += self._synergy_actions(client)
+        # Generic engine claims: cross-build rotations + (if active) the glyph->elite combo's skills,
+        # so the engine doesn't ALSO fire the glyph or the elite loose.
+        extra_claimed: Set[int] = set(self._cross_claimed_skills(client))
+        # Heroic Refrain is ALWAYS claimed away from the generic engine, independent of the toggle.
+        # When the toggle is ON, MaintainHeroicRefrain owns the cast. When it's OFF, nobody fires it:
+        # left to the generic engine it gets scored as an ordinary bar skill and spread via HeroAI's
+        # target resolution onto non-connected players whose effects can't be read host-side, so it
+        # re-casts forever. The dedicated plan is the only thing that should ever cast it.
+        hr = combat_conditions.heroic_refrain_skill_id()
+        if hr and hr in client.game_client.skills:
+            extra_claimed.add(hr)
+        pair = self._glyph_elite_pair(client)
+        if pair is not None:
+            glyph, elite = pair
+            desc = HeroAISkills.descriptor(elite)
+            if desc is not None:
+                acts.append(GlyphThenElite(client, glyph, elite, desc))
+                extra_claimed |= {glyph, elite}
         if self.generic_enabled:                               # default engine for unclaimed skills
             acts += GenericCombatEngine.actions_for(
-                client, self.SYNERGIES, extra_claimed=self._cross_claimed_skills(client))
+                client, self.SYNERGIES, extra_claimed=extra_claimed)
         if self.examples_enabled:                              # toy single-skill upkeep demos only
             acts += self._generic_actions(client)
         return acts
 
     def _team_action_list(self) -> List[Action]:
         """Live candidate set for the TEAM selector (multi-account plans). Cross-build rotations are
-        real engine content (on when cross_synergies_enabled); RegroupAll is demo (on with examples).
+        real engine content (on when cross_synergies_enabled): every auto-detected shared party shout
+        PLUS any explicit CROSS_SYNERGIES, deduped by skill id. RegroupAll is demo (on with examples).
         Read live each tick so toggles take effect without rebuilding -- the actions self-gate via
-        applicable(), so an inactive cross-synergy simply scores nothing."""
+        applicable(), so a rotation with too few live holders simply scores nothing."""
         acts: List[Action] = []
         if self.cross_synergies_enabled:
-            acts += [a for a in self.team_actions if isinstance(a, SharedShoutRotation)]
+            rotations = self._shared_shout_actions()                       # auto party-earshot shouts
+            seen = {r.skill_id for r in rotations}
+            for a in self.team_actions:                                    # explicit cross-synergies
+                if isinstance(a, SharedShoutRotation) and a.skill_id not in seen:
+                    rotations.append(a)
+                    seen.add(a.skill_id)
+            acts += rotations
         if self.examples_enabled:
             acts += [a for a in self.team_actions if isinstance(a, RegroupAll)]
         return acts
@@ -2260,7 +2862,10 @@ class UtilityCombatBehavior(Behavior):
         else:
             PyImGui.text("Generic engine: HeroAI metadata unavailable")
         self.attack_enabled = PyImGui.checkbox("Auto-attack in combat", self.attack_enabled)
-        self.cross_synergies_enabled = PyImGui.checkbox("Cross-build synergies (team)", self.cross_synergies_enabled)
+        self.cross_synergies_enabled = PyImGui.checkbox("Shared party shouts / cross-build (team)", self.cross_synergies_enabled)
+        if self.cross_synergies_enabled:
+            # Let rotated shouts drop briefly before recasting (needed for Heroic Refrain refresh).
+            self.shout_drop_window = PyImGui.checkbox("Let shared shouts drop (refrain refresh)", self.shout_drop_window)
         self.examples_enabled = PyImGui.checkbox("Enable example actions", self.examples_enabled)
         if self.examples_enabled:
             self.regroup_enabled = PyImGui.checkbox("Regroup on follow target", self.regroup_enabled)
@@ -2280,6 +2885,15 @@ class UtilityCombatBehavior(Behavior):
             self.follow_hard_leash = max(self.follow_min_distance + 50,
                                          PyImGui.input_int("Follow leash", int(self.follow_hard_leash)))
             self.follow_spread_radius = max(0, PyImGui.input_int("Follow spread", int(self.follow_spread_radius)))
+            self.follow_melee_combat_leash_bonus = max(0, PyImGui.input_int(
+                "Melee combat leash bonus", int(self.follow_melee_combat_leash_bonus)))
+
+        # Double Dragon: stand a DD-enchanted client in the densest enemy cluster near the leader.
+        self.double_dragon_enabled = PyImGui.checkbox("Double Dragon positioning", self.double_dragon_enabled)
+        # Heroic Refrain: holder self-casts to Leadership 20, then spreads the maxed refrain to allies.
+        self.heroic_refrain_enabled = PyImGui.checkbox("Heroic Refrain (bootstrap + spread)", self.heroic_refrain_enabled)
+        # Glyph of Swiftness -> elite: cast the glyph just before the elite to cut its recharge.
+        self.glyph_elite_enabled = PyImGui.checkbox("Glyph of Swiftness -> elite", self.glyph_elite_enabled)
 
         # Leader: anchors team-wide combat state (enemies near the leader put the whole team in
         # combat). Follow: which player RegroupAll pulls toward.
@@ -2289,10 +2903,13 @@ class UtilityCombatBehavior(Behavior):
         # Live readout of what each client's selector is currently doing -- the fastest way to
         # eyeball-validate the engine in-game.
         PyImGui.text(f"Team: {self._team_label or 'idle'}")
-        # Detected cross-build synergies across the roster (name x copies) -- the multi-account combos.
-        detected = detect_cross_synergies(list(self.my_clients().values()), self.CROSS_SYNERGIES)
-        if detected:
-            PyImGui.text("Cross-build: " + ", ".join(f"{cs.name} x{len(h)}" for cs, h in detected))
+        # Detected shared plays across the roster (name x copies): auto party-earshot shouts + any
+        # explicit cross-build synergies -- the multi-account rotations the team selector drives.
+        bits = [f"{r.name} x{len(r._alive_holders(self))}" for r in self._shared_shout_actions()]
+        bits += [f"{cs.name} x{len(h)}"
+                 for cs, h in detect_cross_synergies(list(self.my_clients().values()), self.CROSS_SYNERGIES)]
+        if bits:
+            PyImGui.text("Shared (team): " + ", ".join(bits))
         for client in list(self.client_action_label.keys()):
             label = self.client_action_label.get(client) or "-"
             PyImGui.text(f"  {client.game_client.name or 'client'}: {label}")
@@ -2322,17 +2939,28 @@ class UtilityCombatBehavior(Behavior):
                    "__generic__": ctx.generic_enabled,
                    "__attack__": ctx.attack_enabled,
                    "__follow__": ctx.follow_enabled,
+                   "__dd__": ctx.double_dragon_enabled,
+                   "__glyph_elite__": ctx.glyph_elite_enabled,
+                   "__hr__": ctx.heroic_refrain_enabled,
                    "__cross__": ctx.cross_synergies_enabled}
+            dd = combat_conditions.double_dragon_skill_id()
+            hr = combat_conditions.heroic_refrain_skill_id()
             for cid, c in ctx.my_clients().items():
                 if c.game_client is None:
-                    sig[cid] = (False, (), ())
+                    sig[cid] = (False, (), (), False, None, False)
                     continue
                 bar = set(c.game_client.skills.keys())
                 syns = tuple(s.name for s in detect_synergies(bar, ctx.SYNERGIES))
                 # Cross-build claims change which skills the generic engine drops -> part of the
                 # signature so a client becoming/ceasing to be a holder rebuilds its loadout.
                 cross = tuple(sorted(ctx._cross_claimed_skills(c)))
-                sig[cid] = (bool(bar), syns, cross)
+                # Double Dragon presence on the bar gates StandInDoubleDragon -> rebuild on change.
+                has_dd = bool(dd and dd in bar)
+                # Glyph->elite pair (None or (glyph, elite)) -> rebuild if the elite/glyph changes.
+                glyph_elite = ctx._glyph_elite_pair(c)
+                # Heroic Refrain presence on the bar gates MaintainHeroicRefrain -> rebuild on change.
+                has_hr = bool(hr and hr in bar)
+                sig[cid] = (bool(bar), syns, cross, has_dd, glyph_elite, has_hr)
             return sig
 
         def _rebuild(self, ctx: "UtilityCombatBehavior") -> None:
@@ -2349,7 +2977,14 @@ class UtilityCombatBehavior(Behavior):
             if self._signature(ctx) != self._sig:
                 self._rebuild(ctx)
             if ctx.party_selector is not None:
-                ctx.party_selector.tick(ctx)
+                # One shared world snapshot for the whole party tick: every client's Actions read +
+                # memoize the same area scans instead of each re-scanning the instance. Paired in a
+                # finally so a stale snapshot can never leak into the next tick.
+                combat_conditions.begin_tick()
+                try:
+                    ctx.party_selector.tick(ctx)
+                finally:
+                    combat_conditions.end_tick()
             return Status.RUNNING
 
 
@@ -2367,6 +3002,9 @@ class BehaviorSlot:
         self.assigned: Set[uuid.UUID] = set()
         self.instance: Optional['Behavior'] = None
         self.thread_name = f"BEHAVIOR_{self.id}"
+        # When True the behavior's settings UI is rendered in its own floating window instead of
+        # inline in the slot (purely a UI preference; see CentralCommander._draw_behavior_slot).
+        self.popped_out = False
 
     @property
     def running(self) -> bool:
@@ -2416,24 +3054,33 @@ class BehaviorManager:
         return [cid for cid in keys if cid not in owned]
 
     # --- lifecycle ---
+    def ensure_instance(self, slot: BehaviorSlot) -> 'Behavior':
+        """Create the slot's behavior instance if it doesn't exist yet, so its settings UI can be
+        drawn BEFORE the behavior is started. The same instance is reused by start() and kept by
+        stop(), so the operator's settings persist across start/stop (and the live UI mutates the
+        very instance the worker thread reads). The provider is a LIVE view of the slot's assignment,
+        so re-assigning clients while the behavior runs is reflected without a restart."""
+        if slot.instance is None:
+            slot.instance = slot.behavior_cls(
+                self.thread_manager, self.network,
+                clients_provider=lambda s=slot: {cid: self.network.client_list[cid]
+                                                 for cid in s.assigned
+                                                 if cid in self.network.client_list})
+        return slot.instance
+
     def start(self, slot: BehaviorSlot) -> None:
         if slot.running:
             return
-        # The provider is a LIVE view of the slot's assignment, so re-assigning clients while
-        # the behavior runs is reflected without a restart (next identify_players tick).
-        b = slot.behavior_cls(
-            self.thread_manager, self.network,
-            clients_provider=lambda s=slot: {cid: self.network.client_list[cid]
-                                             for cid in s.assigned
-                                             if cid in self.network.client_list})
-        slot.instance = b
+        b = self.ensure_instance(slot)
         self.thread_manager.thread_manager.add_thread(slot.thread_name, b.run)
 
     def stop(self, slot: BehaviorSlot) -> None:
-        if slot.instance is not None:
+        # Stop the worker but KEEP the instance so its settings persist and its UI keeps drawing
+        # (run() clears in-flight tasks on the next start, so reuse is clean). The instance is only
+        # dropped when the slot itself is removed (it then just gets garbage-collected).
+        if slot.instance is not None and slot.instance.is_running:
             slot.instance.stop()             # break its run loop
             self.thread_manager.thread_manager.stop_thread(slot.thread_name)
-            slot.instance = None
 
     def stop_all(self) -> None:
         for s in self.slots:

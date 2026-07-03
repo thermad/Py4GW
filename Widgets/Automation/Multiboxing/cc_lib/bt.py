@@ -223,17 +223,46 @@ class MoveTo(Task):
             if nudge and self._n % 15 == 0:
                 client.transport.send(RPC.CMD.RELATIVE_MOVE, 20, 20)
             if jitter:
-                client.transport.send(RPC.CMD.MOVE,
-                                      target.x + random.uniform(-20, 20),
-                                      target.y + random.uniform(-20, 20))
+                client.move(target.x + random.uniform(-20, 20),
+                            target.y + random.uniform(-20, 20))
             else:
-                client.transport.send(RPC.CMD.MOVE, target.x, target.y)
+                client.move(target.x, target.y)
 
         def done():
             pos = Vec2.from_tuple(GW.Agent.GetXY(client.game_client.agent_id))
             return (pos - target).magnitude() <= tolerance
 
         super().__init__(f"move {client.game_client.agent_id}", act, done=done, interval=interval)
+
+
+class MoveToAgent(Task):
+    """Move a client toward a (possibly moving) AGENT's live position until within ``tolerance``.
+    Unlike MoveTo (which walks to a fixed point captured at build time), this re-reads the target
+    agent's XY every interval, so it chases a target that is moving -- used to close melee range
+    on an enemy before a melee attack skill. FAILS if the target dies (guard), so an owning
+    Sequence aborts cleanly instead of running to a corpse. No jitter/nudge: it's a short approach
+    that should walk straight in and stop the moment it's in range."""
+    def __init__(self, client: 'Client', agent_id: int, tolerance: float = 150.0,
+                 interval: float = 0.1):
+        aid = int(agent_id)
+        self_id = client.game_client.agent_id
+
+        def act():
+            tx, ty = GW.Agent.GetXY(aid)
+            client.move(tx, ty)
+
+        def guard():
+            try:
+                return bool(GW.Agent.IsAlive(aid))
+            except Exception:
+                return False
+
+        def done():
+            here = Vec2.from_tuple(GW.Agent.GetXY(self_id))
+            tx, ty = GW.Agent.GetXY(aid)
+            return (here - Vec2(tx, ty)).magnitude() <= tolerance
+
+        super().__init__(f"moveagent {self_id}->{aid}", act, guard=guard, done=done, interval=interval)
 
 
 class Sequence(Node):

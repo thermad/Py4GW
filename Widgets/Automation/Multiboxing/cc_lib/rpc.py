@@ -37,6 +37,9 @@ class RPC:
         CAST_TARGETED = "cast_targeted"   # client resolves the target for a Skilltarget spec, then casts
         CAST_AT = "cast_at"               # host-resolved concrete cast: ChangeTarget(agent)+UseSkill(slot)
         INTERACT = "interact"             # interact an agent: host-given id, else client picks an enemy
+        RESIGN = "resign"                 # /resign on the client (host "resign all")
+        TRAVEL_TO = "travel_to"           # travel to a concrete map/region/district (call to outpost)
+        INVITE_PLAYER = "invite_player"   # invite a player by name (the client's "accept" = invite host back)
 
     @classmethod
     def register(
@@ -188,6 +191,37 @@ class RPC:
         GW.Player.Interact(target_id, False)
 
     @staticmethod
+    def resign() -> None:
+        """CLIENT-SIDE: resign the current explorable (HeroAI sends the chat command twice with a
+        short gap; the inbound-RPC drain already runs once per main frame, so a single send here is
+        the per-tick equivalent and the host's button can be pressed again if a client misses it)."""
+        GW.Player.SendChatCommand("resign")
+
+    @staticmethod
+    def travel_to(map_id: int, region: int, district: int, language: int) -> None:
+        """CLIENT-SIDE: travel to a concrete map/region/district/language (the host's outpost). No-op
+        if the client is already in that exact instance, so a re-issue to a straggler that already
+        arrived doesn't pointlessly re-zone it. This is the 'call to outpost' half of party forming;
+        the host confirms arrival via the synced map fields before moving on to the invite step."""
+        try:
+            on_map = (int(GW.Map.GetMapID()) == int(map_id)
+                      and int(GW.Map.GetRegion()[0]) == int(region)
+                      and int(GW.Map.GetDistrict()) == int(district))
+        except Exception:
+            on_map = False
+        if on_map:
+            return
+        GW.Map.TravelToRegion(int(map_id), int(region), int(district), int(language))
+
+    @staticmethod
+    def invite_player(name: str) -> None:
+        """CLIENT-SIDE: invite a player (the host) by character name. Guild Wars merges two players'
+        parties when they invite EACH OTHER, so after the host has invited this client, the client
+        inviting the host back is what 'accepts' and completes the join."""
+        if name:
+            GW.Party.Players.InvitePlayer(str(name))
+
+    @staticmethod
     def method(name: CMD):
         def decorator(func: RPCMethod[P, R]) -> RPCMethod[P, R]:
             RPC.register(name, func)
@@ -209,4 +243,7 @@ RPC.register(RPC.CMD.CHANGE_TARGET, GW.Player.ChangeTarget)
 RPC.register(RPC.CMD.CAST_TARGETED, RPC.cast_targeted)
 RPC.register(RPC.CMD.CAST_AT, RPC.cast_at)
 RPC.register(RPC.CMD.INTERACT, RPC.interact)
+RPC.register(RPC.CMD.RESIGN, RPC.resign)
+RPC.register(RPC.CMD.TRAVEL_TO, RPC.travel_to)
+RPC.register(RPC.CMD.INVITE_PLAYER, RPC.invite_player)
 

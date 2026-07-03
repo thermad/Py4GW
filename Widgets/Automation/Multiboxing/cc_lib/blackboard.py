@@ -43,6 +43,12 @@ class GameClient:
         # host can make the assassin lead->offhand->dual decision). 0=fresh/reset, 1=lead landed,
         # 2=offhand landed, 3=dual/chain complete.
         self.target_dagger_status = 0
+        # Current map/instance, synced so the host can confirm a client arrived at its outpost
+        # during the call-to-outpost+join flow. 0 until the first sync.
+        self.map_id = 0
+        self.map_region = 0
+        self.map_district = 0
+        self.map_language = 0
         self.hp = 0
         self.max_hp = 0
         self.energy = 0
@@ -50,6 +56,9 @@ class GameClient:
         # Caster attributes synced for host-side interrupt-feasibility evaluation.
         self.ping = 0
         self.fast_casting = 0
+        # Current (buffed) attribute levels keyed by attribute id (e.g. Leadership == 40). Synced so
+        # the host can read a remote client's attributes -- used by the Heroic Refrain bootstrap.
+        self.attributes: Dict[int, int] = {}
         # Use dictionaries for these as they are dynamic sets of effects/skills
         self.skills: Dict[int, SkillData] = {}
         self.effects: Dict[int, EffectData] = {}
@@ -65,12 +74,21 @@ class GameClient:
             self.name = incoming_name
         self.target_id = data.get("target_id", self.target_id)
         self.target_dagger_status = data.get("target_dagger_status", self.target_dagger_status)
+        self.map_id = data.get("map_id", self.map_id)
+        self.map_region = data.get("map_region", self.map_region)
+        self.map_district = data.get("map_district", self.map_district)
+        self.map_language = data.get("map_language", self.map_language)
         self.hp = data.get("hp", self.hp)
         self.max_hp = data.get("max_hp", self.max_hp)
         self.energy = data.get("energy", self.energy)
         self.max_energy = data.get("max_energy", self.max_energy)
         self.ping = data.get("ping", self.ping)
         self.fast_casting = data.get("fast_casting", self.fast_casting)
+        # Update Attributes (clear+repopulate so a dropped buff's attribute boost can't linger as a
+        # ghost -- same reasoning as effects/buffs below).
+        self.attributes.clear()
+        for a_id, a_val in data.get("attributes", {}).items():
+            self.attributes[int(a_id)] = int(a_val)
         # print(f"""Skill update data {data.get("skilldata", {}).items()}""")
         # Update Skills
         self.skills.clear()
@@ -90,4 +108,9 @@ class GameClient:
 
     def get_skill_data(self, s_id) -> SkillData:
         return self.skills.get(s_id, None)
+
+    def get_attribute(self, attr_id) -> int:
+        """Current level of an attribute (0 if absent/not synced). attr_id is the GW Attribute
+        enum value, e.g. Leadership == 40."""
+        return self.attributes.get(int(attr_id), 0)
 

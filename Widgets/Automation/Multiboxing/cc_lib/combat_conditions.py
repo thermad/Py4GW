@@ -48,6 +48,11 @@ class _Const:
     burning = blind = cracked_armor = dazed = deep_wound = disease = weakness = 0
     ids: dict = {}
     preparations: tuple = ()
+    high_danger: frozenset = frozenset()        # skills worth interrupting on sight (see _cast_danger)
+    cleave_skills: frozenset = frozenset()       # weapon spells that turn a martial into AoE (Splinter)
+    physical_aoe_hexes: frozenset = frozenset()  # hexes that AoE off physical hits (Mark of Pain)
+    double_dragon: int = 0                        # Double Dragon (adjacent-fire ally enchantment)
+    heroic_refrain: int = 0                        # Heroic Refrain (paragon +attribute refrain)
 
     @classmethod
     def load(cls):
@@ -104,6 +109,21 @@ class _Const:
                 gid("Read_the_Wind"), gid("Seeking_Arrows"), gid("Trappers_Focus"),
             ) if s
         )
+        cls.high_danger = frozenset(s for s in (gid(n) for n in _HIGH_DANGER_NAMES) if s)
+        # Cleave weapon spells: cast on the martial ally best positioned to cleave a cluster.
+        cls.cleave_skills = frozenset(
+            s for s in (gid("Splinter_Weapon"), gid("Great_Dwarf_Weapon")) if s)
+        # Physical-AoE setup hexes: land on the densest enemy ball so a physical's hits chain.
+        cls.physical_aoe_hexes = frozenset(
+            s for s in (gid("Mark_of_Pain"), gid("Barbs")) if s)
+        # Double Dragon: an OtherAlly enchantment whose value is the per-second AoE fire damage to
+        # foes ADJACENT to the enchanted ally -- so it wants an unenchanted ally standing in a ball.
+        cls.double_dragon = gid("Double_Dragon") or 0
+        # Heroic Refrain: a paragon refrain whose +attribute bonus scales with the caster's
+        # Leadership. The host bootstraps the holder's Leadership to 20 by self-casting, then spreads
+        # the maxed buff to CONNECTED clients (MaintainHeroicRefrain). Re-applied for free when a shout/chant
+        # ends on the bearer, so the shout rotation's drop window keeps it maintained.
+        cls.heroic_refrain = gid("Heroic_Refrain") or 0
         cls.ok = True
         return True
 
@@ -167,6 +187,76 @@ def _has_effect(client, agent_id: int, skill_id: int, exact_weapon_spell: bool =
     return result
 
 
+# --------------------------------------------------------------- shared per-tick world view
+# The host re-scans the instance a LOT in one tick: every CustomSkillAction's applicable() calls
+# resolve_target (a scan), its score() calls aoe_cluster_size (more scans), can_cast scans area
+# conditions, etc. -- all hitting the same GetFiltered*Array a dozen+ times per client per frame.
+# WorldView memoizes those array scans for the duration of ONE behavior tick so every decision reads
+# one consistent snapshot (the single-source-of-truth blackboard) AND we pay each scan once. It is
+# installed per behavior tick via begin_tick()/end_tick(); a richer view (precomputed focus target,
+# influence map) can hang off this later. Thread-local because behavior workers run concurrently --
+# each thread gets its own view, so two behaviors' ticks never share or clobber a snapshot.
+import threading
+
+_world = threading.local()
+
+
+class WorldView:
+    """Per-tick, per-thread memoized cache of the host's area scans. Keyed by (rounded position,
+    radius) so a client's many same-anchor scans -- and repeated cluster scans around the same agent
+    -- collapse to one underlying GetFiltered*Array call. Stale-within-a-tick is fine: positions
+    barely move across the ~50ms a tick spans, and it's rebuilt fresh every tick."""
+    def __init__(self):
+        self._enemy: dict = {}
+        self._ally: dict = {}
+        self._spirit: dict = {}
+        self._minion: dict = {}
+
+    @staticmethod
+    def _key(px, py, r):
+        return (round(px), round(py), int(r))
+
+    def _cached(self, store: dict, key, fetch):
+        v = store.get(key)
+        if v is None:
+            try:
+                v = list(fetch())
+            except Exception:
+                v = []
+            store[key] = v
+        return v
+
+    def enemies(self, px, py, r):
+        return self._cached(self._enemy, self._key(px, py, r),
+                            lambda: Routines.Agents.GetFilteredEnemyArray(px, py, r))
+
+    def allies(self, px, py, r, other_ally):
+        return self._cached(self._ally, (self._key(px, py, r), bool(other_ally)),
+                            lambda: Routines.Agents.GetFilteredAllyArray(px, py, r, other_ally=other_ally))
+
+    def spirits(self, px, py, r):
+        return self._cached(self._spirit, self._key(px, py, r),
+                            lambda: Routines.Agents.GetFilteredSpiritArray(px, py, r))
+
+    def minions(self, px, py, r):
+        return self._cached(self._minion, self._key(px, py, r),
+                            lambda: Routines.Agents.GetFilteredMinionArray(px, py, r))
+
+
+def begin_tick() -> None:
+    """Install a fresh WorldView for the current thread. Call once at the top of a behavior tick;
+    pair with end_tick() (in a finally) so a stale snapshot never leaks into the next tick."""
+    _world.view = WorldView()
+
+
+def end_tick() -> None:
+    _world.view = None
+
+
+def _wv():
+    return getattr(_world, "view", None)
+
+
 # --------------------------------------------------------------- host-side area scans
 def _nearest(px, py, ids) -> int:
     best, best_d = 0, None
@@ -179,6 +269,9 @@ def _nearest(px, py, ids) -> int:
 
 
 def _enemies(px, py, r) -> list:
+    w = _wv()
+    if w is not None:
+        return w.enemies(px, py, r)
     try:
         return list(Routines.Agents.GetFilteredEnemyArray(px, py, r))
     except Exception:
@@ -186,6 +279,9 @@ def _enemies(px, py, r) -> list:
 
 
 def _allies(px, py, r, other_ally=False) -> list:
+    w = _wv()
+    if w is not None:
+        return w.allies(px, py, r, other_ally)
     try:
         return list(Routines.Agents.GetFilteredAllyArray(px, py, r, other_ally=other_ally))
     except Exception:
@@ -193,6 +289,9 @@ def _allies(px, py, r, other_ally=False) -> list:
 
 
 def _spirits(px, py, r) -> list:
+    w = _wv()
+    if w is not None:
+        return w.spirits(px, py, r)
     try:
         return list(Routines.Agents.GetFilteredSpiritArray(px, py, r))
     except Exception:
@@ -200,6 +299,9 @@ def _spirits(px, py, r) -> list:
 
 
 def _minions(px, py, r) -> list:
+    w = _wv()
+    if w is not None:
+        return w.minions(px, py, r)
     try:
         return list(Routines.Agents.GetFilteredMinionArray(px, py, r))
     except Exception:
@@ -238,11 +340,321 @@ def _lowest_ally(client, px, py, skill_id, other_ally=False, area=None) -> int:
     return best
 
 
+def _casting_skill(agent_id: int) -> int:
+    """The skill id ``agent_id`` is currently casting, or 0 if it isn't casting."""
+    try:
+        if not Agent.IsCasting(int(agent_id)):
+            return 0
+        return int(Agent.GetCastingSkillID(int(agent_id)) or 0)
+    except Exception:
+        return 0
+
+
+def _is_res_skill(skill_id: int) -> bool:
+    """True if ``skill_id`` is a resurrection per HeroAI's descriptor Nature. Needs the HeroAI
+    table loaded; returns False (don't-prioritize) when it isn't."""
+    if not skill_id or not _Const.load():
+        return False
+    desc = _Const.table.get_skill(int(skill_id))
+    return bool(desc and int(desc.Nature) == _Const.N.Resurrection.value)
+
+
+def _is_monk_skill(skill_id: int) -> bool:
+    """True if ``skill_id`` belongs to the Monk profession (so an enemy casting it is a healer/
+    prot worth pressuring/interrupting)."""
+    if not skill_id:
+        return False
+    try:
+        _, profession = GLOBAL_CACHE.Skill.GetProfession(int(skill_id))
+        return profession == "Monk"
+    except Exception:
+        return False
+
+
+def is_casting_resurrection(agent_id: int) -> bool:
+    return _is_res_skill(_casting_skill(int(agent_id)))
+
+
+def is_casting_monk_skill(agent_id: int) -> bool:
+    return _is_monk_skill(_casting_skill(int(agent_id)))
+
+
+# Curated skills that are MUCH worse to let resolve than their cast time alone implies -- party
+# wipes, hard rez, big AoE nukes. Resolved to ids at load; an in-progress cast of any of these gets
+# a flat danger floor so the interrupt engine spends its rupt on them over a longer-but-harmless cast.
+_HIGH_DANGER_NAMES = (
+    "Meteor_Shower", "Maelstrom", "Chaos_Storm", "Sandstorm", "Savannah_Heat",
+    "Resurrection_Signet", "Resurrection_Chant", "Light_of_Dwayna", "Unyielding_Aura",
+    "Rebirth", "Restore_Life", "Heaven's_Delight", "Word_of_Healing", "Healing_Burst",
+    "Spike_Trap", "Barrage", "Ray_of_Judgment", "Searing_Flames",
+)
+
+
+def _cast_danger(skill_id: int) -> float:
+    """How valuable it is to INTERRUPT an in-progress cast of ``skill_id`` (higher = interrupt this
+    first). HeroAI famously can't rank casts -- it'd rupt Flare and let Meteor Shower through. We
+    rank by: resurrection (dominant) >> curated wipe/nuke list >> long activation >> AoE >> monk
+    skill >> anything else. Pure-ish (static skill data only); 0 for 'not casting'."""
+    if not skill_id:
+        return 0.0
+    if _is_res_skill(skill_id):
+        return 100.0
+    d = 0.0
+    try:
+        act = float(GLOBAL_CACHE.Skill.Data.GetActivation(int(skill_id)) or 0.0)
+    except Exception:
+        act = 0.0
+    d += min(act, 5.0) * 2.0          # up to +10 for a 5s cast (long casts are juicy rupts)
+    if int(skill_id) in _Const.high_danger:
+        d += 8.0                      # curated party-wipe / hard-rez / big-nuke floor
+    if is_aoe_skill(skill_id):
+        d += 4.0
+    if _is_monk_skill(skill_id):
+        d += 3.0                      # deny the heal/prot
+    return d
+
+
+def casting_danger(agent_id: int) -> float:
+    """Danger of whatever ``agent_id`` is currently casting (0 if not casting). For scoring an
+    interrupt against an already-resolved target."""
+    return _cast_danger(_casting_skill(int(agent_id)))
+
+
 def _enemy_casting(px, py) -> int:
+    """The enemy around (px,py) whose IN-PROGRESS cast is the most dangerous to let resolve (see
+    _cast_danger). Used by interrupt-natured / EnemyCasting skills so the rupt is spent on the worst
+    cast, not merely the first/nearest caster. 0 when nobody is casting."""
+    best, best_d = 0, -1.0
     for aid in _enemies(px, py, Range.Spellcast.value):
-        if Agent.IsCasting(int(aid)):
-            return int(aid)
-    return 0
+        aid = int(aid)
+        sid = _casting_skill(aid)
+        if not sid:
+            continue
+        d = _cast_danger(sid)
+        if d > best_d:
+            best, best_d = aid, d
+    return best
+
+
+def _focus_enemy(px, py) -> int:
+    """An enemy worth FOCUSING offensive fire on right now: one casting a resurrection (kill it
+    to stop the rez), else one currently casting a monk skill (pressure the healer). 0 if none.
+    Transient -- only fires while the priority enemy is actually casting -- so normal target
+    selection resumes the moment it stops."""
+    monk = 0
+    for aid in _enemies(px, py, Range.Spellcast.value):
+        aid = int(aid)
+        sid = _casting_skill(aid)
+        if not sid:
+            continue
+        if _is_res_skill(sid):
+            return aid
+        if monk == 0 and _is_monk_skill(sid):
+            monk = aid
+    return monk
+
+
+# --------------------------------------------------------------- AoE cluster targeting
+def _aoe_range(skill_id: int) -> float:
+    """The skill's AoE radius (static skill data), falling back to Nearby for a skill the table
+    reports as 0 but that we still want to cluster-optimize."""
+    try:
+        r = float(GLOBAL_CACHE.Skill.Data.GetAoERange(int(skill_id)) or 0.0)
+    except Exception:
+        r = 0.0
+    return r if r > 0.0 else float(Range.Nearby.value)
+
+
+def is_aoe_skill(skill_id: int) -> bool:
+    """True when the static skill table reports a positive AoE radius for ``skill_id``."""
+    try:
+        return float(GLOBAL_CACHE.Skill.Data.GetAoERange(int(skill_id)) or 0.0) > 0.0
+    except Exception:
+        return False
+
+
+def is_cluster_skill(skill_id: int) -> bool:
+    """True for skills whose utility scales with how many enemies are bunched at the resolved
+    target: real AoE skills, cleave weapon spells (value = enemies around the carrier ally), and
+    physical-AoE setup hexes (value = enemies around the hexed foe). Drives the cluster score bonus."""
+    sid = int(skill_id)
+    return is_aoe_skill(sid) or sid in _Const.cleave_skills or sid in _Const.physical_aoe_hexes
+
+
+def aoe_cluster_size(target_id: int, skill_id: int) -> int:
+    """How many live enemies sit within the skill's AoE radius of ``target_id`` (the target
+    itself counts), i.e. how many an AoE landed there would hit. 0 if the target is gone."""
+    if not target_id:
+        return 0
+    ax, ay = _pos(int(target_id))
+    if not ax and not ay:
+        return 0
+    return len(_enemies(ax, ay, _aoe_range(skill_id)))
+
+
+def _densest_enemy(px, py, area: float, candidates) -> int:
+    """The enemy in ``candidates`` whose ``area``-radius neighbourhood holds the most live enemies
+    (tiebreak: nearest to (px, py)). The cluster primitive: pick the densest ball, not the nearest
+    foe. 0 when there are no candidates."""
+    best, best_key = 0, None
+    for aid in candidates:
+        aid = int(aid)
+        ax, ay = _pos(aid)
+        cluster = len(_enemies(ax, ay, area))
+        key = (cluster, -((ax - px) ** 2 + (ay - py) ** 2))
+        if best_key is None or key > best_key:
+            best, best_key = aid, key
+    return best
+
+
+def _best_cluster(px, py, skill_id: int, candidates) -> int:
+    """The enemy in ``candidates`` whose AoE-radius neighbourhood holds the most live enemies. The
+    AoE optimization: aim the nuke at the densest ball, not merely the nearest enemy."""
+    return _densest_enemy(px, py, _aoe_range(skill_id), candidates)
+
+
+def _pets(px, py, r) -> list:
+    """Living PETS within r of (px,py). Pets share the SpiritPet allegiance with spirits but a pet is
+    specifically NOT 'spawned' (Agent.IsPet == SpiritPet and NOT IsSpawned), whereas
+    Routines.Agents.GetFilteredSpiritArray REQUIRES IsSpawned -- so it returns spirits and EXCLUDES
+    pets. Scan the raw spirit/pet array directly and keep the pets."""
+    try:
+        from Py4GWCoreLib import AgentArray
+        arr = AgentArray.GetSpiritPetArray()
+        arr = AgentArray.Filter.ByDistance(arr, (px, py), r)
+        arr = AgentArray.Filter.ByCondition(arr, lambda a: Agent.IsAlive(a) and Agent.IsPet(a))
+        return [int(a) for a in arr]
+    except Exception:
+        return []
+
+
+def _friendly_candidates(px, py, r) -> list:
+    """Every friendly agent around (px,py) that an ally cast can land on: the Ally allegiance array
+    (party members + allied NPCs + martial allies) PLUS minions and pets -- which live in SEPARATE
+    allegiance arrays (GetMinionArray / GetSpiritPetArray) that the plain ally scan (GetAllyArray)
+    does NOT include. Stationary spirits are NOT included (only pets, via _pets). The caster is NOT
+    excluded here; OtherAlly callers skip the client's own agent id themselves. (Uses other_ally=False
+    because the underlying GetFilteredAllyArray's other_ally excludes the HOST's agent, not the
+    controlled client's -- the wrong agent in our host-drives-clients setup.)"""
+    out, seen = [], set()
+    def add(aid):
+        aid = int(aid)
+        if aid and aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+    for aid in _allies(px, py, r):                  # party + allied NPCs + martial allies
+        add(aid)
+    for aid in _minions(px, py, r):                 # animated minions (own allegiance array)
+        add(aid)
+    for aid in _pets(px, py, r):                     # charmed pets (SpiritPet allegiance, not spawned)
+        add(aid)
+    return out
+
+
+def _double_dragon_ally(client, px, py, skill_id: int) -> int:
+    """Pick the friendly to enchant with Double Dragon: an UNENCHANTED ally/pet/minion standing
+    adjacent to enemies, so the enchantment's per-second adjacent fire damage actually hits foes.
+    Prefers the one with the most enemies in adjacent range (densest target). Scans ALL friendly
+    allegiances (party allies + pets + minions), not just party members. Skips the caster, the dead,
+    and anything already enchanted. 0 if none qualify."""
+    me = _me(client)
+    adj = Range.Adjacent.value
+    best, best_n = 0, 0
+    for aid in _friendly_candidates(px, py, Range.Spellcast.value):
+        aid = int(aid)
+        if aid == me:
+            continue
+        if not Routines.Checks.Agents.IsAlive(aid):
+            continue
+        try:
+            if Routines.Checks.Agents.IsEnchanted(aid):   # "unenchanted allies" only
+                continue
+        except Exception:
+            pass
+        ax, ay = _pos(aid)
+        n = len(_enemies(ax, ay, adj))
+        if n > best_n:                                     # must be adjacent to at least one enemy
+            best, best_n = aid, n
+    return best
+
+
+def double_dragon_skill_id() -> int:
+    """The resolved Double Dragon skill id (0 if the skill table / HeroAI metadata is unavailable).
+    Single source of truth so the behavior layer doesn't hardcode the id."""
+    if not _Const.load():
+        return 0
+    return int(_Const.double_dragon or 0)
+
+
+def heroic_refrain_skill_id() -> int:
+    """The resolved Heroic Refrain skill id (0 if the skill table / HeroAI metadata is unavailable).
+    Single source of truth so the behavior layer doesn't hardcode the id."""
+    if not _Const.load():
+        return 0
+    return int(_Const.heroic_refrain or 0)
+
+
+def shared_effect_ids(skill_id: int) -> tuple:
+    """The effect ids that mean 'this skill is active on a bearer': the skill itself plus any
+    SharedEffects from the HeroAI descriptor. Lets the behavior layer test a CONNECTED client's
+    synced effects dict for a buff that may land under a different id (e.g. Heroic Refrain spread to
+    a client) without a host-side agent-struct read. Just [skill_id] if the table isn't loaded."""
+    ids = [int(skill_id)]
+    if _Const.load():
+        desc = _Const.table.get_skill(int(skill_id))
+        if desc:
+            ids.extend(int(s) for s in (desc.Conditions.SharedEffects or []))
+    return tuple(dict.fromkeys(ids))
+
+
+def double_dragon_stand_pos(client, leader_xy, radius: float):
+    """The world (x, y) a Double-Dragon-enchanted client should stand on to maximize the
+    enchantment's adjacent-range AoE fire damage: the densest ADJACENT-range enemy cluster among
+    enemies within ``radius`` of the leader. Returns None if HeroAI is unavailable, there's no
+    leader, or no enemies are in range. Host-side -- scans the shared instance around the leader."""
+    if not _Const.load() or leader_xy is None:
+        return None
+    try:
+        lx, ly = float(leader_xy[0]), float(leader_xy[1])
+        enemies = _enemies(lx, ly, float(radius))
+        if not enemies:
+            return None
+        px, py = _pos(_me(client))
+        best = _densest_enemy(px, py, Range.Adjacent.value, enemies)
+        if not best:
+            return None
+        bx, by = _pos(best)
+        return (bx, by)
+    except Exception:
+        return None
+
+
+def _cleave_ally(client, px, py, skill_id: int) -> int:
+    """The MARTIAL ally best positioned to carry a cleave weapon spell (Splinter Weapon, Great Dwarf
+    Weapon): the one with the most live enemies clustered around it, so its attacks chain into the
+    ball -- this is the Splinter-on-the-physical-into-a-cluster half of the Mark-of-Pain combo.
+    Skips allies already carrying ``skill_id`` (HeroAI's filter_skill_id); falls back to the nearest
+    living martial ally so the buff still lands when nobody is in a cluster yet. 0 if no martial ally."""
+    area = _aoe_range(skill_id)
+    best, best_key, fallback = 0, None, 0
+    for aid in _allies(px, py, Range.Spellcast.value, other_ally=True):
+        aid = int(aid)
+        if not Routines.Checks.Agents.IsAlive(aid):
+            continue
+        try:
+            if not Agent.IsMartial(aid):
+                continue
+        except Exception:
+            continue
+        if skill_id and _has_effect(client, aid, skill_id):
+            continue
+        ax, ay = _pos(aid)
+        if fallback == 0:
+            fallback = aid
+        key = (len(_enemies(ax, ay, area)), -((ax - px) ** 2 + (ay - py) ** 2))
+        if best_key is None or key > best_key:
+            best, best_key = aid, key
+    return best or fallback
 
 
 def _dead_allies(px, py, r) -> list:
@@ -295,6 +707,20 @@ def resolve_target(client, target_spec: int, skill_id: int = 0) -> int:
     s = int(target_spec)
     spell = Range.Spellcast.value
 
+    # --- skill-specific targeting overrides (independent of the descriptor's generic spec) ---
+    # Cleave weapon spells (Splinter / Great Dwarf Weapon): land on the martial ally best placed to
+    # cleave the densest enemy ball, not the lowest-HP ally the AllyMartial spec would pick.
+    if skill_id and skill_id in _Const.cleave_skills:
+        return _cleave_ally(client, px, py, skill_id)
+    # Physical-AoE setup hexes (Mark of Pain / Barbs): land on the densest enemy ball so a physical
+    # hitting it chains damage to its neighbours -- the host-coordinated half of the MoP combo.
+    if skill_id and skill_id in _Const.physical_aoe_hexes:
+        return _best_cluster(px, py, skill_id, _enemies(px, py, spell))
+    # Double Dragon: enchant an UNENCHANTED ally that's adjacent to enemies (not the lowest-HP ally
+    # the OtherAlly spec would pick), so the per-second adjacent fire damage lands on foes.
+    if skill_id and _Const.double_dragon and skill_id == _Const.double_dragon:
+        return _double_dragon_ally(client, px, py, skill_id)
+
     if s == T.Self.value:
         return me
     if s == T.Ally.value:
@@ -307,7 +733,7 @@ def resolve_target(client, target_spec: int, skill_id: int = 0) -> int:
     if s in (T.EnemyCasting.value, T.EnemyCastingSpell.value, T.EnemyCastingSpellOrChant.value):
         return _enemy_casting(px, py)
     if s == T.EnemyClustered.value:
-        return _nearest(px, py, _enemies(px, py, spell))   # cluster refinement TODO
+        return _best_cluster(px, py, skill_id, _enemies(px, py, spell))
     if s == T.Spirit.value:
         return _nearest(px, py, _spirits(px, py, spell))
     if s == T.Minion.value:
@@ -320,8 +746,32 @@ def resolve_target(client, target_spec: int, skill_id: int = 0) -> int:
     if s == T.ExploitableCorpse.value:
         return _corpse(px, py, spell, exploitable=True)
 
-    # Default / all remaining Enemy* specs: prefer the client's current target if it's a live enemy
-    # (keeps dagger combos chaining on it), else nearest enemy around the client.
+    # Default / all remaining Enemy* specs. Priority cascade before the plain current/nearest pick:
+    desc = _Const.table.get_skill(skill_id) if _Const.table else None
+    nature = int(getattr(desc, "Nature", -1)) if desc else -1
+
+    #  1. Interrupts (authored as a plain Enemy target, not EnemyCasting): stop a rez > a monk
+    #     cast > any cast, picking the highest-priority caster around the client.
+    if nature == _Const.N.Interrupt.value:
+        casting = _enemy_casting(px, py)
+        if casting:
+            return casting
+
+    #  2. AoE skills: aim at the densest enemy ball rather than the nearest single enemy.
+    if is_aoe_skill(skill_id):
+        clustered = _best_cluster(px, py, skill_id, _enemies(px, py, spell))
+        if clustered:
+            return clustered
+
+    #  3. Focus fire: while an enemy is casting a rez / monk skill, switch fire onto it -- but
+    #     NOT for combo (dagger) skills, which must keep chaining on the current target.
+    if not GLOBAL_CACHE.Skill.Data.GetCombo(skill_id):
+        focus = _focus_enemy(px, py)
+        if focus:
+            return focus
+
+    # Otherwise prefer the client's current target if it's a live enemy (keeps dagger combos
+    # chaining on it), else nearest enemy around the client.
     current = int(getattr(client.game_client, "target_id", 0) or 0)
     if _is_live_enemy(current):
         return current
@@ -551,14 +1001,13 @@ def _conditions_met(client, skill_id: int, target_id: int) -> bool:
             elif any(_has_effect(client, target_id, s) for s in conds.EnchantmentList):
                 have += 1
 
-    if req(conds.HasDervishEnchantment):
-        for buff in (C.effect_ids_of(target_id) or []):
-            stype, _ = GLOBAL_CACHE.Skill.GetType(buff)
-            if stype == C.ST.Enchantment.value:
-                _, profession = GLOBAL_CACHE.Skill.GetProfession(buff)
-                if profession == "Dervish":
-                    have += 1
-                    break
+    # NOTE: HasDervishEnchantment is NOT gated here. It's a "teardown" marker -- the skill consumes
+    # one of the CASTER's Dervish enchantments for its bonus (Signet of Pious Light, Dwayna's Touch).
+    # HeroAI evaluates it against the caster (get_buff_list), not the target, and these skills are
+    # still castable (just weaker) with no enchantment up -- so the generic engine handles it as a
+    # SOFT score penalty on the caster (CustomSkillAction + HeroAISkills.caster_has_dervish_
+    # enchantment) rather than a hard target gate. (The old port checked target_id here, which both
+    # mislocated the state and hard-blocked a usable cast.)
 
     if req(conds.HasHex):
         if Routines.Checks.Agents.IsHexed(target_id):
@@ -708,3 +1157,26 @@ def can_cast(client, skill_id: int, target_id: int) -> bool:
         return _conditions_met(client, skill_id, target_id)
     except Exception:
         return True
+
+
+def caster_has_dervish_enchantment(client) -> bool:
+    """True when the CASTER currently has any Dervish enchantment up -- the resource that 'teardown'
+    skills (Conditions.HasDervishEnchantment: Signet of Pious Light, Dwayna's Touch) consume for
+    their bonus effect. Mirrors HeroAI's get_buff_list scan but reads the CLIENT's SYNCED blackboard
+    effects (self-state lives in the blackboard, not the host's world) + static skill metadata
+    (type == Enchantment, profession == 'Dervish'). Fail-closed: returns False if HeroAI metadata is
+    unavailable or on any error, so a teardown skill is treated as unfed (penalized) rather than
+    wrongly assumed to have a meal."""
+    if not _Const.load():
+        return False
+    try:
+        for sid in list(client.game_client.effects.keys()):
+            stype, _ = GLOBAL_CACHE.Skill.GetType(int(sid))
+            if stype != _Const.ST.Enchantment.value:
+                continue
+            _, profession = GLOBAL_CACHE.Skill.GetProfession(int(sid))
+            if profession == "Dervish":
+                return True
+    except Exception:
+        return False
+    return False

@@ -46,6 +46,7 @@ purge_by_path(_LIB_DIR)          # drop every already-imported cc_lib.* module
 from cc_lib.jsonizers import Jsonizer
 from cc_lib.misc_helpers import MultithreadBoosterCache, ThreadManager, map_ready
 from cc_lib.blackboard import GameClient
+from cc_lib.rpc import RPC
 from cc_lib.transport import Client
 from cc_lib.networking import NetworkManager
 from cc_lib.behaviors import BehaviorSlot, BehaviorManager, BEHAVIOR_MAP
@@ -75,12 +76,126 @@ class UICache:
 
 
 # region Logic
+class PartyFormationFlow:
+    """Sequenced 'call everyone to my outpost and form a party' flow, ticked once per frame on the
+    host. A single button press can't do this in one shot because travel takes time and must be
+    confirmed before inviting -- so this runs as a small state machine:
+
+        travel  -> send each off-map client to the host's instance (re-issued to stragglers)
+        confirm -> wait until every called client's SYNCED map matches the host's (it arrived)
+        invite  -> the host invites each present client by name
+        accept  -> after a short gap (so the order holds), each client invites the host back
+                   (Guild Wars merges two parties when they invite each other) -> done
+
+    Reads the host's map + name on the main thread; sends orders over each client's transport
+    (remote = ZMQ, same path the behaviors already use)."""
+    TRAVEL_TIMEOUT = 45.0     # stop waiting for stragglers after this long, invite whoever made it
+    REISSUE_TRAVEL = 4.0      # re-send travel to clients not yet arrived, this often
+    ACCEPT_GAP = 0.75         # pause between 'host invited' and 'clients accept' so ordering holds
+
+    def __init__(self, network: NetworkManager):
+        self.network = network
+        self.phase = "idle"            # idle | travel | invite | done
+        self.status = ""
+        self._t0 = 0.0
+        self._last_travel = 0.0
+        self._invited_at = 0.0
+        self.host_map = None           # (map_id, region, district, language)
+        self.host_name = ""
+
+    @property
+    def active(self) -> bool:
+        return self.phase not in ("idle", "done")
+
+    def start(self) -> None:
+        try:
+            self.host_map = (int(GW.Map.GetMapID()), int(GW.Map.GetRegion()[0]),
+                             int(GW.Map.GetDistrict()), int(GW.Map.GetLanguage()[0]))
+            self.host_name = GW.Player.GetName() or ""
+        except Exception:
+            self.phase = "done"
+            self.status = "Failed to read host map/name"
+            return
+        self._t0 = time.time()
+        self._last_travel = 0.0
+        self._invited_at = 0.0
+        self.phase = "travel"
+        self.status = "Calling clients to outpost..."
+
+    def cancel(self) -> None:
+        self.phase = "idle"
+        self.status = ""
+
+    def _remote_clients(self):
+        return [(cid, c) for cid, c in list(self.network.client_list.items())
+                if cid != self.network.local_client_id]
+
+    def _on_host_map(self, client) -> bool:
+        gc = client.game_client
+        if gc is None or self.host_map is None:
+            return False
+        return (gc.map_id, gc.map_region, gc.map_district, gc.map_language) == self.host_map
+
+    def tick(self) -> None:
+        if not self.active:
+            return
+        now = time.time()
+        if self.phase == "travel":
+            remotes = self._remote_clients()
+            if not remotes:
+                self.phase = "done"
+                self.status = "No clients connected"
+                return
+            need = [c for _cid, c in remotes if not self._on_host_map(c)]
+            if not need:
+                self.phase = "invite"
+                self._invited_at = 0.0
+                self.status = "All clients arrived; inviting..."
+                return
+            if now - self._last_travel >= self.REISSUE_TRAVEL:
+                self._last_travel = now
+                mid, reg, dist, lang = self.host_map
+                for c in need:
+                    c.transport.send(RPC.CMD.TRAVEL_TO, mid, reg, dist, lang)
+            self.status = f"Waiting for {len(need)} client(s) to arrive..."
+            if now - self._t0 >= self.TRAVEL_TIMEOUT:
+                self.phase = "invite"
+                self._invited_at = 0.0
+                self.status = "Travel timed out; inviting those present..."
+        elif self.phase == "invite":
+            present = [c for _cid, c in self._remote_clients() if self._on_host_map(c)]
+            if not present:
+                self.phase = "done"
+                self.status = "No clients on the outpost to invite"
+                return
+            if self._invited_at == 0.0:
+                # Host invites each present client first...
+                for c in present:
+                    name = c.game_client.name if c.game_client else ""
+                    if name:
+                        try:
+                            GW.Party.Players.InvitePlayer(name)
+                        except Exception:
+                            pass
+                self._invited_at = now
+                self.status = "Host invited; waiting for clients to accept..."
+            elif now - self._invited_at >= self.ACCEPT_GAP:
+                # ...then each client accepts by inviting the host back (mutual invite = join).
+                for c in present:
+                    if self.host_name:
+                        c.transport.send(RPC.CMD.INVITE_PLAYER, self.host_name)
+                self.phase = "done"
+                self.status = "Party formation complete"
+
+
 class CentralCommanderLogic:
     def __init__(self, ui_cache: UICache, thread_manager: ThreadManager, network: NetworkManager):
         self.cache = ui_cache
         self.cache.network_manager = network
         self.thread_manager = thread_manager
         self.behaviors = BehaviorManager(network, thread_manager)
+        # Multi-frame 'call everyone to outpost + form party' flow (ticked from update() while hosting).
+        self.party_flow = PartyFormationFlow(network)
 
     def scrub_ip_octet(self, index, value):
         try:
@@ -235,6 +350,9 @@ class CentralCommanderUI:
 
     def _draw_behavior_slot(self, slot: BehaviorSlot) -> None:
         mgr = self.logic.behaviors
+        # Make sure the instance exists so its settings render even before Start (and persist across
+        # Stop). The instance the UI mutates is the same one the worker thread reads.
+        mgr.ensure_instance(slot)
         remove = False
         visible = PyImGui.begin_child(f"slot_{slot.id}", (self.cache.WIDTH - 24, 170), True)
         try:
@@ -249,8 +367,15 @@ class CentralCommanderUI:
                         mgr.stop(slot)
                 elif PyImGui.button(f"Start##{slot.id}"):
                     mgr.start(slot)
-                if slot.instance is not None:
+                PyImGui.same_line(0.0, 6.0)
+                if PyImGui.button((f"Dock##pop{slot.id}") if slot.popped_out else (f"Pop out##pop{slot.id}")):
+                    slot.popped_out = not slot.popped_out
+                # The behavior's own settings render inline UNLESS popped out to a floating window
+                # (drawn separately in _draw_popped_out_windows, at top level outside this child).
+                if slot.instance is not None and not slot.popped_out:
                     slot.instance.draw()  # the behavior's own settings (minion goal, follow, ...)
+                elif slot.popped_out:
+                    PyImGui.text_disabled("(settings in pop-out window)")
                 PyImGui.separator()
                 PyImGui.text("Clients (drag here):")
                 for cid in list(slot.assigned):
@@ -261,6 +386,33 @@ class CentralCommanderUI:
             PyImGui.end_child()    # must close even if a behavior's draw() raised, or the stack unbalances
         if remove:
             mgr.remove_slot(slot)
+
+    def _draw_popped_out_windows(self) -> None:
+        """Render each popped-out behavior's settings in its own top-level floating window. Called
+        OUTSIDE the host child (ImGui windows must be top-level, not nested in a begin_child). A
+        'Dock back in' button (or toggling the slot's Pop out button) returns the settings inline."""
+        mgr = self.logic.behaviors
+        for slot in list(self.logic.behaviors.slots):
+            if not slot.popped_out or slot.instance is None:
+                continue
+            title = f"{slot.behavior_cls.name()}{'  [running]' if slot.running else ''}##popwin{slot.id}"
+            opened = PyImGui.begin(title, PyImGui.WindowFlags.AlwaysAutoResize)
+            try:
+                if opened:
+                    # Same Start/Stop control as the inline slot -- the pop-out is otherwise a
+                    # dead end (you'd have to dock back in just to start/stop the behavior).
+                    if slot.running:
+                        if PyImGui.button(f"Stop##pop{slot.id}"):
+                            mgr.stop(slot)
+                    elif PyImGui.button(f"Start##pop{slot.id}"):
+                        mgr.start(slot)
+                    PyImGui.same_line(0.0, 6.0)
+                    if PyImGui.button(f"Dock back in##dock{slot.id}"):
+                        slot.popped_out = False
+                    else:
+                        slot.instance.draw()
+            finally:
+                PyImGui.end()
 
     def _resolve_drag(self) -> None:
         """End-of-frame: show the drag ghost, and on mouse release drop the client into
@@ -292,6 +444,47 @@ class CentralCommanderUI:
         elif not PyImGui.is_mouse_down(0):
             self.cache.drag_client_id = None   # button already up but we missed the release
 
+    # ----------------------------------------------------------- party-wide commands
+    def _all_clients(self):
+        """Every connected client (including the host's own local client)."""
+        return list(self.cache.network_manager.client_list.items())
+
+    def _draw_party_controls(self):
+        """Host-only buttons that command the whole roster at once (HeroAI-style team commands):
+        call everyone to the host's outpost and form a party, resign all, interact-with-target all.
+        All GW reads here run on the main thread (draw is gated on IsMapReady) and the orders go out
+        over each client's transport (the local client executes in-process, remotes over ZMQ)."""
+        flow = self.logic.party_flow
+
+        # Sequenced flow: travel -> confirm arrival -> host invites -> clients accept (see
+        # PartyFormationFlow). The button kicks it off; it then advances each frame in update().
+        if not flow.active:
+            if PyImGui.button("Call to Outpost + Join"):
+                flow.start()
+        else:
+            if PyImGui.button("Cancel Call"):
+                flow.cancel()
+
+        PyImGui.same_line(0.0, 6.0)
+        if PyImGui.button("Resign All"):
+            for _cid, client in self._all_clients():
+                client.transport.send(RPC.CMD.RESIGN)
+
+        PyImGui.same_line(0.0, 6.0)
+        if PyImGui.button("Interact All"):
+            # Drive every client to interact with the host's current target (a shared-instance agent
+            # id). 0 = no target -> each client picks the nearest enemy in its own world.
+            try:
+                target_id = int(GW.Player.GetTargetID() or 0)
+            except Exception:
+                target_id = 0
+            for _cid, client in self._all_clients():
+                client.transport.send(RPC.CMD.INTERACT, target_id)
+
+        if flow.status:
+            PyImGui.text(f"Party: {flow.status}")
+        PyImGui.separator()
+
     def draw_host_window(self):
         """The Host-specific UI section: an unassigned client pool plus one child window per
         behavior. Clients are virtually dragged between them (see _resolve_drag)."""
@@ -315,6 +508,9 @@ class CentralCommanderUI:
                     mgr.add_slot(classes[self.cache.add_behavior_index])
             PyImGui.separator()
 
+            # --- party-wide commands (call to outpost + join, resign all, interact all) ---
+            self._draw_party_controls()
+
             # --- unassigned pool ---
             PyImGui.begin_child("pool", (self.cache.WIDTH - 24, 110), True)
             try:
@@ -333,6 +529,8 @@ class CentralCommanderUI:
         finally:
             PyImGui.end_child()
 
+        # Popped-out behavior settings windows are TOP-LEVEL (must not be nested in the child above).
+        self._draw_popped_out_windows()
         self._resolve_drag()
 
     def draw_connected_window(self):
@@ -378,6 +576,9 @@ class CentralCommander:
         # _cleanup_host (dormancy/map load) wiped it. Idempotent and cheap.
         if self.cache_ui.is_host:
             self.network_manager.ensure_local_client()
+            # Advance the call-to-outpost+join flow (travel -> confirm -> invite -> accept). Runs on
+            # the map-gated main thread; idle unless a "Call to Outpost + Join" press started it.
+            self.logic.party_flow.tick()
 
     def update_thread_manager(self):
         if self.thread_manager.is_threads_running:

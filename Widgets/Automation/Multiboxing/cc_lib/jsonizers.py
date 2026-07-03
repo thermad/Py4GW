@@ -52,6 +52,26 @@ class Jsonizer:
         return json_buffs
 
     @staticmethod
+    def get_attributes(id: int) -> Dict[int, int]:
+        """Current (buffed) attribute levels keyed by attribute id. Reads the live ``level`` rather
+        than ``level_base`` (what GetAttributesDict returns) so an attribute RAISED by a buff is
+        visible host-side -- Heroic Refrain ratchets the caster's Leadership toward 20 by stacking
+        its own +attribute bonus, and the host needs to see that buffed value to know when to stop
+        self-casting and start spreading it. Omits 0-level attributes to keep the payload small."""
+        out: Dict[int, int] = dict()
+        try:
+            for attr in GW.Agent.GetAttributes(id):
+                try:
+                    level = int(attr.level)
+                except Exception:
+                    continue
+                if level > 0:
+                    out[int(attr.attribute_id)] = level
+        except Exception:
+            pass
+        return out
+
+    @staticmethod
     def get_effects(id: int) -> Dict[int, Any]:
         effects = GW.Effects.GetEffects(id)
         json_effects: Dict[int, Any] = dict()
@@ -108,6 +128,16 @@ class Jsonizer:
             d["target_dagger_status"] = GW.Agent.GetDaggerStatus(target_id) if target_id else 0
         except Exception:
             d["target_dagger_status"] = 0
+        # Current map/instance the client is in, so the host can confirm a client has actually
+        # arrived at its outpost during the "call to outpost + join" flow (travel -> confirm ->
+        # invite -> accept). map_id + region + district + language identify a unique instance.
+        try:
+            d["map_id"] = int(GW.Map.GetMapID())
+            d["map_region"] = int(GW.Map.GetRegion()[0])
+            d["map_district"] = int(GW.Map.GetDistrict())
+            d["map_language"] = int(GW.Map.GetLanguage()[0])
+        except Exception:
+            d["map_id"] = d["map_region"] = d["map_district"] = d["map_language"] = 0
         d["hp"] = GW.Agent.GetHealth(d["id"])
         d["max_hp"] = GW.Agent.GetMaxHealth(d["id"])
         d["energy"] = GW.Agent.GetEnergy(d["id"])
@@ -124,6 +154,9 @@ class Jsonizer:
             d["fast_casting"] = int(GW.Agent.GetAttributesDict(d["id"]).get(0, 0))
         except Exception:
             d["fast_casting"] = 0
+        # Current attribute levels (Leadership etc.) -- client-only self-state the host can't read
+        # for a remote agent. Drives the Heroic Refrain bootstrap (self-cast until Leadership == 20).
+        d["attributes"] = Jsonizer.get_attributes(d["id"])
         d["skilldata"] = Jsonizer.get_skilldata()
         d["effects"] = Jsonizer.get_effects(d["id"])
         d["buffs"] = Jsonizer.get_buffs(d["id"])

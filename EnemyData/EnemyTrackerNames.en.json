@@ -13,6 +13,9 @@
     "enc:\\\\x0BAA\\\\x010A\\\\x8101\\\\x5DCF\\\\xC6E5\\\\x1747\\\\x0001": [
       "Pet - Elder Crocodile"
     ],
+    "enc:\\\\x0BAA\\\\x010A\\\\x8102\\\\x4E64\\\\xA903\\\\x96FD\\\\x4D8B\\\\x0001": [
+      "Pet - Dire Racing Beetle"
+    ],
     "enc:\\\\x0BD4\\\\x8E71\\\\xF6DB\\\\x0BAB": [
       "Master of Healing"
     ],
@@ -1363,6 +1366,9 @@
     "enc:\\\\x40FA\\\\xF2FC\\\\xC345\\\\x65DE": [
       "Shiro'ken Ranger"
     ],
+    "enc:\\\\x4112\\\\xEDA0\\\\xC52F\\\\x4F2D": [
+      "Lian, Dragon's Petal"
+    ],
     "enc:\\\\x4115\\\\xB9CE\\\\xFFBA\\\\x7C6A": [
       "Royen Beastkeeper"
     ],
@@ -1383,6 +1389,9 @@
     ],
     "enc:\\\\x4149\\\\xD0CC\\\\xF1B6\\\\x6021": [
       "Kappa"
+    ],
+    "enc:\\\\x4154\\\\x9143\\\\x4CDC": [
+      "Flesh Golem"
     ],
     "enc:\\\\x4155\\\\x84CC\\\\x8A6B\\\\x29F9": [
       "Vampiric Horror"
@@ -1549,6 +1558,9 @@
     "enc:\\\\x7CB3\\\\x92A0\\\\x9259\\\\x5C7C": [
       "Lale the Vindictive"
     ],
+    "enc:\\\\x7CEF\\\\x8BC6\\\\xB67C\\\\x2BBF": [
+      "Kournan Taskmaster"
+    ],
     "enc:\\\\x7D54\\\\xF46D\\\\xEC6C\\\\x721C": [
       "Kournan Phalanx"
     ],
@@ -1621,8 +1633,14 @@
     "enc:\\\\x8101\\\\x02C9\\\\xE5BD\\\\xD10D\\\\x7236": [
       "Ahvha Sankii"
     ],
+    "enc:\\\\x8101\\\\x04B0\\\\x84AE\\\\x92D3\\\\x6846": [
+      "Jade Brotherhood Mage"
+    ],
     "enc:\\\\x8101\\\\x04F4\\\\xC70B\\\\xF5EA\\\\x0534": [
       "Ruby Djinn"
+    ],
+    "enc:\\\\x8101\\\\x04F5\\\\xE962\\\\x4612": [
+      "Kournan Spotter"
     ],
     "enc:\\\\x8101\\\\x0571\\\\xB066\\\\xB1FE\\\\x6EF7": [
       "Mantid Drone Hatchling"
@@ -1684,11 +1702,38 @@
     "enc:\\\\x8101\\\\x08C7\\\\xD747\\\\x5C9A": [
       "Corsair Berserker"
     ],
+    "enc:\\\\x8101\\\\x08D0\\\\xA436\\\\xF4D0\\\\x75C2": [
+      "Kournan Seer"
+    ],
+    "enc:\\\\x8101\\\\x08D2\\\\xB845\\\\x8201\\\\x4B6F": [
+      "Kournan Scribe"
+    ],
+    "enc:\\\\x8101\\\\x08D3\\\\xD284\\\\x68F4": [
+      "Kournan Priest"
+    ],
+    "enc:\\\\x8101\\\\x08D4\\\\xCC9D\\\\xED35\\\\x279C": [
+      "Kournan Guard"
+    ],
+    "enc:\\\\x8101\\\\x08D5\\\\xCC78\\\\xB531\\\\x6578": [
+      "Kournan Bowman"
+    ],
+    "enc:\\\\x8101\\\\x08D6\\\\xB674\\\\xE58C\\\\x26B6": [
+      "Kournan Zealot"
+    ],
     "enc:\\\\x8101\\\\x08D7\\\\xB678\\\\xCFA7\\\\x0193": [
       "Kournan Phalanx"
     ],
     "enc:\\\\x8101\\\\x08D9\\\\x97FF\\\\xC7ED\\\\x6AE9": [
       "Kournan Spotter"
+    ],
+    "enc:\\\\x8101\\\\x0923\\\\x8D75\\\\xEF39\\\\x4643": [
+      "Guard Post Commander"
+    ],
+    "enc:\\\\x8101\\\\x0925\\\\xF0AC\\\\xFDE9\\\\x31F6": [
+      "Guard Post Commander"
+    ],
+    "enc:\\\\x8101\\\\x0927\\\\xF8FE\\\\x4373": [
+      "Guard Post Commander"
     ],
     "enc:\\\\x8101\\\\x09BE\\\\xB01D\\\\xE1EC\\\\x1F08": [
       "Salke Fur Friend"
@@ -1750,6 +1795,12 @@
     "enc:\\\\x8101\\\\x0ADE\\\\xAD99\\\\xC71A\\\\x0AE6": [
       "Awakened Cavalier"
     ],
+    "enc:\\\\x8101\\\\x0AE5\\\\xBDBF\\\\xAEDE\\\\x69A6": [
+      "Dabineh Deathbringer"
+    ],
+    "enc:\\\\x8101\\\\x0B3D\\\\xA670\\\\xFB56\\\\x33EA": [
+      "Kournan Taskmaster"
+    ],
     "enc:\\\\x8101\\\\x0D1E\\\\xCF94\\\\xC8EF\\\\x08D0": [
       "Ruby Djinn"
     ],
@@ -1786,17 +1837,26 @@
     "enc:\\\\x8101\\\\x0E2D\\\\xC0F3\\\\xEC40\\\\x2F3D": [
       "Korr, Living Flame"
     ],
+    "enc:\\\\x8101\\\\x0E4F\\\\xC5CB\\\\xBD79\\\\x088E": [
+      "Kournan Soldier"
+    ],
     "enc:\\\\x8101\\\\x0F0C\\\\xAE73\\\\xD03E\\\\x6DC8": [
       "Chor the Bladed"
     ],
     "enc:\\\\x8101\\\\x0F0D\\\\xB025\\\\x947E\\\\x7960": [
       "Eshau Longspear"
     ],
+    "enc:\\\\x8101\\\\x0FD3\\\\x8BEE\\\\xCDA2\\\\x5FDF": [
+      "Kournan Guard"
+    ],
     "enc:\\\\x8101\\\\x1186\\\\xB16E\\\\xB9F1\\\\x3BAD": [
       "Ntouka Bird"
     ],
     "enc:\\\\x8101\\\\x1187\\\\xE433\\\\x93A6\\\\x47E1": [
       "Rampaging Ntouka"
+    ],
+    "enc:\\\\x8101\\\\x118A\\\\xCCBE\\\\xE26C\\\\x7B30": [
+      "The Hunger"
     ],
     "enc:\\\\x8101\\\\x118C\\\\xBEBC\\\\x8C31\\\\x5E39": [
       "Herald of Nightmares"
@@ -1821,6 +1881,9 @@
     ],
     "enc:\\\\x8101\\\\x1193\\\\xB272\\\\x0D68": [
       "Scythe of Chaos"
+    ],
+    "enc:\\\\x8101\\\\x1199\\\\xC635\\\\x2D6B": [
+      "Kournan Commander"
     ],
     "enc:\\\\x8101\\\\x1201\\\\xBAE9\\\\xEED9\\\\x6B26": [
       "Brokk Ripsnort"
@@ -1990,6 +2053,15 @@
     "enc:\\\\x8101\\\\x2753\\\\xA30D\\\\x9600\\\\x4DF6": [
       "Binding Guardian"
     ],
+    "enc:\\\\x8101\\\\x2842\\\\x8913\\\\xBBD5\\\\x3FF8": [
+      "Taskmaster Vanahk"
+    ],
+    "enc:\\\\x8101\\\\x2843\\\\x8CB6\\\\xD151\\\\x30CB": [
+      "Taskmaster Sadi-Belai"
+    ],
+    "enc:\\\\x8101\\\\x2844\\\\xBE5E\\\\xBE18\\\\x0AE2": [
+      "Taskmaster Suli"
+    ],
     "enc:\\\\x8101\\\\x2CD6\\\\xEF7C\\\\xFA54\\\\x5DCB": [
       "Skree Hatchling"
     ],
@@ -2004,6 +2076,18 @@
     ],
     "enc:\\\\x8101\\\\x2D21\\\\xC4C0\\\\x92EC\\\\x636E": [
       "Beast Sworn Heket"
+    ],
+    "enc:\\\\x8101\\\\x2D8C\\\\xA3D2\\\\xBE74\\\\x3E43": [
+      "Kournan Elite Scribe"
+    ],
+    "enc:\\\\x8101\\\\x2D8D\\\\xFCD5\\\\xCBDD\\\\x6584": [
+      "Kournan Elite Guard"
+    ],
+    "enc:\\\\x8101\\\\x2D8E\\\\xAC6B\\\\xEB72\\\\x4291": [
+      "Kournan Elite Zealot"
+    ],
+    "enc:\\\\x8101\\\\x2D8F\\\\xCEB1\\\\x94BC\\\\x4F49": [
+      "Kournan Elite Spear"
     ],
     "enc:\\\\x8101\\\\x2D93\\\\xB0E4\\\\xA9EF\\\\x1A03": [
       "Restless Dead"
@@ -2176,11 +2260,20 @@
     "enc:\\\\x8101\\\\x4CA2\\\\xE9B6\\\\xA224\\\\x4D71": [
       "Tusked Hunter"
     ],
+    "enc:\\\\x8101\\\\x4CA6\\\\xB8F1\\\\xD4CF\\\\x599D": [
+      "Overseer Boktek"
+    ],
+    "enc:\\\\x8101\\\\x4CA7\\\\xC2B3\\\\xCEC3\\\\x11B4": [
+      "Overseer Haubeh"
+    ],
     "enc:\\\\x8101\\\\x4D78\\\\xA585\\\\xA6F7\\\\x555D": [
       "Chiossen, Soothing Breeze"
     ],
     "enc:\\\\x8101\\\\x4D79\\\\x8ABB\\\\xA053\\\\x2716": [
       "Onwan, Lord of the Ntouka"
+    ],
+    "enc:\\\\x8101\\\\x4D7D\\\\xC2C8\\\\x0FED": [
+      "Mahto Sharptooth"
     ],
     "enc:\\\\x8101\\\\x4D81\\\\xBA24\\\\xFF71\\\\x1863": [
       "Chidehkir, Light of the Blind"
@@ -2307,6 +2400,9 @@
     ],
     "enc:\\\\x8101\\\\x5239\\\\x9FAF\\\\x846B\\\\x5B7B": [
       "Mandragor Terror"
+    ],
+    "enc:\\\\x8101\\\\x5247\\\\xE905\\\\xF0D1\\\\x0D1E": [
+      "Shelboh the Ravenous"
     ],
     "enc:\\\\x8101\\\\x5249\\\\xCA76\\\\x8354\\\\x71D5": [
       "Enadiz the Hardheaded"
@@ -2557,6 +2653,9 @@
     "enc:\\\\x8101\\\\x74D1\\\\xCBA1\\\\xB77E\\\\x5BF4": [
       "Mountain Pinesoul"
     ],
+    "enc:\\\\x8101\\\\x74D2\\\\x9E38\\\\xBAA6\\\\x2157": [
+      "Mountain Aloe"
+    ],
     "enc:\\\\x8101\\\\x74D3\\\\xAC1F\\\\x812B\\\\x4E47": [
       "Spectral Vaettir"
     ],
@@ -2647,6 +2746,9 @@
     "enc:\\\\x8102\\\\x047B\\\\xBF67\\\\x83FF\\\\x479D": [
       "Charr Seeker"
     ],
+    "enc:\\\\x8102\\\\x0480\\\\xF084\\\\xE5AA\\\\x030F": [
+      "Stone Summit Arcanist"
+    ],
     "enc:\\\\x8102\\\\x0482\\\\xBE12\\\\xB67F\\\\x1AF3": [
       "Stone Summit Herder"
     ],
@@ -2682,6 +2784,9 @@
     ],
     "enc:\\\\x8102\\\\x0EAD\\\\x822D\\\\x38FD": [
       "Mystic Mandragor"
+    ],
+    "enc:\\\\x8102\\\\x0F9E\\\\xBD9B\\\\xF218\\\\x7E88": [
+      "Krak Flamewhip"
     ],
     "enc:\\\\x8102\\\\x0FA0\\\\xC3D3\\\\xF9AC\\\\x2343": [
       "Ambassador Kharnige"
@@ -2794,6 +2899,9 @@
     "enc:\\\\x8102\\\\x23B4\\\\xD7F0\\\\x5DF7": [
       "Tumbled Elemental"
     ],
+    "enc:\\\\x8102\\\\x251C\\\\x84BF\\\\xE646\\\\x04BB": [
+      "Halvdan the Younger"
+    ],
     "enc:\\\\x8102\\\\x2895\\\\xCEF4\\\\x869A\\\\x65D1": [
       "Agari Tlamatini"
     ],
@@ -2817,6 +2925,9 @@
     ],
     "enc:\\\\x8102\\\\x387B\\\\xACE0\\\\xCCF0\\\\x024A": [
       "Abaddon's Cursed"
+    ],
+    "enc:\\\\x8102\\\\x4E64\\\\xA903\\\\x96FD\\\\x4D8B": [
+      "Dire Racing Beetle"
     ],
     "enc:\\\\x8102\\\\x5BAD\\\\xE127\\\\xB7B2\\\\x53D7": [
       "Terrorweb Dryder"
