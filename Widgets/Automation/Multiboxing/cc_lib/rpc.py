@@ -5,11 +5,14 @@ Importing this module (re)registers every RPC method via the module-level RPC.cl
 from enum import Enum
 from typing import Dict, Callable, Protocol, ParamSpec, TypeVar
 
-import Py4GWCoreLib as GW
-from Py4GWCoreLib import Routines
-
-from cc_lib.jsonizers import Jsonizer
-
+# GW present only inside Py4GW. The RPC.CMD enum + host-side send helpers are needed on the server;
+# the RPC handler bodies (registered at module bottom) run on the CLIENT executor, never the server.
+try:
+    import Py4GWCoreLib as GW
+    from Py4GWCoreLib import Routines
+except Exception:
+    GW = None
+    Routines = None
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -28,9 +31,7 @@ class RPC:
         MOVE = "move"
         RELATIVE_MOVE = "relmove"
         GETSKILLBAR = "getskillbar"
-        GETEFFECTS = "geteffects"
         GET_PLAYER_ID = "getplayerid"
-        GET_PLAYER_DATA = "get_player_data"
         USE_SKILL = "use_skill"
         DROP_BOND = "drop_bond"
         CHANGE_TARGET = "change_target"   # host sets a client's target to a concrete agent id it knows
@@ -40,6 +41,8 @@ class RPC:
         RESIGN = "resign"                 # /resign on the client (host "resign all")
         TRAVEL_TO = "travel_to"           # travel to a concrete map/region/district (call to outpost)
         INVITE_PLAYER = "invite_player"   # invite a player by name (the client's "accept" = invite host back)
+        CANCEL_ACTION = "cancel_action"   # abort the in-progress cast/action (host preempted it)
+        DUMP_MAP_TRAPS = "dump_map_traps" # bundle the instance's pathing trapezoids -> server (one-shot PUSH)
 
     @classmethod
     def register(
@@ -209,6 +212,8 @@ class RPC:
                       and int(GW.Map.GetDistrict()) == int(district))
         except Exception:
             on_map = False
+        print(f"[client] TRAVEL_TO received: map={map_id} region={region} district={district} "
+              f"language={language} (already_there={on_map})")
         if on_map:
             return
         GW.Map.TravelToRegion(int(map_id), int(region), int(district), int(language))
@@ -222,6 +227,18 @@ class RPC:
             GW.Party.Players.InvitePlayer(str(name))
 
     @staticmethod
+    def cancel_action() -> None:
+        """CLIENT-SIDE: abort the skill/action currently in progress because the host has preempted
+        it. In GW a cast is locked in once it begins (its energy/adrenaline is already spent), so the
+        only way to free the caster for a higher-priority cast is the CancelAction control -- pressed
+        here as a down+up on the current frame. (Timing may need in-game tuning: if a single-frame
+        press doesn't register, hold it across a couple of frames via the input queue.)"""
+        from Py4GWCoreLib.enums_src.UI_enums import ControlAction
+        key = int(ControlAction.ControlAction_CancelAction.value)
+        GW.UIManager.Keydown(key, 0)
+        GW.UIManager.Keyup(key, 0)
+
+    @staticmethod
     def method(name: CMD):
         def decorator(func: RPCMethod[P, R]) -> RPCMethod[P, R]:
             RPC.register(name, func)
@@ -231,19 +248,28 @@ class RPC:
 
 
 RPC.clear()
-RPC.register(RPC.CMD.MOVE, GW.Player.Move)
-RPC.register(RPC.CMD.GETSKILLBAR, GW.GLOBAL_CACHE.SkillBar.GetSkillbar)
-RPC.register(RPC.CMD.GETEFFECTS, Jsonizer.get_effects)
-RPC.register(RPC.CMD.GET_PLAYER_ID, GW.Player.GetAgentID)
-RPC.register(RPC.CMD.GET_PLAYER_DATA, Jsonizer.player_data)
-RPC.register(RPC.CMD.USE_SKILL, GW.GLOBAL_CACHE.SkillBar.UseSkill)
-RPC.register(RPC.CMD.DROP_BOND, GW.GLOBAL_CACHE.Effects.DropBuff)
-RPC.register(RPC.CMD.RELATIVE_MOVE, RPC.relative_move)
-RPC.register(RPC.CMD.CHANGE_TARGET, GW.Player.ChangeTarget)
-RPC.register(RPC.CMD.CAST_TARGETED, RPC.cast_targeted)
-RPC.register(RPC.CMD.CAST_AT, RPC.cast_at)
-RPC.register(RPC.CMD.INTERACT, RPC.interact)
-RPC.register(RPC.CMD.RESIGN, RPC.resign)
-RPC.register(RPC.CMD.TRAVEL_TO, RPC.travel_to)
-RPC.register(RPC.CMD.INVITE_PLAYER, RPC.invite_player)
+# The handlers are the CLIENT EXECUTOR side (they bind live GW callables). On a headless server GW is
+# absent and these are never invoked -- it only SENDS commands (RPC.CMD + transport) -- so skip
+# registration entirely when GW isn't present. Inside Py4GW (host + clients) GW is real and every
+# handler registers exactly as before.
+if GW is not None:
+    RPC.register(RPC.CMD.MOVE, GW.Player.Move)
+    RPC.register(RPC.CMD.GETSKILLBAR, GW.GLOBAL_CACHE.SkillBar.GetSkillbar)
+    RPC.register(RPC.CMD.GET_PLAYER_ID, GW.Player.GetAgentID)
+    RPC.register(RPC.CMD.USE_SKILL, GW.GLOBAL_CACHE.SkillBar.UseSkill)
+    RPC.register(RPC.CMD.DROP_BOND, GW.GLOBAL_CACHE.Effects.DropBuff)
+    RPC.register(RPC.CMD.RELATIVE_MOVE, RPC.relative_move)
+    RPC.register(RPC.CMD.CHANGE_TARGET, GW.Player.ChangeTarget)
+    RPC.register(RPC.CMD.CAST_TARGETED, RPC.cast_targeted)
+    RPC.register(RPC.CMD.CAST_AT, RPC.cast_at)
+    RPC.register(RPC.CMD.INTERACT, RPC.interact)
+    RPC.register(RPC.CMD.RESIGN, RPC.resign)
+    RPC.register(RPC.CMD.TRAVEL_TO, RPC.travel_to)
+    RPC.register(RPC.CMD.INVITE_PLAYER, RPC.invite_player)
+    RPC.register(RPC.CMD.CANCEL_ACTION, RPC.cancel_action)
+    # The map-trapezoid dump lives in misc_helpers (it stashes the bundle for the widget's PUSH, not a
+    # GW facade call), so bind it from there. Imported here (not at module top) to keep the import in
+    # the GW-only branch -- the server never registers handlers, so it never needs misc_helpers here.
+    from cc_lib.misc_helpers import dump_map_trapezoids
+    RPC.register(RPC.CMD.DUMP_MAP_TRAPS, dump_map_trapezoids)
 

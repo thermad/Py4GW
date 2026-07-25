@@ -1,23 +1,30 @@
 """ZMQ networking: ROUTER/PUB/PULL host loop + DEALER/SUB/PUSH client loop.
 
 Owns the host<->client wire protocol and the per-client Client list. Depends on the
-lower cc_lib leaves (rpc/transport/blackboard/jsonizers/misc_helpers); nothing depends
+lower cc_lib leaves (rpc/transport/blackboard/misc_helpers); nothing depends
 on it except the behavior + UI layers above."""
 import sys, json, time, uuid
 from collections import deque
 from typing import Dict, Optional
 
-# zmq's vendored internals do some bare imports, so its parent dir must be on sys.path
-# before the (fully-qualified) import below. Idempotent; safe to re-run on every reload.
-_zmq_lib_path = sys.prefix + "\\Py4GWCoreLib\\ExternalLibs"
-if _zmq_lib_path not in sys.path:
-    sys.path.insert(0, _zmq_lib_path)
-import Py4GWCoreLib.ExternalLibs.zmq as zmq
+# Inside Py4GW, zmq is vendored under Py4GWCoreLib.ExternalLibs; its internals do some bare imports,
+# so its parent dir must be on sys.path before the (fully-qualified) import. A standalone server has
+# no Py4GW -- fall back to a normally installed ``zmq``. Idempotent; safe to re-run on every reload.
+try:
+    _zmq_lib_path = sys.prefix + "\\Py4GWCoreLib\\ExternalLibs"
+    if _zmq_lib_path not in sys.path:
+        sys.path.insert(0, _zmq_lib_path)
+    import Py4GWCoreLib.ExternalLibs.zmq as zmq
+except Exception:
+    import zmq
 
 from cc_lib.blackboard import GameClient
 from cc_lib.rpc import RPC
 from cc_lib.transport import Client, LocalTransport
 from cc_lib.misc_helpers import ThreadManager, current_epoch
+# NOTE (client slice): world_feed / the host-side world-merge lives only in the server codebase.
+# This client keeps maintain_host solely for the party-formation convenience, not the decision
+# engine, so it does NOT record client world feeds.
 
 
 class ZMQTransport(Client.Transport):
@@ -59,6 +66,13 @@ class NetworkManager:
         #                   deque append/popleft are individually GIL-atomic (no lock needed).
         self.outbound_state: Optional[dict] = None
         self.inbound_rpcs: "deque" = deque(maxlen=64)
+        #   outbound_oneshot: ONE-SHOT payloads (e.g. the map-trapezoid bundle) that must be delivered
+        #                     EXACTLY as queued, not folded into the per-frame outbound_state. The
+        #                     state dict is overwritten every main frame, so a large one-shot key
+        #                     stuffed into it races the ~60ms network send loop and is usually clobbered
+        #                     before it ships. This queue is drained+sent as its own PUSH message, so
+        #                     every queued bundle reaches the server once. GIL-atomic append/popleft.
+        self.outbound_oneshot: "deque" = deque(maxlen=16)
 
         # Host Sockets
         self.router = None  # RPC (Bidirectional)
@@ -76,6 +90,14 @@ class NetworkManager:
         live ZMQ sockets/poller (doing so nulls them under the running network thread)."""
         if self.local_client_id not in self.client_list:
             self.client_list[self.local_client_id] = self.local_client
+
+    def queue_oneshot(self, payload: dict) -> None:
+        """MAIN THREAD: enqueue a one-shot upstream payload (a plain JSON-able dict, e.g.
+        ``{"cc_map_traps": {...}}``) to be PUSHed to the server exactly once, independent of the
+        per-frame ``outbound_state``. Use this (not ``outbound_state``) for anything large/one-shot so
+        it isn't clobbered by the next frame's state refresh before the network thread sends it."""
+        if payload:
+            self.outbound_oneshot.append(payload)
 
     def pump_outbound_state(self, state: dict) -> None:
         """MAIN THREAD: stash the latest local player_data snapshot for the client network loop
@@ -169,6 +191,8 @@ class NetworkManager:
                                 print("Push notification from unknown client")
                             else:
                                 self.client_list[client_id].game_client.update_from_dict(msg)
+                                # (client slice) the observed-world "cc_world" payload is consumed
+                                # only by the server's world-merge; a client-host ignores it.
                 except Exception as e:
                     print(f"maintain_host loop error (continuing): {e}")
 
@@ -243,6 +267,19 @@ class NetworkManager:
                             snapshot = dict(snapshot)        # shallow copy: don't race the main thread
                             snapshot["client_id"] = str(client_id)
                             push.send_json(snapshot)
+
+                    # A2. Drain one-shot payloads (map-trapezoid bundle, ...) as their OWN PUSH
+                    # messages so each is delivered intact -- unlike outbound_state, which the main
+                    # thread overwrites every frame, a queued one-shot can't be clobbered before it
+                    # ships. Pure bytes (built on the main thread), so no map-live gate needed.
+                    while self.outbound_oneshot:
+                        try:
+                            one = self.outbound_oneshot.popleft()
+                        except IndexError:
+                            break
+                        one = dict(one)
+                        one["client_id"] = str(client_id)
+                        push.send_json(one)
 
                     # B. Check for incoming messages
                     events = dict(poller.poll(timeout=10))

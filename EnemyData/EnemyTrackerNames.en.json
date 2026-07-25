@@ -166,6 +166,9 @@
     "enc:\\\\x102F\\\\xE176\\\\x9FFE\\\\x1977": [
       "Lynx"
     ],
+    "enc:\\\\x103C\\\\xCCE5\\\\xA0E2\\\\x3ADC": [
+      "Smuush Fatfist"
+    ],
     "enc:\\\\x103E\\\\xCA73\\\\xFE79\\\\x4E5D": [
       "Gypsie Ettin"
     ],
@@ -190,8 +193,14 @@
     "enc:\\\\x1073\\\\xA50F\\\\xC7A1\\\\x445B": [
       "Caromi Tengu Brave"
     ],
+    "enc:\\\\x1076\\\\x94F6\\\\xD3F9\\\\x706A": [
+      "Caromi Tengu Brave"
+    ],
     "enc:\\\\x1078\\\\x961A\\\\xA417\\\\x79EF": [
       "Caromi Tengu Scout"
+    ],
+    "enc:\\\\x107C\\\\x9CEF\\\\xC0D8\\\\x1E81": [
+      "Fire Imp"
     ],
     "enc:\\\\x1080\\\\xC39C\\\\x87C0\\\\x0E7E": [
       "Reed Stalker"
@@ -232,6 +241,12 @@
     "enc:\\\\x1096\\\\x9543\\\\xC92E\\\\x463E": [
       "Sand Drake"
     ],
+    "enc:\\\\x109B\\\\xA56D\\\\xAE20\\\\x5C06": [
+      "Crystal Spider"
+    ],
+    "enc:\\\\x10A0\\\\x81FE\\\\x44A7": [
+      "Crystal Guardian"
+    ],
     "enc:\\\\x10A2\\\\xADDC\\\\x97D1\\\\x317D": [
       "Desert Griffon"
     ],
@@ -253,6 +268,18 @@
     "enc:\\\\x10AE\\\\xB963\\\\xC499\\\\x0955": [
       "Sand Wurm"
     ],
+    "enc:\\\\x10DD\\\\xF138\\\\xC697\\\\x4B97": [
+      "Forgotten Illusionist"
+    ],
+    "enc:\\\\x10DE\\\\x863F\\\\xF140\\\\x071B": [
+      "Forgotten Cursebearer"
+    ],
+    "enc:\\\\x10DF\\\\x87BA\\\\x5B19": [
+      "Forgotten Arcanist"
+    ],
+    "enc:\\\\x10E2\\\\xD3F7\\\\xC0D6\\\\x75B4": [
+      "Forgotten Sage"
+    ],
     "enc:\\\\x10E3\\\\xA3DB\\\\xC929\\\\x3D12": [
       "Enchanted Hammer"
     ],
@@ -271,11 +298,20 @@
     "enc:\\\\x1215\\\\x934D\\\\x0661": [
       "White Mantle Savant"
     ],
+    "enc:\\\\x1216\\\\x841F\\\\x4A6A": [
+      "White Mantle Abbot"
+    ],
     "enc:\\\\x1217\\\\x81E3\\\\x9199\\\\x58F8": [
       "White Mantle Priest"
     ],
+    "enc:\\\\x1218\\\\xAADA\\\\xA978\\\\x7513": [
+      "White Mantle Knight"
+    ],
     "enc:\\\\x121C\\\\x99A1\\\\xB6F3\\\\x395B": [
       "White Mantle Zealot"
+    ],
+    "enc:\\\\x121E\\\\xEE90\\\\x8EE3\\\\x2469": [
+      "White Mantle Seeker"
     ],
     "enc:\\\\x121F\\\\x957F\\\\x95C5\\\\x320B": [
       "White Mantle Seeker"
@@ -288,6 +324,15 @@
     ],
     "enc:\\\\x1232\\\\xF535\\\\x05E0": [
       "Bone Minion"
+    ],
+    "enc:\\\\x1239\\\\xB922\\\\x86C7\\\\x17FD": [
+      "Perfected Armor"
+    ],
+    "enc:\\\\x123C\\\\x8F43\\\\xAE4E\\\\x1C59": [
+      "Feodor the Baneful"
+    ],
+    "enc:\\\\x123D\\\\x8620\\\\x1A04": [
+      "Kratos the Foul"
     ],
     "enc:\\\\x1246\\\\xAC43\\\\x88DD\\\\x6A2C": [
       "Mursaat Mesmer"
@@ -309,6 +354,9 @@
     ],
     "enc:\\\\x124D\\\\x8CEC\\\\x8840\\\\x088F": [
       "Mursaat Monk"
+    ],
+    "enc:\\\\x124F\\\\xA765\\\\x924D\\\\x3157": [
+      "Jade Armor"
     ],
     "enc:\\\\x1251\\\\xB729\\\\x32CD": [
       "Jade Armor"
@@ -382,6 +430,12 @@
     "enc:\\\\x1323\\\\xF632\\\\x2C75": [
       "Hulking Stone Elemental"
     ],
+    "enc:\\\\x133C\\\\xC1CD\\\\x8645\\\\x1D5A": [
+      "Black Bear"
+    ],
+    "enc:\\\\x1356\\\\x9D12\\\\x3084": [
+      "Tundra Giant"
+    ],
     "enc:\\\\x135C\\\\xB57D\\\\xA5B5\\\\x7406": [
       "Blessed Griffon"
     ],
@@ -400,11 +454,29 @@
     "enc:\\\\x1372\\\\xA5B2\\\\x8DFA\\\\x25CB": [
       "Brrrr Windburn"
     ],
+    "enc:\\\\x1375\\\\x8540\\\\xAAAB\\\\x2D1D": [
+      "Ceru Gloomrunner"
+    ],
+    "enc:\\\\x1376\\\\xE993\\\\xC1D5\\\\x400F": [
+      "Balt Duskstrider"
+    ],
     "enc:\\\\x137B\\\\x93EE\\\\xE78F\\\\x73EB": [
       "Azure Shadow"
     ],
     "enc:\\\\x138A\\\\xAA6B\\\\xEE5E\\\\x0A90": [
       "Pinesoul"
+    ],
+    "enc:\\\\x1392\\\\x85D4\\\\xD7DA\\\\x0F98": [
+      "Avicara Wise"
+    ],
+    "enc:\\\\x1394\\\\xE4EB\\\\x92E0\\\\x5E67": [
+      "Avicara Ardent"
+    ],
+    "enc:\\\\x1395\\\\xACC3\\\\xCD4E\\\\x7975": [
+      "Avicara Brave"
+    ],
+    "enc:\\\\x1396\\\\xA98C\\\\xEB5B\\\\x6BDA": [
+      "Avicara Fierce"
     ],
     "enc:\\\\x13A1\\\\xB29C\\\\xA898\\\\x3C83": [
       "Grawl"
@@ -418,11 +490,38 @@
     "enc:\\\\x13D2\\\\xC00C\\\\xEB57\\\\x223A": [
       "Enslaved Ettin"
     ],
+    "enc:\\\\x13DF\\\\xB328\\\\xE097\\\\x7D46": [
+      "The Judge"
+    ],
+    "enc:\\\\x13E0\\\\xC598\\\\x7D34": [
+      "Bolis Hillshaker"
+    ],
+    "enc:\\\\x13E3\\\\xEBCA\\\\xB971\\\\x7EDA": [
+      "Riine Windrot"
+    ],
+    "enc:\\\\x13F7\\\\xECD1\\\\xA7F6\\\\x7461": [
+      "Marika Granitehand"
+    ],
+    "enc:\\\\x13F8\\\\xD7CB\\\\x9B75\\\\x78A8": [
+      "Lokar Icemender"
+    ],
     "enc:\\\\x13FA\\\\xC3B1\\\\xAC60\\\\x320F": [
       "Jonar Stonebender"
     ],
     "enc:\\\\x13FB\\\\xD3C6\\\\xA646\\\\x2377": [
       "Hormak Ironcurse"
+    ],
+    "enc:\\\\x13FC\\\\x9221\\\\x8948\\\\x3ECF": [
+      "Berg Frozenfist"
+    ],
+    "enc:\\\\x13FD\\\\xA7D6\\\\xB581\\\\x5C66": [
+      "Darda Goldenchief"
+    ],
+    "enc:\\\\x13FE\\\\xB59D\\\\xB6FE\\\\x0ED9": [
+      "Virag Bladestone"
+    ],
+    "enc:\\\\x13FF\\\\xE1F2\\\\xEB0A\\\\x03E6": [
+      "Arlak Stoneleaf"
     ],
     "enc:\\\\x1410\\\\x9036\\\\xBB1E\\\\x1D82": [
       "Stone Summit Heretic"
@@ -430,14 +529,23 @@
     "enc:\\\\x1412\\\\x8CFE\\\\xBE02\\\\x56FE": [
       "Dolyak Master"
     ],
+    "enc:\\\\x1416\\\\xCCE6\\\\x8A66\\\\x53A5": [
+      "Stone Summit Gnasher"
+    ],
     "enc:\\\\x141A\\\\x9334\\\\x8FF0\\\\x5853": [
       "Stone Summit Carver"
+    ],
+    "enc:\\\\x141C\\\\x8976\\\\xAB28\\\\x0FAD": [
+      "Stone Summit Ranger"
     ],
     "enc:\\\\x141F\\\\xE840\\\\xEFA3\\\\x3FD8": [
       "Summit Beastmaster"
     ],
     "enc:\\\\x1420\\\\xFD6E\\\\x7A35": [
       "Summit Giant Herder"
+    ],
+    "enc:\\\\x1423\\\\xA301\\\\x8DB5\\\\x4896": [
+      "Siege Ice Golem"
     ],
     "enc:\\\\x1432\\\\xE497\\\\xE499\\\\x18F1": [
       "Moles Quibus"
@@ -640,14 +748,125 @@
     "enc:\\\\x1F81\\\\xC99C\\\\x8FA6\\\\x0605": [
       "Shadow Lord Vogris"
     ],
+    "enc:\\\\x308E\\\\xFCA9\\\\xE971\\\\x764E": [
+      "White Mantle Sycophant"
+    ],
+    "enc:\\\\x308F\\\\xED76\\\\x5E5D": [
+      "White Mantle Ritualist"
+    ],
+    "enc:\\\\x3090\\\\x82C1\\\\xC9BB\\\\x267A": [
+      "White Mantle Savant"
+    ],
+    "enc:\\\\x3092\\\\xFB4A\\\\xEEB6\\\\x7B95": [
+      "White Mantle Seeker"
+    ],
+    "enc:\\\\x3093\\\\xFC16\\\\x9C7E\\\\x7B9F": [
+      "White Mantle Justiciar"
+    ],
+    "enc:\\\\x31BA\\\\xF319\\\\xA80B\\\\x50B0": [
+      "Glint"
+    ],
+    "enc:\\\\x31BB\\\\x9414\\\\x9AF6\\\\x5F12": [
+      "Facet of Light"
+    ],
+    "enc:\\\\x31BC\\\\xAC06\\\\xD384\\\\x35DB": [
+      "Facet of Nature"
+    ],
+    "enc:\\\\x31BD\\\\x9907\\\\x15BB": [
+      "Facet of Chaos"
+    ],
+    "enc:\\\\x31BE\\\\xF8D4\\\\x95F0\\\\x63CE": [
+      "Facet of Darkness"
+    ],
+    "enc:\\\\x31BF\\\\xB796\\\\xEB6E\\\\x5C43": [
+      "Facet of Elements"
+    ],
+    "enc:\\\\x31C0\\\\xE465\\\\xE6F6\\\\x203F": [
+      "Facet of Strength"
+    ],
+    "enc:\\\\x3234\\\\xC481\\\\xF7CB\\\\x54E1": [
+      "Doppelganger"
+    ],
+    "enc:\\\\x39A6\\\\xB7B9\\\\xF9D3\\\\x60EF": [
+      "Confessor Dorian"
+    ],
+    "enc:\\\\x39AF\\\\xD37E\\\\x8F48\\\\x2B71": [
+      "Dagnar Stonepate"
+    ],
+    "enc:\\\\x39C1\\\\xF1EF\\\\x9B9C\\\\x4C6E": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C2\\\\xE8B5\\\\xD248\\\\x69E4": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C3\\\\xAA73\\\\x6A42": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C4\\\\xB403\\\\xC8F1\\\\x6206": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C5\\\\xA23D\\\\xF2A2\\\\x1C1A": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C6\\\\xA4AD\\\\x9A8D\\\\x161C": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C7\\\\x9B93\\\\xC5B1\\\\x54B4": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C8\\\\xA599\\\\x8C05\\\\x0132": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39C9\\\\xC644\\\\xA579\\\\x158E": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39CA\\\\x99A3\\\\x4B2B": [
+      "Keep Attacker"
+    ],
+    "enc:\\\\x39CB\\\\xFF2A\\\\xB8A6\\\\x1FAE": [
+      "Enslaved Frost Giant"
+    ],
+    "enc:\\\\x39CC\\\\xD7FA\\\\xA708\\\\x6B57": [
+      "Enslaved Frost Giant"
+    ],
     "enc:\\\\x3ADF\\\\x8273\\\\xEA13\\\\x3437": [
       "Stone Summit Engineer"
     ],
     "enc:\\\\x3AE0\\\\xEDC5\\\\xEDC3\\\\x4270": [
       "White Mantle Engineer"
     ],
+    "enc:\\\\x3AF8\\\\xB1FA\\\\xD065\\\\x250C": [
+      "Mursaat Monk"
+    ],
+    "enc:\\\\x3AF9\\\\xD454\\\\xE341\\\\x09D4": [
+      "Mursaat Elementalist"
+    ],
+    "enc:\\\\x3AFA\\\\xC9F2\\\\xAA93\\\\x0F16": [
+      "Jade Armor"
+    ],
+    "enc:\\\\x3B24\\\\x95A1\\\\x8330\\\\x0340": [
+      "Markis"
+    ],
     "enc:\\\\x3B35\\\\xD6B7\\\\xCBE6\\\\x689C": [
       "Eidolon"
+    ],
+    "enc:\\\\x3B36\\\\xE192\\\\x9D3B\\\\x13C8": [
+      "Enslaved Frost Giant"
+    ],
+    "enc:\\\\x3B37\\\\x9E22\\\\xD62B\\\\x24FE": [
+      "White Mantle Engineer"
+    ],
+    "enc:\\\\x3B38\\\\xA8A2\\\\xAB2F\\\\x0ACC": [
+      "Jade Armor"
+    ],
+    "enc:\\\\x3B39\\\\xCE21\\\\xA719\\\\x1B07": [
+      "Jade Armor"
+    ],
+    "enc:\\\\x3B3A\\\\x9DC0\\\\xEAA3\\\\x03D9": [
+      "Jade Armor"
+    ],
+    "enc:\\\\x3B3B\\\\xC5A9\\\\xACED\\\\x19ED": [
+      "Jade Armor"
     ],
     "enc:\\\\x3C73\\\\x9A71\\\\xE88E\\\\x66A1": [
       "Eidolon"
@@ -1693,17 +1912,29 @@
     "enc:\\\\x8101\\\\x08C1\\\\xCFAE\\\\xEEDE\\\\x0468": [
       "Corsair Blackhand"
     ],
+    "enc:\\\\x8101\\\\x08C2\\\\xA27F\\\\x212B": [
+      "Corsair Cook"
+    ],
     "enc:\\\\x8101\\\\x08C3\\\\xABD1\\\\xB665\\\\x289E": [
       "Corsair Commandant"
     ],
     "enc:\\\\x8101\\\\x08C4\\\\xD5F9\\\\xFBEF\\\\x718F": [
       "Corsair Bosun"
     ],
+    "enc:\\\\x8101\\\\x08C5\\\\xD1F0\\\\xBF72\\\\x0F56": [
+      "Corsair Cutthroat"
+    ],
+    "enc:\\\\x8101\\\\x08C6\\\\x9EB5\\\\x8938\\\\x5373": [
+      "Corsair Raider"
+    ],
     "enc:\\\\x8101\\\\x08C7\\\\xD747\\\\x5C9A": [
       "Corsair Berserker"
     ],
     "enc:\\\\x8101\\\\x08D0\\\\xA436\\\\xF4D0\\\\x75C2": [
       "Kournan Seer"
+    ],
+    "enc:\\\\x8101\\\\x08D1\\\\x94A4\\\\x9494\\\\x78F4": [
+      "Kournan Oppressor"
     ],
     "enc:\\\\x8101\\\\x08D2\\\\xB845\\\\x8201\\\\x4B6F": [
       "Kournan Scribe"
@@ -1773,6 +2004,9 @@
     ],
     "enc:\\\\x8101\\\\x09CE\\\\x8C33\\\\x4349": [
       "Margonite Reaper"
+    ],
+    "enc:\\\\x8101\\\\x0A4A\\\\x943C\\\\xFA1C\\\\x7889": [
+      "General Kahyet"
     ],
     "enc:\\\\x8101\\\\x0AD7\\\\xC833\\\\x9500\\\\x2540": [
       "Awakened Thought Leech"
@@ -1846,8 +2080,20 @@
     "enc:\\\\x8101\\\\x0F0D\\\\xB025\\\\x947E\\\\x7960": [
       "Eshau Longspear"
     ],
+    "enc:\\\\x8101\\\\x0F41\\\\xEFCB\\\\xE7FF\\\\x254E": [
+      "Master of Spirits"
+    ],
+    "enc:\\\\x8101\\\\x0F74\\\\x9CFA\\\\xABA5\\\\x02EC": [
+      "Eshau Longspear"
+    ],
     "enc:\\\\x8101\\\\x0FD3\\\\x8BEE\\\\xCDA2\\\\x5FDF": [
       "Kournan Guard"
+    ],
+    "enc:\\\\x8101\\\\x1084\\\\x8B5C\\\\xA15B\\\\x0F53": [
+      "Jejumba"
+    ],
+    "enc:\\\\x8101\\\\x109A\\\\xD325\\\\x943A\\\\x28AD": [
+      "\"Palawa Joko\""
     ],
     "enc:\\\\x8101\\\\x1186\\\\xB16E\\\\xB9F1\\\\x3BAD": [
       "Ntouka Bird"
@@ -1924,6 +2170,9 @@
     "enc:\\\\x8101\\\\x1562\\\\xFF30\\\\xAE7B\\\\x058A": [
       "Midshipman Morolah"
     ],
+    "enc:\\\\x8101\\\\x1565\\\\x9789\\\\xEBD0\\\\x0B20": [
+      "Colonel Custo"
+    ],
     "enc:\\\\x8101\\\\x1906\\\\xFF4B\\\\x2EFD": [
       "Screecher"
     ],
@@ -1990,6 +2239,30 @@
     "enc:\\\\x8101\\\\x1C7C\\\\x8C89\\\\xEE9D\\\\x0105": [
       "Corsair Admiral"
     ],
+    "enc:\\\\x8101\\\\x1C7D\\\\x8E4A\\\\xA32C\\\\x013A": [
+      "Corsair Wizard"
+    ],
+    "enc:\\\\x8101\\\\x1C7E\\\\xE685\\\\xAB77\\\\x070E": [
+      "Corsair Blackhand"
+    ],
+    "enc:\\\\x8101\\\\x1C7F\\\\xEFCA\\\\x9E8D\\\\x5DD1": [
+      "Corsair Cook"
+    ],
+    "enc:\\\\x8101\\\\x1C80\\\\xD28E\\\\xCF9C\\\\x6D69": [
+      "Corsair Bosun"
+    ],
+    "enc:\\\\x8101\\\\x1C81\\\\x99EB\\\\x837C\\\\x5EC0": [
+      "Corsair Cutthroat"
+    ],
+    "enc:\\\\x8101\\\\x1C82\\\\xC173\\\\x7C8F": [
+      "Corsair Raider"
+    ],
+    "enc:\\\\x8101\\\\x1C83\\\\xC289\\\\x9DED\\\\x1777": [
+      "Corsair Berserker"
+    ],
+    "enc:\\\\x8101\\\\x1C84\\\\x9767\\\\xF481\\\\x09E4": [
+      "Corsair Commandant"
+    ],
     "enc:\\\\x8101\\\\x1CB8\\\\xC207\\\\xFADF\\\\x6028": [
       "Thought of Darkness"
     ],
@@ -2038,11 +2311,101 @@
     "enc:\\\\x8101\\\\x1F3F\\\\xFACD\\\\xEE60\\\\x334D": [
       "Anguish Titan"
     ],
+    "enc:\\\\x8101\\\\x2014\\\\xCD2D\\\\xE9B0\\\\x67D6": [
+      "Suubay the Greedy"
+    ],
+    "enc:\\\\x8101\\\\x201F\\\\xABF4\\\\x97B6\\\\x611E": [
+      "Killer Iboga"
+    ],
     "enc:\\\\x8101\\\\x204A\\\\xEC57\\\\xE6ED\\\\x10FB": [
       "Despair Titan"
     ],
+    "enc:\\\\x8101\\\\x2105\\\\x9CB4\\\\x8204\\\\x7CA8": [
+      "Rinkhal Monitor"
+    ],
+    "enc:\\\\x8101\\\\x2107\\\\xF16F\\\\xF17D\\\\x7914": [
+      "Skree Griffon"
+    ],
+    "enc:\\\\x8101\\\\x2108\\\\xE960\\\\xC189\\\\x03CD": [
+      "Skree Talon"
+    ],
+    "enc:\\\\x8101\\\\x2109\\\\xBA6C\\\\x9202\\\\x2D57": [
+      "Skree Hunter"
+    ],
+    "enc:\\\\x8101\\\\x210A\\\\xB2B6\\\\xCD9C\\\\x054C": [
+      "Skree Warbler"
+    ],
+    "enc:\\\\x8101\\\\x210B\\\\x95DD\\\\xBECE\\\\x1830": [
+      "Skale Blighter"
+    ],
+    "enc:\\\\x8101\\\\x210C\\\\x95BE\\\\x3A6E": [
+      "Ridgeback Skale"
+    ],
+    "enc:\\\\x8101\\\\x210D\\\\x8FF4\\\\xF02B\\\\x6725": [
+      "Skale Lasher"
+    ],
+    "enc:\\\\x8101\\\\x210E\\\\xE974\\\\xB43C\\\\x1A4F": [
+      "Frigid Skale"
+    ],
+    "enc:\\\\x8101\\\\x210F\\\\xD5A1\\\\xB598\\\\x577E": [
+      "Juvenile Bladed Termite"
+    ],
+    "enc:\\\\x8101\\\\x2111\\\\x9100\\\\x49AE": [
+      "Grub Lance"
+    ],
+    "enc:\\\\x8101\\\\x2112\\\\xAE1A\\\\xA228\\\\x5B85": [
+      "Bladed Termite"
+    ],
+    "enc:\\\\x8101\\\\x2114\\\\xE70E\\\\x5D8B": [
+      "Preying Lance"
+    ],
+    "enc:\\\\x8101\\\\x2115\\\\x92CF\\\\x03B4": [
+      "Stormseed Jacaranda"
+    ],
+    "enc:\\\\x8101\\\\x2116\\\\xA93A\\\\xFC9B\\\\x2407": [
+      "Fanged Iboga"
+    ],
+    "enc:\\\\x8101\\\\x23DB\\\\xB31B\\\\xC06F\\\\x07B6": [
+      "Ironfist's Envoy"
+    ],
     "enc:\\\\x8101\\\\x25C6\\\\xAB44\\\\xD387\\\\x428C": [
       "Smothering Tendrils"
+    ],
+    "enc:\\\\x8101\\\\x25D4\\\\xA5DA\\\\x876B\\\\x07D6": [
+      "Kournan Seer"
+    ],
+    "enc:\\\\x8101\\\\x25D5\\\\xFF27\\\\xAAAD\\\\x7276": [
+      "Kournan Oppressor"
+    ],
+    "enc:\\\\x8101\\\\x25D8\\\\xD2DE\\\\x92B5\\\\x2B4D": [
+      "Kournan Guard"
+    ],
+    "enc:\\\\x8101\\\\x25D9\\\\xBF9B\\\\xD5A5\\\\x76DE": [
+      "Kournan Bowman"
+    ],
+    "enc:\\\\x8101\\\\x25DA\\\\x9F77\\\\xA6C1\\\\x5F18": [
+      "Kournan Zealot"
+    ],
+    "enc:\\\\x8101\\\\x25DB\\\\xED31\\\\xAFB1\\\\x2760": [
+      "Kournan Phalanx"
+    ],
+    "enc:\\\\x8101\\\\x2630\\\\xF699\\\\x89B7\\\\x11D7": [
+      "Darehk the Quick"
+    ],
+    "enc:\\\\x8101\\\\x263E\\\\xC3B5\\\\xC081\\\\x2414": [
+      "Apocrypha"
+    ],
+    "enc:\\\\x8101\\\\x2660\\\\xC28E\\\\xCAB7\\\\x6C1C": [
+      "Captain Lumanda"
+    ],
+    "enc:\\\\x8101\\\\x2661\\\\xCE1D\\\\xE305\\\\x2C8E": [
+      "Captain Denduru"
+    ],
+    "enc:\\\\x8101\\\\x2662\\\\x966A\\\\x93EB\\\\x69A2": [
+      "Captain Mwende"
+    ],
+    "enc:\\\\x8101\\\\x2663\\\\xD14F\\\\x2615": [
+      "Captain Kavaka"
     ],
     "enc:\\\\x8101\\\\x2744\\\\x9640\\\\xFE46\\\\x57C9": [
       "The Greater Darkness"
@@ -2062,6 +2425,9 @@
     "enc:\\\\x8101\\\\x2844\\\\xBE5E\\\\xBE18\\\\x0AE2": [
       "Taskmaster Suli"
     ],
+    "enc:\\\\x8101\\\\x29B1\\\\xFE31\\\\xE981\\\\x13D7": [
+      "Kournan Siege Engineer"
+    ],
     "enc:\\\\x8101\\\\x2CD6\\\\xEF7C\\\\xFA54\\\\x5DCB": [
       "Skree Hatchling"
     ],
@@ -2077,6 +2443,12 @@
     "enc:\\\\x8101\\\\x2D21\\\\xC4C0\\\\x92EC\\\\x636E": [
       "Beast Sworn Heket"
     ],
+    "enc:\\\\x8101\\\\x2D6D\\\\xCB59\\\\x2057": [
+      "Ghostly Sunspear"
+    ],
+    "enc:\\\\x8101\\\\x2D6E\\\\xEBDB\\\\xB9E8\\\\x7243": [
+      "Ghostly Sunspear"
+    ],
     "enc:\\\\x8101\\\\x2D8C\\\\xA3D2\\\\xBE74\\\\x3E43": [
       "Kournan Elite Scribe"
     ],
@@ -2091,6 +2463,84 @@
     ],
     "enc:\\\\x8101\\\\x2D93\\\\xB0E4\\\\xA9EF\\\\x1A03": [
       "Restless Dead"
+    ],
+    "enc:\\\\x8101\\\\x2D94\\\\xD051\\\\xC913\\\\x222C": [
+      "Relentless Corpse"
+    ],
+    "enc:\\\\x8101\\\\x2F6B\\\\xD303\\\\xEB9D\\\\x55DD": [
+      "Kahli, the Stiched"
+    ],
+    "enc:\\\\x8101\\\\x2F6C\\\\x9E8E\\\\xA0EE\\\\x1973": [
+      "The Dark Blade"
+    ],
+    "enc:\\\\x8101\\\\x2F6D\\\\xB7CC\\\\x85ED\\\\x4818": [
+      "Captain Blood Farid"
+    ],
+    "enc:\\\\x8101\\\\x2F6E\\\\xFB8D\\\\x8566\\\\x194C": [
+      "Cursed Salihm"
+    ],
+    "enc:\\\\x8101\\\\x32EF\\\\x8707\\\\x9391\\\\x2FD0": [
+      "Corsair"
+    ],
+    "enc:\\\\x8101\\\\x32F0\\\\xC153\\\\xC6DE\\\\x6052": [
+      "Corsair"
+    ],
+    "enc:\\\\x8101\\\\x3359\\\\xB04F\\\\xFFEF\\\\x7797": [
+      "Restless Dead"
+    ],
+    "enc:\\\\x8101\\\\x335A\\\\xA7CC\\\\x5F33": [
+      "Restless Dead"
+    ],
+    "enc:\\\\x8101\\\\x335B\\\\xB722\\\\xB4F2\\\\x1C4A": [
+      "Restless Dead"
+    ],
+    "enc:\\\\x8101\\\\x335C\\\\xFE37\\\\xC4B9\\\\x64AA": [
+      "Relentless Corpse"
+    ],
+    "enc:\\\\x8101\\\\x335D\\\\xCCB0\\\\xC7C9\\\\x3096": [
+      "Relentless Corpse"
+    ],
+    "enc:\\\\x8101\\\\x335E\\\\xE712\\\\xD174\\\\x79DC": [
+      "Relentless Corpse"
+    ],
+    "enc:\\\\x8101\\\\x339C": [
+      "Demon"
+    ],
+    "enc:\\\\x8101\\\\x339D": [
+      "Demon"
+    ],
+    "enc:\\\\x8101\\\\x339E": [
+      "Demon"
+    ],
+    "enc:\\\\x8101\\\\x3705\\\\xD5FA\\\\x1B14": [
+      "Sunspear Volunteer"
+    ],
+    "enc:\\\\x8101\\\\x370A\\\\x8C0D\\\\xEC56\\\\x42C3": [
+      "Sunspear Volunteer"
+    ],
+    "enc:\\\\x8101\\\\x37C4\\\\xEFDD\\\\xCED6\\\\x2712": [
+      "Captain Besuz"
+    ],
+    "enc:\\\\x8101\\\\x37C9\\\\xD754\\\\x69DF": [
+      "Kournan Guard"
+    ],
+    "enc:\\\\x8101\\\\x3816\\\\xE1B0\\\\xC851\\\\x0EB7": [
+      "Elonbel"
+    ],
+    "enc:\\\\x8101\\\\x3819\\\\xB670\\\\x724A": [
+      "Wounded Corsair"
+    ],
+    "enc:\\\\x8101\\\\x3880\\\\xFAF3\\\\xFA87\\\\x5E80": [
+      "First Spear Janah"
+    ],
+    "enc:\\\\x8101\\\\x3882\\\\xF964\\\\xE943\\\\x5399": [
+      "Sogolon the Protector"
+    ],
+    "enc:\\\\x8101\\\\x3884\\\\xA274\\\\x8A14\\\\x40AF": [
+      "Kojolin the Conciliator"
+    ],
+    "enc:\\\\x8101\\\\x3886\\\\xB71F\\\\xFC61\\\\x33FF": [
+      "Jerek"
     ],
     "enc:\\\\x8101\\\\x38EC\\\\xD08B\\\\x8C46\\\\x2EB7": [
       "The Darkness"
@@ -2209,14 +2659,122 @@
     "enc:\\\\x8101\\\\x3C67\\\\xC4FF\\\\x899B\\\\x2757": [
       "Sanity Tormentor"
     ],
+    "enc:\\\\x8101\\\\x40DC\\\\xC5A2\\\\x9220\\\\x4C7E": [
+      "Ironfist"
+    ],
     "enc:\\\\x8101\\\\x45D5\\\\xEC58\\\\x881D\\\\x5589": [
       "Jahai Rat"
+    ],
+    "enc:\\\\x8101\\\\x4642\\\\x9F72\\\\x8A1E\\\\x5BE8": [
+      "Scythe of Chaos"
+    ],
+    "enc:\\\\x8101\\\\x4643\\\\xD6E4\\\\xEDF2\\\\x189D": [
+      "Grasp of Chaos"
+    ],
+    "enc:\\\\x8101\\\\x464A\\\\xD6DA\\\\xD6AD\\\\x2BA0": [
+      "Skree Hatchling"
+    ],
+    "enc:\\\\x8101\\\\x464B\\\\xB117\\\\xFDC3\\\\x517B": [
+      "Skree Fledgeling"
+    ],
+    "enc:\\\\x8101\\\\x464F\\\\xBD2C6\\\\x0336": [
+      "Hassin Softskin"
+    ],
+    "enc:\\\\x8101\\\\x4651\\\\x98C5\\\\xA7A1\\\\x708D": [
+      "Grub Lance"
+    ],
+    "enc:\\\\x8101\\\\x4652\\\\xBF41\\\\xB074\\\\x4D76": [
+      "Preying Lance"
+    ],
+    "enc:\\\\x8101\\\\x4656\\\\xAF22\\\\xAF35\\\\x72C1": [
+      "Fanged Iboga"
+    ],
+    "enc:\\\\x8101\\\\x4657\\\\xC7D2\\\\x8CEE\\\\x09E2": [
+      "Fanged Iboga"
+    ],
+    "enc:\\\\x8101\\\\x4658\\\\x9DC1\\\\x7476": [
+      "Stormseed Jacaranda"
+    ],
+    "enc:\\\\x8101\\\\x4659\\\\xBBE3\\\\xE459\\\\x1183": [
+      "Stormseed Jacaranda"
+    ],
+    "enc:\\\\x8101\\\\x465C\\\\xC826\\\\x92E9\\\\x3A2B": [
+      "Skale Blighter"
+    ],
+    "enc:\\\\x8101\\\\x465D\\\\xB4AB\\\\xA0AC\\\\x1976": [
+      "Frigid Skale"
+    ],
+    "enc:\\\\x8101\\\\x465E\\\\xC5B5\\\\xE657\\\\x291A": [
+      "Ridgeback Skale"
+    ],
+    "enc:\\\\x8101\\\\x465F\\\\xC614\\\\xB1C4\\\\x2264": [
+      "Ridgeback Skale"
+    ],
+    "enc:\\\\x8101\\\\x4663\\\\xB1BF\\\\xB8A4\\\\x1BCA": [
+      "Skale Lasher"
+    ],
+    "enc:\\\\x8101\\\\x4664\\\\xE23C\\\\x2CA3": [
+      "Skale Lasher"
+    ],
+    "enc:\\\\x8101\\\\x4665\\\\x9E79\\\\xADAB\\\\x0128": [
+      "Suit of 15 Armor"
+    ],
+    "enc:\\\\x8101\\\\x4666\\\\x883A\\\\xFD69\\\\x1A36": [
+      "Suit of 35 Armor"
+    ],
+    "enc:\\\\x8101\\\\x4667\\\\x8894\\\\xF1DF\\\\x1DB7": [
+      "Suit of 55 Armor"
+    ],
+    "enc:\\\\x8101\\\\x4668\\\\x9A0F\\\\x58D9": [
+      "Practice Target"
     ],
     "enc:\\\\x8101\\\\x46AA\\\\x4140": [
       "Tusked Howler"
     ],
     "enc:\\\\x8101\\\\x46AB\\\\xB705\\\\x0EB7": [
       "Steelfang Drake"
+    ],
+    "enc:\\\\x8101\\\\x46CA\\\\x855F\\\\x9680\\\\x6FE8": [
+      "Commander Werishakul"
+    ],
+    "enc:\\\\x8101\\\\x46CC\\\\xFF84\\\\xE7D6\\\\x4273": [
+      "Midshipman Bennis"
+    ],
+    "enc:\\\\x8101\\\\x46CD\\\\xF56D\\\\x9E23\\\\x6A40": [
+      "Corsair Seer"
+    ],
+    "enc:\\\\x8101\\\\x46CE\\\\x84D5\\\\xE419\\\\x6BF6": [
+      "Corsair Flogger"
+    ],
+    "enc:\\\\x8101\\\\x46CF\\\\x89BA\\\\x918D\\\\x2373": [
+      "Corsair Reef Finder"
+    ],
+    "enc:\\\\x8101\\\\x46D0\\\\xEC0A\\\\x942A\\\\x041A": [
+      "Corsair Mage"
+    ],
+    "enc:\\\\x8101\\\\x46D2\\\\xFF8A\\\\xEAD3\\\\x29A8": [
+      "Corsair Medic"
+    ],
+    "enc:\\\\x8101\\\\x46D3\\\\xC879\\\\xBD02\\\\x7FCA": [
+      "Corsair Healer"
+    ],
+    "enc:\\\\x8101\\\\x46D4\\\\xF868\\\\xA9F8\\\\x7D41": [
+      "Corsair Thug"
+    ],
+    "enc:\\\\x8101\\\\x46D5\\\\xFD6E\\\\x90AC\\\\x034E": [
+      "Corsair Buccaneer"
+    ],
+    "enc:\\\\x8101\\\\x46D7\\\\xCD1D\\\\xBE32\\\\x61B6": [
+      "Corsair Lookout"
+    ],
+    "enc:\\\\x8101\\\\x46D8\\\\xD6CB\\\\xF813\\\\x43DB": [
+      "Corsair Spotter"
+    ],
+    "enc:\\\\x8101\\\\x46E1\\\\xCF17\\\\x91C5\\\\x1CD4": [
+      "Corsair Marauder"
+    ],
+    "enc:\\\\x8101\\\\x46E2\\\\x9C0C\\\\xA2CC\\\\x4592": [
+      "Corsair Captain"
     ],
     "enc:\\\\x8101\\\\x46EA\\\\xE602\\\\xC496\\\\x117A": [
       "Abaddon"
@@ -2248,8 +2806,53 @@
     "enc:\\\\x8101\\\\x473A\\\\xFF97\\\\x44BF": [
       "Spirit of Fury"
     ],
+    "enc:\\\\x8101\\\\x479C\\\\xD355\\\\xE1C0\\\\x526E": [
+      "Keshel the Voracious"
+    ],
+    "enc:\\\\x8101\\\\x47A2\\\\xA4A9\\\\xC09E\\\\x3F8F": [
+      "Chineh Soaring Light"
+    ],
+    "enc:\\\\x8101\\\\x47A5\\\\xEFAC\\\\xD721\\\\x4E03": [
+      "Bladed Termite"
+    ],
+    "enc:\\\\x8101\\\\x47A7\\\\x8457\\\\xEEC0\\\\x5E50": [
+      "Suneh Stormbringer"
+    ],
+    "enc:\\\\x8101\\\\x47A8\\\\xA0A6\\\\x6722": [
+      "Rahti, Flower of Dread"
+    ],
+    "enc:\\\\x8101\\\\x47B3\\\\xD736\\\\x8CF3\\\\x6EA7": [
+      "Ensign Charehli"
+    ],
+    "enc:\\\\x8101\\\\x491C\\\\xE2ED\\\\xCD02\\\\x2998": [
+      "Skree Talon"
+    ],
+    "enc:\\\\x8101\\\\x491D\\\\xD344\\\\xCE87\\\\x16B5": [
+      "Skree Warbler"
+    ],
+    "enc:\\\\x8101\\\\x49B9\\\\xC647\\\\x381A": [
+      "Irontooth Drake"
+    ],
+    "enc:\\\\x8101\\\\x49E0\\\\xA522\\\\xAFAE\\\\x0AD9": [
+      "Boklon Blackwater"
+    ],
+    "enc:\\\\x8101\\\\x49E9\\\\xF9E0\\\\xA6B9\\\\x0D10": [
+      "Stalking Nephila"
+    ],
+    "enc:\\\\x8101\\\\x49EB\\\\xA26F\\\\x9E48\\\\x5FB3": [
+      "Stalking Nephila"
+    ],
     "enc:\\\\x8101\\\\x4A03\\\\xD537\\\\x9E2A\\\\x6374": [
       "Veldt Nephila"
+    ],
+    "enc:\\\\x8101\\\\x4BE2\\\\xB93E\\\\xB875\\\\x37DB": [
+      "Ancient Undead"
+    ],
+    "enc:\\\\x8101\\\\x4C0F\\\\xB157\\\\x9948\\\\x3EFA": [
+      "Emeju Longlegs"
+    ],
+    "enc:\\\\x8101\\\\x4C3A\\\\xF918\\\\x8F40\\\\x3696": [
+      "Water Djinn"
     ],
     "enc:\\\\x8101\\\\x4C88\\\\xB01C\\\\xF31C\\\\x3879": [
       "Kournan Guard"
@@ -2299,8 +2902,14 @@
     "enc:\\\\x8101\\\\x4D90\\\\x1C91": [
       "Captain Alsin"
     ],
+    "enc:\\\\x8101\\\\x4D96\\\\xF1D6\\\\x745E": [
+      "Colonel Chaklin"
+    ],
     "enc:\\\\x8101\\\\x4D97\\\\xC3B0\\\\xB479\\\\x5CE2": [
       "Sergeant Behnwa"
+    ],
+    "enc:\\\\x8101\\\\x4D9A\\\\xBC1B\\\\xFAFF\\\\x307F": [
+      "Corporal Luluh"
     ],
     "enc:\\\\x8101\\\\x4E00\\\\x9196\\\\xA024\\\\x0676": [
       "Sandstorm Crag"
@@ -2401,6 +3010,24 @@
     "enc:\\\\x8101\\\\x5239\\\\x9FAF\\\\x846B\\\\x5B7B": [
       "Mandragor Terror"
     ],
+    "enc:\\\\x8101\\\\x523C\\\\xD541\\\\xFFBF\\\\x3B6A": [
+      "Tarom Rockbreaker"
+    ],
+    "enc:\\\\x8101\\\\x523D\\\\xB395\\\\x811A\\\\x0560": [
+      "Mandragor Imp"
+    ],
+    "enc:\\\\x8101\\\\x523F\\\\xEB9F\\\\xADF3\\\\x32FD": [
+      "Mandragor Imp"
+    ],
+    "enc:\\\\x8101\\\\x5240\\\\xC017\\\\xFDBE\\\\x4918": [
+      "Stoneflesh Mandragor"
+    ],
+    "enc:\\\\x8101\\\\x5242\\\\xD7C2\\\\x83B8\\\\x44D6": [
+      "Mandragor Slither"
+    ],
+    "enc:\\\\x8101\\\\x5244\\\\xEC01\\\\xE989\\\\x08B5": [
+      "Mandragor Slither"
+    ],
     "enc:\\\\x8101\\\\x5247\\\\xE905\\\\xF0D1\\\\x0D1E": [
       "Shelboh the Ravenous"
     ],
@@ -2439,6 +3066,9 @@
     ],
     "enc:\\\\x8101\\\\x5543\\\\xE49C\\\\xD2F6\\\\x22B6": [
       "Fondalz the Spiteful"
+    ],
+    "enc:\\\\x8101\\\\x5563\\\\x8A7C\\\\xA735\\\\x2DF1": [
+      "Kournan Field Commander"
     ],
     "enc:\\\\x8101\\\\x5719\\\\xFD4C\\\\x3414": [
       "Neoli the Contagious"
@@ -2545,6 +3175,9 @@
     "enc:\\\\x8101\\\\x5E70\\\\xB4F7\\\\xFA55\\\\x62D9": [
       "Elder Skree Singer"
     ],
+    "enc:\\\\x8101\\\\x5E71\\\\xF3F7\\\\xE2A0\\\\x7AD8": [
+      "Acolyte of Dwayna"
+    ],
     "enc:\\\\x8101\\\\x5E77\\\\xD094\\\\xD5AD\\\\x5E4D": [
       "Pain Titan"
     ],
@@ -2553,6 +3186,9 @@
     ],
     "enc:\\\\x8101\\\\x5E79\\\\xF1B1\\\\xFF88\\\\x26D1": [
       "Madness Titan"
+    ],
+    "enc:\\\\x8101\\\\x5F64\\\\x99C6\\\\xA0EC\\\\x0A42": [
+      "Skale Blighter"
     ],
     "enc:\\\\x8101\\\\x6755\\\\xABA0\\\\xF852\\\\x7177": [
       "Herald of Nightmares"
@@ -2710,6 +3346,18 @@
     "enc:\\\\x8101\\\\x7710\\\\xA247\\\\x58DC": [
       "Angorodon"
     ],
+    "enc:\\\\x8101\\\\x77F8\\\\xA9F8\\\\xB914\\\\x5A9A": [
+      "Destroyer of Sinew"
+    ],
+    "enc:\\\\x8101\\\\x77F9\\\\xB655\\\\x9C32\\\\x2EA6": [
+      "Destroyer of Bones"
+    ],
+    "enc:\\\\x8101\\\\x77FA\\\\x8A2B\\\\xB2EF\\\\x4C94": [
+      "Destroyer of Flesh"
+    ],
+    "enc:\\\\x8101\\\\x782C\\\\xB14E\\\\xFB29\\\\x2ACD": [
+      "Snow Wurm"
+    ],
     "enc:\\\\x8101\\\\x790C\\\\xE4FD\\\\xB49B\\\\x03C1": [
       "Mandragor Shadowfang"
     ],
@@ -2780,6 +3428,9 @@
       "Spafrod Iceblood"
     ],
     "enc:\\\\x8102\\\\x0EA5\\\\xBE4A\\\\xF84F\\\\x3B52": [
+      "Dreamroot Mandragor"
+    ],
+    "enc:\\\\x8102\\\\x0EA6\\\\x945A\\\\xE0DB\\\\x3013": [
       "Dreamroot Mandragor"
     ],
     "enc:\\\\x8102\\\\x0EAD\\\\x822D\\\\x38FD": [
@@ -2856,6 +3507,9 @@
     ],
     "enc:\\\\x8102\\\\x20B1\\\\xA3FB\\\\x9910\\\\x7611": [
       "Stone Summit Ranger"
+    ],
+    "enc:\\\\x8102\\\\x21C6\\\\xBBAA\\\\x5E0C": [
+      "Savage Nornbear"
     ],
     "enc:\\\\x8102\\\\x21EF\\\\xF2C0\\\\xC21A\\\\x7694": [
       "Arctic Wolf"

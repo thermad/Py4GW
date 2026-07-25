@@ -103,6 +103,47 @@ class GameClient:
         for b_id, b_val in data.get("buffs", {}).items():
             self.buffs[int(b_id)] = BuffData(**b_val)
 
+    def update_from_selfview(self, me, mp=None):
+        """Populate this client's synced state from the wire ``SelfView`` (+ ``MapView``) -- the single
+        upstream serialization path (protocol/encode), replacing the removed ``player_data`` dict. A
+        straight pass-through so the decision layer sees the SAME values player_data used to sync. ``me``
+        / ``mp`` are decoded protocol dataclasses (wire_delta.from_wire)."""
+        self.agent_id = int(me.agent_id) or self.agent_id
+        # Keep the last non-empty name so a transient "" tick doesn't blank the host's label.
+        if me.name:
+            self.name = me.name
+        self.target_id = int(me.target_id)
+        self.target_dagger_status = int(me.dagger_status)
+        if mp is not None:
+            self.map_id = int(mp.map_id)
+            self.map_region = int(mp.region)
+            self.map_district = int(mp.district)
+            self.map_language = int(mp.language)
+        # hp/energy are 0..1 fractions on the wire (SelfView convention; encode_self takes GetHealth/
+        # GetEnergy directly). Store them straight -- the decision layer's `gc.hp/gc.max_hp` recovers
+        # the same fraction it always did (this matches the value player_data synced).
+        self.hp = me.hp
+        self.max_hp = int(me.max_hp)
+        self.energy = me.energy
+        self.max_energy = int(me.max_energy)
+        self.ping = int(me.ping_ms)
+        self.fast_casting = int(me.fast_casting)
+        # Rebuild the collections each update (clear+repopulate) so a dropped buff/effect/skill can't
+        # linger as a ghost -- same reasoning as update_from_dict.
+        self.attributes = {int(k): int(v) for k, v in me.attributes.items()}
+        self.skills = {int(k): SkillData(id=int(v.skill_id), slot=int(v.slot),
+                                         adrenaline_a=int(v.adrenaline_a), adrenaline_b=int(v.adrenaline_b),
+                                         recharge=0, event=int(v.event),
+                                         get_recharge=int(v.get_recharge_ms))
+                       for k, v in me.skillbar.items()}
+        self.effects = {int(k): EffectData(skill_id=int(v.skill_id), attribute_level=int(v.attribute_level),
+                                           effect_id=int(v.effect_id), agent_id=int(v.agent_id),
+                                           duration=v.duration, time_remaining=int(v.time_remaining_ms))
+                        for k, v in me.effects.items()}
+        self.buffs = {int(k): BuffData(skill_id=int(v.skill_id), buff_id=int(v.buff_id),
+                                       target=int(v.target_agent_id))
+                      for k, v in me.buffs.items()}
+
     def get_buff_data(self, b_id) -> BuffData:
         return self.buffs.get(b_id, None)
 

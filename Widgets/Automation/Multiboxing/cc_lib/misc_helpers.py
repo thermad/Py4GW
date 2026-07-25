@@ -2,8 +2,14 @@
 import time
 import math
 
-import Py4GWCoreLib as GW
-from Py4GWCoreLib import Routines
+# GW present only inside Py4GW. Vec2 (pure math) is needed on the headless server; the thread/map
+# helpers below are client-side and never run there, so guard the import for GW-free importability.
+try:
+    import Py4GWCoreLib as GW
+    from Py4GWCoreLib import Routines
+except Exception:
+    GW = None
+    Routines = None
 
 
 def current_epoch() -> int:
@@ -13,6 +19,8 @@ def current_epoch() -> int:
     thread captures it at start and stops when it changes, so a thread orphaned by a reload
     -- one the new CentralCommander has no handle to -- self-terminates instead of running
     its stale code (and crashing on load screens) forever. Mirrors behaviors._current_epoch."""
+    if GW is None:
+        return 0   # headless server: no hot-reload epoch (the process owns its own lifecycle)
     return getattr(GW.MultiThreading, "_cc_epoch", 0)
 
 
@@ -25,10 +33,61 @@ def map_ready() -> bool:
     they read ThreadManager.map_live, which the main thread publishes from here every frame.
 
     Defensive try/except because these checks can themselves throw mid-teardown -> not-ready."""
+    if Routines is None:
+        return False   # headless server: no local map (it isn't in the game)
     try:
         return Routines.Checks.Map.MapValid() and Routines.Checks.Map.IsMapReady()
     except Exception:
         return False
+
+
+# --------------------------------------------------------------------------- map trapezoid bundling
+# The server asks ONE client (RPC.CMD.DUMP_MAP_TRAPS) to bundle the current instance's pathing
+# trapezoids so it can draw the map geometry in its world view. The bundle is LARGE and needed only
+# ONCE per map, so it does NOT ride the per-frame cc_world stream: the handler stashes it here and the
+# widget attaches it to the very next PUSH as ``cc_map_traps`` (mirrors the one-shot cc_request
+# piggyback). Handler runs on the MAIN THREAD (inbound RPCs drain there, map-gated), so the GW map
+# reads are legal.
+_pending_map_traps = None
+
+
+def dump_map_trapezoids():
+    """CLIENT-SIDE RPC handler: read every pathing trapezoid of the current instance and bundle it
+    for upload. Each trapezoid becomes a flat 8-float quad -- its four corners in GW WORLD UNITS,
+    ordered TL, TR, BR, BL: ``[XTL,YT, XTR,YT, XBR,YB, XBL,YB]`` (a PathingTrapezoid's top edge spans
+    XTL..XTR at YT, its bottom edge XBL..XBR at YB). World units are the same space AgentView.x/y use,
+    so the server's world-view Camera renders the geometry under the agents with no extra transform.
+
+    All zplane layers are flattened into one quad list (the top-down view ignores height), matching
+    Map.Pathing.GetComputedGeometry. Best-effort: a bad layer/trapezoid is skipped, and a total read
+    failure yields an empty bundle rather than raising (the server just gets no geometry this map)."""
+    global _pending_map_traps
+    if GW is None:
+        return
+    quads = []
+    map_id = 0
+    try:
+        map_id = int(GW.Map.GetMapID() or 0)
+        for layer in (GW.Map.Pathing.GetPathingMaps() or []):
+            for t in (getattr(layer, "trapezoids", None) or []):
+                try:
+                    quads.append([float(t.XTL), float(t.YT), float(t.XTR), float(t.YT),
+                                  float(t.XBR), float(t.YB), float(t.XBL), float(t.YB)])
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[client] dump_map_trapezoids failed: {e}")
+    _pending_map_traps = {"map_id": map_id, "quads": quads}
+    print(f"[client] bundled {len(quads)} map trapezoids for map {map_id}")
+
+
+def take_pending_map_traps():
+    """MAIN THREAD: pop the one-shot map-trapezoid bundle (or None if none pending). The widget calls
+    this each frame and attaches a non-None result to the outbound PUSH exactly once."""
+    global _pending_map_traps
+    bundle = _pending_map_traps
+    _pending_map_traps = None
+    return bundle
 
 
 class MultithreadBoosterCache:
